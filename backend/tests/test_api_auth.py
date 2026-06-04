@@ -126,7 +126,10 @@ class TestTokenExpiry:
             "username": "validtokenuser2",
             "password": "pass123",
         })
-        token = resp.json()["access_token"]
+        assert resp.status_code == 200, f"Register failed: {resp.status_code} {resp.text}"
+        data = resp.json()
+        assert "access_token" in data, f"No access_token in response: {data}"
+        token = data["access_token"]
 
         # 用注册返回的 token 访问 me 接口
         resp = client.get("/api/auth/me", headers={

@@ -1,7 +1,9 @@
-"""pytest 共享 Fixtures — 使用 SQLite 内存数据库，无需 PostgreSQL/MinIO/LLM API
+"""pytest 共享 Fixtures — 使用 SQLite 文件数据库，无需 PostgreSQL/MinIO/LLM API
 
-核心策略：使用 file-based SQLite (而非 :memory:) 确保所有代码路径
-（FastAPI lifespan、依赖注入、测试 fixtures）共享同一数据库。
+核心策略：
+- 使用文件级 SQLite（确保所有代码路径共享同一数据库）
+- Mock MinIO 服务（避免网络依赖）
+- 自动创建/清理测试数据库
 """
 
 from __future__ import annotations
@@ -12,14 +14,15 @@ from pathlib import Path
 
 import pytest
 
-# ── 强制 mock / test 环境变量（必须在导入任何 app 模块之前设置）─────
-os.environ["BHG_LLM_MOCK_MODE"] = "true"
-os.environ["BHG_DEBUG"] = "true"
-os.environ["BHG_SECRET_KEY"] = "test-secret-key---overriding-default-value-for-ci"
-# 使用项目本地临时文件（避免 /tmp 被填满导致测试失败）
+# ── 确定测试数据库路径（必须在导入任何 app 模块前创建）─────
 _PROJ_TMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test_tmp")
 os.makedirs(_PROJ_TMP, exist_ok=True)
 _TEST_DB_PATH = os.path.join(_PROJ_TMP, "test.db")
+
+# ── 强制 mock / test 环境变量 ──────────────────────────────
+os.environ["BHG_LLM_MOCK_MODE"] = "true"
+os.environ["BHG_DEBUG"] = "true"
+os.environ["BHG_SECRET_KEY"] = "test-secret-key---overriding-default-value-for-ci"
 os.environ["BHG_DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
 os.environ["BHG_LOG_LEVEL"] = "warning"
 os.environ["BHG_MINIO_ENDPOINT"] = "localhost:9000"
@@ -29,7 +32,7 @@ os.environ["BHG_CORS_ORIGINS"] = "http://localhost:5173"
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Clean up the test database after all tests complete."""
+    """清理测试数据库目录"""
     import shutil
     if os.path.exists(_PROJ_TMP):
         shutil.rmtree(_PROJ_TMP, ignore_errors=True)
@@ -87,7 +90,6 @@ def _patch_minio():
 # 数据库 fixtures
 # ═══════════════════════════════════════════════════════════════
 
-# 要清空的表（按 FK 依赖逆序）
 _TABLES_TO_CLEAN = [
     "compliance_reports",
     "document_sections",
@@ -140,7 +142,7 @@ def _test_db_engine():
 
 @pytest.fixture(autouse=True)
 def db_session(_test_db_engine, _patch_minio):
-    """每个测试获得全新的干净数据库"""
+    """每个测试获得全新干净的数据库会话"""
     _clean_all_tables(_test_db_engine)
 
     from sqlalchemy.orm import sessionmaker
@@ -181,18 +183,16 @@ def auth_headers(db_session):
     from app.models.user import User
     from app.core.security import hash_password, create_access_token
 
-    admin = db_session.query(User).filter(User.username == "admin").first()
-    if not admin:
-        admin = User(
-            username="admin",
-            hashed_password=hash_password("admin123"),
-            role="admin",
-            company="测试",
-            email="admin@test.com",
-        )
-        db_session.add(admin)
-        db_session.commit()
-        db_session.refresh(admin)
+    admin = User(
+        username="admin",
+        hashed_password=hash_password("admin123"),
+        role="admin",
+        company="测试",
+        email="admin@test.com",
+    )
+    db_session.add(admin)
+    db_session.commit()
+    db_session.refresh(admin)
 
     token = create_access_token(user_id=admin.id, role="admin")
     return {"Authorization": f"Bearer {token}"}
@@ -204,18 +204,16 @@ def user_auth_headers(db_session):
     from app.models.user import User
     from app.core.security import hash_password, create_access_token
 
-    user = db_session.query(User).filter(User.username == "testuser").first()
-    if not user:
-        user = User(
-            username="testuser",
-            hashed_password=hash_password("user123"),
-            role="user",
-            company="测试单位",
-            email="user@test.com",
-        )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
+    user = User(
+        username="testuser",
+        hashed_password=hash_password("user123"),
+        role="user",
+        company="测试单位",
+        email="user@test.com",
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
 
     token = create_access_token(user_id=user.id, role="user")
     return {"Authorization": f"Bearer {token}"}
