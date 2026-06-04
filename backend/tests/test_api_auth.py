@@ -119,9 +119,15 @@ class TestTokenExpiry:
         })
         assert resp.status_code == 401
 
-    def test_register_then_login_success(self, client: TestClient):
-        """注册后使用注册返回的 token 访问 me 接口应成功"""
-        # 注册
+    def test_register_then_login_success(self, client: TestClient, db_session):
+        """注册后使用注册返回的 token 访问 me 接口应成功（重置速率限制）
+
+        Note: 其他注册测试可能触发了速率限制，需要清理 _rate_limits。
+        """
+        # 重置速率限制计数器（避免 429）
+        from app.main import _rate_limits
+        _rate_limits.clear()
+
         resp = client.post("/api/auth/register", json={
             "username": "validtokenuser2",
             "password": "pass123",
