@@ -1,0 +1,276 @@
+name: baohegui
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+    tag: "{{.Name}}|{{.ImageName}}"
+
+services:
+  # ═══════════════════════════════════════════════════════════
+  # Nginx 反向代理 — 统一入口（HTTPS）
+  # ═══════════════════════════════════════════════════════════
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - baohegui
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "nginx"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # ═══════════════════════════════════════════════════════════
+  # Certbot — Let's Encrypt 证书自动续签
+  # ═══════════════════════════════════════════════════════════
+  certbot:
+    image: certbot/certbot:latest
+    profiles:
+      - certbot
+    volumes:
+      - ./certbot/etc:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    entrypoint: "/bin/sh -c"
+    command: >
+      'trap exit TERM;
+       while :; do
+         certbot renew --quiet --webroot --webroot-path=/var/www/certbot;
+         sleep 12h;
+       done'
+    restart: unless-stopped
+    networks:
+      - baohegui
+
+  # ═══════════════════════════════════════════════════════════
+  # 后端 (FastAPI)
+  # ═══════════════════════════════════════════════════════════
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    expose:
+      - "8000"
+    environment:
+      - BHG_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - BHG_MINIO_ENDPOINT=minio:9000
+      - BHG_MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
+      - BHG_MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - BHG_SECRET_KEY=${BHG_SECRET_KEY}
+      - BHG_DEBUG=${BHG_DEBUG:-false}
+      - BHG_LOG_LEVEL=${BHG_LOG_LEVEL:-info}
+      - BHG_CORS_ORIGINS=${BHG_CORS_ORIGINS:-}
+      # LLM
+      - BHG_LLM_PROVIDER=${BHG_LLM_PROVIDER:-openai_compatible}
+      - BHG_LLM_API_BASE=${BHG_LLM_API_BASE:-https://api.deepseek.com/v1}
+      - BHG_LLM_API_KEY=${BHG_LLM_API_KEY:-sk-placeholder}
+      - BHG_LLM_MODEL=${BHG_LLM_MODEL:-deepseek-chat}
+      - BHG_LLM_MAX_TOKENS=${BHG_LLM_MAX_TOKENS:-4096}
+      - BHG_LLM_TEMPERATURE=${BHG_LLM_TEMPERATURE:-0.1}
+      - BHG_LLM_RETRY_COUNT=${BHG_LLM_RETRY_COUNT:-3}
+      - BHG_LLM_RETRY_DELAY=${BHG_LLM_RETRY_DELAY:-2.0}
+      - BHG_LLM_TOKEN_LIMIT_PER_CALL=${BHG_LLM_TOKEN_LIMIT_PER_CALL:-6000}
+      - BHG_LLM_COST_PER_1K_INPUT=${BHG_LLM_COST_PER_1K_INPUT:-0.001}
+      - BHG_LLM_COST_PER_1K_OUTPUT=${BHG_LLM_COST_PER_1K_OUTPUT:-0.002}
+      - BHG_LLM_MOCK_MODE=${BHG_LLM_MOCK_MODE:-false}
+      # 邮件
+      - BHG_RESEND_API_KEY=${BHG_RESEND_API_KEY:-}
+      - BHG_EMAIL_FROM_ADDRESS=${BHG_EMAIL_FROM_ADDRESS:-noreply@baohegui.com}
+    volumes:
+      - uploads:/tmp/baohegui_uploads
+      # Mount local rules directory for hot-reload of rule/prompt changes
+      - ./rules:/app/rules:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - baohegui
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # ═══════════════════════════════════════════════════════════
+  # 前端 (React + Nginx)
+  # ═══════════════════════════════════════════════════════════
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    expose:
+      - "80"
+    depends_on:
+      backend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - baohegui
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+        tag: "{{.Name}}"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ═══════════════════════════════════════════════════════════
+  # 数据库 (PostgreSQL)
+  # ═══════════════════════════════════════════════════════════
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    expose:
+      - "5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-baohegui}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - baohegui
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "db"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+  # ═══════════════════════════════════════════════════════════
+  # 对象存储 (MinIO)
+  # ═══════════════════════════════════════════════════════════
+  minio:
+    image: minio/minio:latest
+    expose:
+      - "9000"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_LICENSE_FILE=/etc/minio/license.json
+    command: server /data
+    volumes:
+      - miniodata:/data
+      - ./minio.license:/etc/minio/license.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - baohegui
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "minio"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+  # ═══════════════════════════════════════════════════════════
+  # Playwright E2E 测试（仅 test profile）
+  # ═══════════════════════════════════════════════════════════
+  playwright:
+    profiles:
+      - test
+    build:
+      context: ./tests/playwright
+      dockerfile: Dockerfile
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_started
+    volumes:
+      - ./tests/playwright:/app
+      - /tmp/bhg_test_docs:/tmp
+    environment:
+      - PWTEST_SKIP_TEST_OUTPUT=1
+    networks:
+      - baohegui
+
+volumes:
+  pgdata:
+  miniodata:
+  uploads:
+  certbot_www:
+
+networks:
+  baohegui:
+    driver: bridge

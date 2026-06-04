@@ -1,0 +1,171 @@
+name: baohegui
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+    tag: "{{.Name}}|{{.ImageName}}"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - BHG_DATABASE_URL=postgresql://baohegui:baohegui@db:5432/baohegui
+      - BHG_MINIO_ENDPOINT=minio:9000
+      - BHG_LLM_PROVIDER=openai_compatible
+      - BHG_LLM_API_BASE=${BHG_LLM_API_BASE:-https://api.deepseek.com/v1}
+      - BHG_LLM_API_KEY=${BHG_LLM_API_KEY:-}
+      - BHG_LLM_MODEL=${BHG_LLM_MODEL:-deepseek-chat}
+      - BHG_LLM_MOCK_MODE=false
+      - BHG_LLM_MAX_TOKENS=${BHG_LLM_MAX_TOKENS:-4096}
+      - BHG_LLM_TEMPERATURE=${BHG_LLM_TEMPERATURE:-0.1}
+      - BHG_LLM_RETRY_COUNT=${BHG_LLM_RETRY_COUNT:-3}
+      - BHG_LLM_RETRY_DELAY=${BHG_LLM_RETRY_DELAY:-2.0}
+      - BHG_LLM_TOKEN_LIMIT_PER_CALL=${BHG_LLM_TOKEN_LIMIT_PER_CALL:-6000}
+      - BHG_LLM_COST_PER_1K_INPUT=${BHG_LLM_COST_PER_1K_INPUT:-0.001}
+      - BHG_LLM_COST_PER_1K_OUTPUT=${BHG_LLM_COST_PER_1K_OUTPUT:-0.002}
+      - BHG_DEBUG=${BHG_DEBUG:-false}
+      - BHG_LOG_LEVEL=${BHG_LOG_LEVEL:-info}
+      - BHG_SECRET_KEY=${BHG_SECRET_KEY:-change-me-in-production}
+    volumes:
+      - uploads:/tmp/baohegui_uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - baohegui
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - baohegui
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+        tag: "{{.Name}}"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=baohegui
+      - POSTGRES_PASSWORD=baohegui
+      - POSTGRES_DB=baohegui
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U baohegui"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - baohegui
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "db"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=baohegui
+      - MINIO_ROOT_PASSWORD=baohegui
+      - MINIO_LICENSE_FILE=/etc/minio/license.json
+    command: server /data --console-address ":9001"
+    volumes:
+      - miniodata:/data
+      - ./minio.license:/etc/minio/license.json
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - baohegui
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "minio"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+volumes:
+  pgdata:
+  miniodata:
+  uploads:
+
+networks:
+  baohegui:
+    driver: bridge

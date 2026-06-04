@@ -1,0 +1,122 @@
+{
+  "version": "1.0.0",
+  "description": "参数倾向性检测规则 — 从 hlgs（华招国际）parameter_bias_rules.json 移植，基于甘肃省政府采购网 558 个投诉案例中 337 个参数相关案例分析",
+  "last_updated": "2026-06-04",
+  "source": "hlgs config/rules/parameter_bias_rules.json",
+  "stats": {
+    "total_cases": 558,
+    "parameter_related_cases": 337,
+    "upheld_cases": 55,
+    "rejected_cases": 243,
+    "core_principle": "技术参数要求应确保至少3个品牌可参与竞争，参数应与项目实际需求相适应"
+  },
+  "legal_basis": [
+    {"title": "政府采购法实施条例", "article": "第二十条（二）", "point": "设定的技术条件与项目实际需要不相适应"},
+    {"title": "政府采购法实施条例", "article": "第二十条（八）", "point": "以不合理条件限制或排斥潜在供应商"},
+    {"title": "政府采购需求管理办法", "article": "第二十一条", "point": "采购需求应当清楚明了、表述规范、含义准确"},
+    {"title": "政府采购法", "article": "第三条", "point": "公开透明、公平竞争、公正和诚实信用原则"},
+    {"title": "政府采购需求管理办法", "article": "第九条", "point": "可直接引用标准或提出更高技术要求，但不得指向特定供应商"}
+  ],
+  "violation_patterns": {
+    "brand_lock_series": {
+      "severity": "critical",
+      "risk_level": "严重",
+      "description": "品牌锁定：要求不同设备/产品为同一品牌（如'汇聚交换机须与核心交换机同品牌'）",
+      "keywords": ["同一品牌", "同品牌", "须与*同品牌", "必须与*同一品牌", "品牌一致", "配套品牌"],
+      "check_fields": ["qualification_requirements", "technical_params"],
+      "check_logic": "搜索文本中是否含品牌一致的强制性要求",
+      "suggestion": "不同设备可采用不同品牌，只要满足互联互通标准即可",
+      "rule_id": "R107"
+    },
+    "manufacturer_authorization": {
+      "severity": "high",
+      "risk_level": "高",
+      "description": "厂家授权锁：要求投标前取得厂家授权/售后服务承诺函（限制代理商竞争）",
+      "keywords": ["厂家授权", "原厂授权", "制造商授权", "厂家盖章", "原厂公章", "厂商授权书", "原厂售后服务承诺"],
+      "check_fields": ["qualification_requirements"],
+      "check_logic": "若项目允许代理商参与，则不得要求投标时即提供厂家授权",
+      "suggestion": "可在中标后提供厂家授权或取消此要求",
+      "rule_id": "R101"
+    },
+    "detection_report_lock": {
+      "severity": "high",
+      "risk_level": "高",
+      "description": "检测报告锁定：要求提供特定机构出具的检测报告/检测证明",
+      "keywords": ["CMA", "CNAS", "检测报告", "检测证明", "检测机构", "检验报告", "型式检验"],
+      "check_fields": ["qualification_requirements", "technical_params"],
+      "check_logic": "若为非强制检测项目，不得限定检测机构；检测报告要求应与项目实际需求相关",
+      "suggestion": "允许提供第三方检测报告即可，不限定机构",
+      "rule_id": "R109"
+    },
+    "parameter_exclusivity": {
+      "severity": "high",
+      "risk_level": "高",
+      "description": "参数指向性：特定参数数值范围过窄或特定功能仅有少数品牌满足",
+      "keywords": ["参数", "指标", "技术指标", "规格", "配置要求", "功能要求", "性能要求"],
+      "check_fields": ["technical_params"],
+      "check_logic": "验证每个核心参数是否至少有3个品牌产品可满足；验证是否有品牌同时满足所有核心参数",
+      "suggestion": "至少3个品牌可满足每个核心参数，并确保有品牌能同时满足所有参数组合",
+      "rule_id": "AI-BIAS-004"
+    },
+    "proprietary_technology": {
+      "severity": "high",
+      "risk_level": "高",
+      "description": "独有技术/专利指向：要求特定专利或独有技术",
+      "keywords": ["独有", "唯一", "不可替代", "专利", "商标", "专有技术", "独家", "仅此一家"],
+      "check_fields": ["technical_params"],
+      "check_logic": "专利技术要求应允许同等替代方案；不得以特定商标或品牌作为技术参数",
+      "suggestion": "使用'或同等品''或优于'等表述，确保至少3家供应商满足",
+      "rule_id": "R105"
+    },
+    "cross_brand_interop": {
+      "severity": "high",
+      "risk_level": "高",
+      "description": "品牌互联互通锁定：要求产品与现有一品牌产品无缝对接且未提供接口标准",
+      "keywords": ["无缝对接", "无缝兼容", "与原有*兼容", "与原系统匹配", "与现有*配合"],
+      "check_fields": ["technical_params"],
+      "check_logic": "要求与现有设备对接时须提供开放的接口标准/协议，不得以'无缝对接'为由锁定品牌",
+      "suggestion": "明确接口标准和协议规范，允许不同品牌产品通过标准接口对接",
+      "rule_id": "R108"
+    },
+    "parameter_combination_exclusivity": {
+      "severity": "critical",
+      "risk_level": "严重",
+      "description": "组合参数整体指向性：单个参数各有3品牌满足，但没有品牌能同时满足所有参数",
+      "keywords": ["*且*", "同时具备", "同时满足", "*及*"],
+      "check_fields": ["technical_params"],
+      "check_logic": "使用参数组合矩阵验证：列出满足每个参数的品牌，检查交集是否存在。这是最高级别的隐性排他——即使单个参数看起来都没问题，组合起来可能只指向一个品牌",
+      "suggestion": "调整参数范围确保至少有一个品牌能同时满足所有核心参数",
+      "rule_id": "AI-BIAS-007"
+    },
+    "unreasonable_cert_requirements": {
+      "severity": "medium",
+      "risk_level": "中",
+      "description": "不合理认证要求：要求与项目无关的认证证书",
+      "keywords": ["ISO", "认证", "证书", "资质证书", "管理体系"],
+      "check_fields": ["qualification_requirements"],
+      "check_logic": "认证要求应与采购标的相关，且不得同时要求多种不相关认证",
+      "suggestion": "保留与项目直接相关的认证要求，取消无关认证",
+      "rule_id": "R104-2"
+    },
+    "unreasonable_time_limit": {
+      "severity": "medium",
+      "risk_level": "中",
+      "description": "不合理时限要求：检测报告/资质证明的时限设置不合理",
+      "keywords": ["近一年", "近半年", "近三个月", "年度", "近期"],
+      "check_fields": ["qualification_requirements"],
+      "check_logic": "检测报告签发时限应合理（一般不少于1年），不得以近期报告为由限制竞争",
+      "suggestion": "合理设置报告有效期要求",
+      "rule_id": "AI-BIAS-009"
+    },
+    "standard_not_exists": {
+      "severity": "high",
+      "risk_level": "高",
+      "description": "引用不存在的技术标准或无效标准版本",
+      "keywords": ["GB", "GB/T", "标准", "规范"],
+      "check_fields": ["technical_params"],
+      "check_logic": "引用标准应符合：标准号+年号格式，验证标准是否存在且现行有效",
+      "suggestion": "核实引用标准的有效性，使用现行有效版本",
+      "rule_id": "AI-BIAS-010"
+    }
+  }
+}

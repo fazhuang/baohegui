@@ -1,0 +1,60 @@
+# ═══════════════════════════════════════════════════════════════
+# 开发环境覆盖配置
+# 使用方式: docker compose up -d             # 自动加载 override
+# 或显式:  docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  backend:
+    # 开发模式挂载源码，修改后 uvicorn --reload 自动生效
+    volumes:
+      - ./backend:/app
+      - ./rules:/app/rules
+    environment:
+      - BHG_DEBUG=true
+      - BHG_LLM_MOCK_MODE=${BHG_LLM_MOCK_MODE:-true}
+      - BHG_LLM_PROVIDER=${BHG_LLM_PROVIDER:-mock}
+      - BHG_LOG_LEVEL=debug
+    # 开发模式下移除健康检查，避免 reload 误判
+    healthcheck:
+      disable: true
+    # 开发模式下放宽资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+    ports:
+      - "5678:5678"   # debugpy 调试端口（可选）
+
+  frontend:
+    # 前端开发服务器（热重载）
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    environment:
+      - VITE_API_BASE=http://localhost:8000
+    ports:
+      - "3000:3000"
+    # 开发模式下移除非必要的健康检查
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  db:
+    # 开发环境暴露数据库端口（便于客户端工具连接）
+    ports:
+      - "5432:5432"
+
+  minio:
+    # 开发环境暴露 MinIO 控制台
+    ports:
+      - "9000:9000"
+      - "9001:9001"

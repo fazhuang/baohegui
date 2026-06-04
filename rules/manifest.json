@@ -1,0 +1,56 @@
+{
+  "version": "3.0.0",
+  "last_updated": "2026-06-04",
+  "total_rules": 153,
+  "description": "规则清单 — 包含从 hlgs（华招国际）导入的结构化合规规则、参数倾向性检测规则和禁用词库",
+  "sources": {
+    "compliance_rules": {
+      "file": "compliance_rules.json",
+      "count": 35,
+      "origin": "hlgs config/rules/*.json",
+      "format": "结构化规则（rule_id + 7种 rule_type + 条件表达式）"
+    },
+    "base_rules": {
+      "file": "base_rules.json",
+      "count": 57,
+      "origin": "baohegui 原创",
+      "format": "章节完整性+关键字+禁用词+格式"
+    },
+    "forbidden_words": {
+      "file": "forbidden_words.json",
+      "count": 50,
+      "origin": "融合 baohegui v2 + hlgs forbidden_pattern",
+      "format": "12大类分类模式库"
+    },
+    "platform_rules": {
+      "file": "platform_rules.json",
+      "count": 11,
+      "origin": "baohegui 原创",
+      "format": "平台规则代码映射"
+    },
+    "parameter_bias": {
+      "file": "parameter_bias_rules.json",
+      "count": 10,
+      "origin": "hlgs config/rules/parameter_bias_rules.json",
+      "format": "基于558个投诉案例的10种违规模式",
+      "case_basis": {"total_cases": 558, "parameter_related": 337, "upheld": 55, "rejected": 243}
+    },
+    "project_categories": {
+      "file": "project_categories.json",
+      "origin": "hlgs config/project_categories.json + field_definitions.json",
+      "format": "6大类别×21子类+10字段→规则映射"
+    }
+  },
+  "industries": {
+    "construction": "industry/construction.json",
+    "healthcare": "industry/healthcare.json",
+    "it": "industry/it.json",
+    "medical": "industry/medical.json"
+  },
+  "prompts": {
+    "compliance_check": "prompts/compliance_check.txt",
+    "document_parse": "prompts/document_parse.txt",
+    "exclusivity_check": "prompts/exclusivity_check.txt"
+  },
+  "formats": ["json", "txt"]
+}

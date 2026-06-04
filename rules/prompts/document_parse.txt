@@ -1,0 +1,39 @@
+你是一个招标文件结构化解析专家。请从以下招标文件文本中，提取关键字段信息。
+
+## 需要提取的字段
+{% for field in fields %}
+- {{ field.id }}: {{ field.label }} ({{ field.type }}) — {{ field.description or '' }}
+{% endfor %}
+
+## 招标文件文本（全文或片段）
+{{ text }}
+
+## 解析要求
+1. 逐字段提取对应的值，如果找不到对应信息，填写 null
+2. 对于 budget 字段，提取数字金额和单位（如 "500万元"）
+3. 对于 procurement_method，从以下选项中选择最匹配的：公开招标、邀请招标、竞争性谈判、竞争性磋商、询价、单一来源
+4. 对于 evaluation_method，从以下选项中选择：综合评分法、经评审的最低投标价法、合理低价法、质量评定法、固定价评选法
+5. 每个字段同时返回：
+   - value: 提取到的值
+   - confidence: 提取置信度 0~1（原文直接匹配=1.0，推理推断=0.5-0.8，无法找到=0）
+   - evidence: 原文中定位到的证据片段（前80字符）
+
+## 输出格式
+请以 JSON 格式输出，不要包含其他文字：
+{
+  "fields": {
+    "project_name": {"value": "...", "confidence": 0.95, "evidence": "..."},
+    "document_number": {"value": "...", "confidence": 0.9, "evidence": "..."},
+    "owner": {"value": "...", "confidence": 0.95, "evidence": "..."},
+    "budget": {"value": "...", "confidence": 0.9, "evidence": "..."},
+    "procurement_method": {"value": "...", "confidence": 0.85, "evidence": "..."},
+    "qualification_requirements": {"value": "...", "confidence": 0.9, "evidence": "..."},
+    "bid_rejection_conditions": {"value": "...", "confidence": 0.85, "evidence": "..."},
+    "technical_params": {"value": "...", "confidence": 0.9, "evidence": "..."},
+    "evaluation_method": {"value": "...", "confidence": 0.85, "evidence": "..."},
+    "scoring_criteria": {"value": "...", "confidence": 0.85, "evidence": "..."}
+  },
+  "overall_confidence": 0.9,
+  "parse_quality": "ok|partial|low",
+  "warnings": ["如果某些字段无法确定，请在这里说明原因"]
+}

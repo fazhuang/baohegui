@@ -1,0 +1,9 @@
+# SSL 证书目录 — 占位文件
+#
+# 生产环境请将证书文件放置于此目录：
+#   - fullchain.pem   (服务器证书 + 中间证书)
+#   - privkey.pem     (私钥)
+#
+# 使用 init-letsencrypt.sh 可自动申请 Let's Encrypt 证书
+#
+# ⚠️ 证书文件不会提交到 Git（见 .gitignore）

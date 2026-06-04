@@ -1,0 +1,709 @@
+/* ═══════════════════════════════════════════════════════════
+   包合规 - 全局样式 (v2)
+   设计系统: Calm / Reliable / Professional / Forceful
+   品牌深蓝 #1e40af | 动作蓝 #2563eb | 石板灰文字 | 冷灰背景
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Design Tokens ─────────────────────────────────────── */
+:root {
+  /* Brand */
+  --color-brand: #1e40af;
+  --color-brand-light: #dbeafe;
+
+  /* Action */
+  --color-action: #2563eb;
+  --color-action-hover: #1d4ed8;
+
+  /* Semantic */
+  --color-success: #16a34a;
+  --color-success-light: #dcfce7;
+  --color-warning: #eab308;
+  --color-warning-light: #fef9c3;
+  --color-error: #dc2626;
+  --color-error-light: #fee2e2;
+
+  /* Text */
+  --color-text: #334155;
+  --color-text-secondary: #64748b;
+  --color-text-tertiary: #94a3b8;
+
+  /* Surfaces */
+  --color-bg: #f1f5f9;
+  --color-bg-card: #ffffff;
+  --color-border: #e2e8f0;
+  --color-border-light: #f1f5f9;
+
+  /* Shadows */
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+
+  /* Layout */
+  --sidebar-width: 200px;
+  --header-height: 56px;
+  --header-height-mobile: 48px;
+  --bottom-bar-height: 56px;
+  --content-max-width: 1200px;
+}
+
+/* ── Reset ─────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.5715;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ── Page Transition ───────────────────────────────────── */
+.page-fade-in {
+  animation: pageFadeIn 0.2s ease-out;
+}
+
+@keyframes pageFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Reduced Motion ────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .page-fade-in {
+    animation: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── State Containers ──────────────────────────────────── */
+.state-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 16px !important;
+  padding: 64px 24px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.state-container > .anticon {
+  margin-bottom: 16px;
+  color: var(--color-text-tertiary);
+}
+
+.state-container h3 {
+  margin: 8px 0;
+  color: var(--color-text);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* ── Card Base ─────────────────────────────────────────── */
+.card-hover {
+  transition: box-shadow 0.2s ease;
+}
+
+.card-hover:hover {
+  box-shadow: var(--shadow-card-hover);
+}
+
+/* ── Card Accent Bars ──────────────────────────────────── */
+.card-accent-orange {
+  border-left: 4px solid var(--color-warning) !important;
+}
+
+.card-accent-cyan {
+  border-left: 4px solid #0891b2 !important;
+}
+
+.card-accent-red {
+  border-left: 4px solid var(--color-error) !important;
+}
+
+/* ── Priority Card ─────────────────────────────────────── */
+.priority-card {
+  position: relative;
+  padding: 16px 20px;
+  border-radius: 8px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  transition: box-shadow 0.2s ease;
+}
+
+.priority-card:hover {
+  box-shadow: var(--shadow-card-hover);
+}
+
+.priority-card .priority-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 16px !important;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--color-error);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ── Process Track Node ────────────────────────────────── */
+.process-track {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 16px !important;
+  gap: 0;
+  padding: 24px 0;
+}
+
+.process-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
+.process-node-circle {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 16px !important;
+  font-size: 16px;
+  font-weight: 600;
+  border: 2px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-text-tertiary);
+  transition: all 0.3s ease;
+}
+
+.process-node-circle.active {
+  border-color: var(--color-action);
+  background: var(--color-action);
+  color: #fff;
+}
+
+.process-node-circle.done {
+  border-color: var(--color-success);
+  background: var(--color-success);
+  color: #fff;
+}
+
+.process-node-circle.error {
+  border-color: var(--color-error);
+  background: var(--color-error);
+  color: #fff;
+}
+
+.process-line {
+  width: 64px;
+  height: 2px;
+  background: var(--color-border);
+  transition: background 0.3s ease;
+}
+
+.process-line.done {
+  background: var(--color-success);
+}
+
+.process-line.active {
+  background: var(--color-action);
+}
+
+.process-node-label {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.process-node.active .process-node-label {
+  color: var(--color-action);
+  font-weight: 600;
+}
+
+.process-node.done .process-node-label {
+  color: var(--color-success);
+}
+
+/* ── Upload Zone ───────────────────────────────────────── */
+.upload-zone {
+  padding: 48px;
+  border: 2px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 16px !important;
+  gap: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.upload-zone:hover {
+  border-color: var(--color-action);
+  background: #fafbff;
+}
+
+.upload-zone.drag-over {
+  border-color: var(--color-action);
+  background: var(--color-brand-light);
+  transform: scale(1.01);
+}
+
+.upload-zone-icon {
+  font-size: 48px;
+  color: var(--color-action);
+}
+
+.upload-zone-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.upload-zone-hint {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+/* ── Recent Check Strip ────────────────────────────────── */
+.recent-check-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+
+.recent-check-item {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: box-shadow 0.2s ease;
+  min-width: 180px;
+}
+
+.recent-check-item:hover {
+  box-shadow: var(--shadow-card-hover);
+}
+
+.recent-check-score {
+  height: 3px;
+  border-radius: 2px;
+  margin-top: 6px;
+}
+
+/* ── Report Summary Strip ──────────────────────────────── */
+.report-summary-strip {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 20px 24px;
+  background: var(--color-bg-card);
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-card);
+  flex-wrap: wrap;
+}
+
+/* ── Global Filter Bar ─────────────────────────────────── */
+.filter-bar {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--color-bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.filter-bar-label {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+/* ── Table Accent Header ───────────────────────────────── */
+.table-accent-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.table-accent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Score Ring Mini ───────────────────────────────────── */
+.score-ring-mini {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 16px !important;
+  position: relative;
+}
+
+/* ── Guide Step Icon ───────────────────────────────────── */
+.guide-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 16px !important;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--color-brand-light);
+  color: var(--color-brand);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+/* ── Violation Card (legacy - for compat) ──────────────── */
+.violation-card {
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  transition: box-shadow 0.2s;
+}
+.violation-card:hover {
+  box-shadow: var(--shadow-card-hover);
+}
+
+/* ── Responsive: Mobile (<768px) ───────────────────────── */
+@media (max-width: 767px) {
+  body {
+    padding-bottom: var(--bottom-bar-height);
+  }
+
+  .hide-mobile {
+    display: none !important;
+  }
+
+  .upload-zone {
+    padding: 24px 16px;
+  }
+
+  .process-track {
+    flex-wrap: wrap;
+    gap: 16px;
+    justify-content: flex-start;
+  }
+
+  .process-line {
+    width: 24px;
+  }
+
+  .report-summary-strip {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .filter-bar {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .recent-check-strip {
+    flex-direction: column;
+  }
+
+  .recent-check-item {
+    min-width: unset;
+  }
+}
+
+/* ── Responsive: Tablet (768-1023px) ───────────────────── */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .show-mobile {
+    display: none !important;
+  }
+}
+
+/* ── Responsive: Desktop (≥1024px) ─────────────────────── */
+@media (min-width: 1024px) {
+  .show-mobile {
+    display: none !important;
+  }
+}
+
+/* ── Bottom Tab Bar (mobile) ───────────────────────────── */
+.bottom-tab-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--bottom-bar-height);
+  background: var(--color-bg-card);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  z-index: 100;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+/* ── Floating Action Button (mobile) ───────────────────── */
+.fab-upload {
+  position: fixed;
+  bottom: calc(var(--bottom-bar-height) + 16px);
+  right: 16px;
+  z-index: 99;
+  box-shadow: 0 4px 16px rgba(30, 64, 175, 0.3);
+}
+
+/* ── Sidebar ───────────────────────────────────────────── */
+.sidebar-nav {
+  border-inline-end: none !important;
+}
+
+.sidebar-nav .ant-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 16px !important;
+  margin: 4px 8px !important;
+  border-radius: 8px;
+}
+
+/* ── Dashboard Page ────────────────────────────────────── */
+.dashboard-page {
+  max-width: var(--content-max-width, 1200px);
+  margin: 0 auto;
+}
+
+/* KPI Card hover effect */
+.kpi-card {
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.kpi-card:hover {
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-2px);
+}
+
+/* Announcement item hover */
+.announcement-item {
+  transition: all 0.2s ease;
+}
+
+/* Quick action card hover — mostly handled inline */
+
+/* Responsive Dashboard */
+@media (max-width: 767px) {
+  .dashboard-page {
+    padding: 0 4px;
+  }
+
+  .kpi-card .ant-card-body {
+    padding: 14px 16px !important;
+  }
+}
+
+/* ── Login Background ──────────────────────────────────── */
+.login-bg {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 16px !important;
+  background: #0f172a;
+  padding: 16px;
+}
+
+/* ── Brand Header ──────────────────────────────────────── */
+.brand-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--header-height);
+  padding: 0 20px;
+  background: var(--color-brand);
+}
+
+.brand-header .brand-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #fff;
+  cursor: pointer;
+}
+
+.brand-header .brand-logo .brand-icon {
+  font-size: 22px;
+}
+
+.brand-header .brand-logo .brand-name {
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 1px;
+}
+
+.brand-header .brand-logo .brand-tagline {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  margin-left: 4px;
+  letter-spacing: 0.5px;
+}
+
+/* ── Admin Table Enhancements ──────────────────────────── */
+.admin-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.admin-page-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.admin-page-subtitle {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+}
+
+/* ── Section Header ────────────────────────────────────── */
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.section-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.section-header .ant-tag {
+  margin: 0;
+}
+
+/* ── Empty State Illustration ──────────────────────────── */
+.empty-state-illustration {
+  width: 120px;
+  height: 120px;
+  opacity: 0.25;
+  margin-bottom: 16px;
+}
+
+/* ── Global Focus & Interaction Polish ─────────────────── */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Ant Design button focus override */
+.ant-btn:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 2px;
+}
+
+/* Ant Design table selected row */
+.ant-table-row-selected > td {
+  background: var(--color-brand-light) !important;
+}
+
+/* Card default border use design token */
+.ant-card {
+  border-color: var(--color-border);
+}
+
+/* ant-tag border radius consistency */
+.ant-tag {
+  border-radius: 6px;
+}
+
+/* ant-collapse ghost style refinement */
+.ant-collapse-ghost > .ant-collapse-item > .ant-collapse-header {
+  color: var(--color-action);
+}
+
+/* ant-result padding for upload page */
+.ant-result {
+  padding: 32px 24px !important;
+}
+
+/* DesktoPDF button sticky */
+.pdf-sticky-bar {
+  position: sticky;
+  bottom: 24px;
+  margin-top: 40px;
+  padding: 16px 0;
+  text-align: center;
+  background: linear-gradient(180deg, transparent, var(--color-bg) 60%);
+}
+
+/* Mobile download FAB */
+@media (max-width: 767px) {
+  .fab-pdf-mobile .ant-btn {
+    box-shadow: 0 4px 16px rgba(30, 64, 175, 0.3);
+  }
+}
+
+/* Improved tap targets on mobile */
+@media (max-width: 767px) {
+  .ant-btn-sm {
+    min-height: 36px;
+  }
+
+  .ant-table-row {
+    min-height: 44px;
+  }
+}

@@ -1,0 +1,145 @@
+# ═══════════════════════════════════════════════════════════════
+# 包合规 — CI 流水线
+# ═══════════════════════════════════════════════════════════════
+# 触发条件:
+#   - main / develop 分支的 push
+#   - main 分支的 pull_request
+#
+# Job:
+#   backend-test : Python 3.13 + PostgreSQL 16 → pytest
+#   frontend-build: Node 22 → tsc + vite build
+#   docker-build  : 验证 Docker Compose 能正常配置（不启动）
+# ═══════════════════════════════════════════════════════════════
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+
+jobs:
+  backend-test:
+    name: "Backend — pytest (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+      fail-fast: false
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: baohegui
+          POSTGRES_PASSWORD: baohegui
+          POSTGRES_DB: baohegui
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache uv dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            backend/.venv
+            ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('backend/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          uv sync
+
+      - name: Run tests
+        run: |
+          cd backend
+          BHG_DATABASE_URL="postgresql://baohegui:baohegui@localhost:5432/baohegui" \
+          BHG_LLM_MOCK_MODE=true \
+          uv run pytest tests/ -v --tb=short -x
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-logs
+          path: backend/tests/.pytest_cache
+          retention-days: 3
+
+  frontend-build:
+    name: "Frontend — tsc + vite"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Build
+        run: |
+          cd frontend
+          npm run build
+
+  docker-validate:
+    name: "Docker — compose config"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        run: docker compose config
+
+      - name: Validate docker-compose.prod.yml
+        run: |
+          BHG_SECRET_KEY=ci-test \
+          POSTGRES_PASSWORD=ci-test \
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config
+
+      - name: Validate docker-compose.override.yml
+        run: docker compose -f docker-compose.yml -f docker-compose.override.yml config

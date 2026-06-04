@@ -1,0 +1,160 @@
+{
+  "version": "1.0.0",
+  "description": "招标项目分类体系 + 字段定义 → 合规规则映射 — 从 hlgs（华招国际）移植并适配",
+  "last_updated": "2026-06-04",
+  "source": "hlgs config/project_categories.json + config/field_definitions.json",
+  "category_groups": [
+    {"id": "gov", "name": "政府采购", "icon": "shopping-bag", "order": 1},
+    {"id": "highway", "name": "公路工程", "icon": "road", "order": 2},
+    {"id": "water", "name": "水利工程", "icon": "droplet", "order": 3},
+    {"id": "railway", "name": "铁路工程项目", "icon": "train", "order": 4},
+    {"id": "construction", "name": "房屋建筑工程", "icon": "building", "order": 5},
+    {"id": "municipal", "name": "市政工程", "icon": "city", "order": 6}
+  ],
+  "categories": [
+    {"id": "gov_public_bid_goods", "name": "政府采购-公开招标-货物类", "icon": "package", "parent": "gov", "recommended": true},
+    {"id": "gov_public_bid_service", "name": "政府采购-公开招标-服务类", "icon": "briefcase", "parent": "gov", "recommended": true},
+    {"id": "gov_public_bid_eng", "name": "政府采购-公开招标-工程类", "icon": "hard-hat", "parent": "gov", "recommended": true},
+    {"id": "gov_invitation_bid", "name": "政府采购-邀请招标", "icon": "user-check", "parent": "gov", "recommended": false},
+    {"id": "gov_competitive_negotiation", "name": "政府采购-竞争性谈判", "icon": "file-text", "parent": "gov", "recommended": false},
+    {"id": "gov_competitive_consultation", "name": "政府采购-竞争性磋商", "icon": "users", "parent": "gov", "recommended": false},
+    {"id": "gov_inquiry", "name": "政府采购-询价", "icon": "search", "parent": "gov", "recommended": false},
+    {"id": "gov_single_source", "name": "政府采购-单一来源", "icon": "target", "parent": "gov", "recommended": false},
+    {"id": "highway_construction", "name": "公路工程-施工", "icon": "road", "parent": "highway", "recommended": true},
+    {"id": "highway_supervision", "name": "公路工程-监理", "icon": "eye", "parent": "highway", "recommended": true},
+    {"id": "highway_design", "name": "公路工程-勘察设计", "icon": "edit-3", "parent": "highway", "recommended": true},
+    {"id": "water_conservancy_construction", "name": "水利工程-施工", "icon": "droplet", "parent": "water", "recommended": true},
+    {"id": "water_conservancy_supervision", "name": "水利工程-监理", "icon": "eye", "parent": "water", "recommended": true},
+    {"id": "water_conservancy_design", "name": "水利工程-设计", "icon": "edit-3", "parent": "water", "recommended": true},
+    {"id": "water_conservancy_material", "name": "水利工程-材料采购", "icon": "package", "parent": "water", "recommended": true},
+    {"id": "railway_construction", "name": "铁路工程项目-施工", "icon": "train", "parent": "railway", "recommended": true},
+    {"id": "railway_supervision", "name": "铁路工程项目-监理", "icon": "eye", "parent": "railway", "recommended": true},
+    {"id": "railway_goods", "name": "铁路工程项目-货物", "icon": "package", "parent": "railway", "recommended": true},
+    {"id": "railway_service", "name": "铁路工程项目-服务", "icon": "briefcase", "parent": "railway", "recommended": true},
+    {"id": "railway_epc", "name": "铁路工程项目-总承包", "icon": "layers", "parent": "railway", "recommended": true},
+    {"id": "railway_design", "name": "铁路工程项目-勘察设计", "icon": "edit-3", "parent": "railway", "recommended": true}
+  ],
+  "procurement_methods": [
+    {"value": "公开招标", "label": "公开招标"},
+    {"value": "邀请招标", "label": "邀请招标"},
+    {"value": "竞争性谈判", "label": "竞争性谈判"},
+    {"value": "竞争性磋商", "label": "竞争性磋商"},
+    {"value": "询价", "label": "询价"},
+    {"value": "单一来源", "label": "单一来源"}
+  ],
+  "evaluation_methods": [
+    {"value": "综合评分法", "label": "综合评分法"},
+    {"value": "经评审的最低投标价法", "label": "经评审的最低投标价法"},
+    {"value": "经评审的最低评标价法", "label": "经评审的最低评标价法"},
+    {"value": "最低评标价法", "label": "最低评标价法"},
+    {"value": "合理低价法", "label": "合理低价法"},
+    {"value": "质量评定法", "label": "质量评定法"},
+    {"value": "固定价评选法", "label": "固定价评选法"}
+  ],
+  "fields": {
+    "project_name": {
+      "label": "项目名称",
+      "type": "text",
+      "placeholder": "如：XX市智慧校园设备采购项目",
+      "required": true,
+      "max_length": 200,
+      "section": "basic",
+      "compliance_rule_ids": ["R004"],
+      "help_text": "填写项目全称，应与立项批复文件一致"
+    },
+    "document_number": {
+      "label": "招标文件编号",
+      "type": "text",
+      "placeholder": "如：GSZC-2026-001",
+      "required": true,
+      "max_length": 100,
+      "section": "basic",
+      "compliance_rule_ids": [],
+      "help_text": "采购代理机构编制的招标文件编号"
+    },
+    "owner": {
+      "label": "采购人/招标人",
+      "type": "text",
+      "placeholder": "如：XX市教育局",
+      "required": true,
+      "max_length": 200,
+      "section": "basic",
+      "compliance_rule_ids": ["R005"],
+      "help_text": "招标项目的采购人或招标单位全称"
+    },
+    "budget": {
+      "label": "预算金额",
+      "type": "text",
+      "placeholder": "如：500万元",
+      "required": true,
+      "max_length": 100,
+      "section": "basic",
+      "compliance_rule_ids": ["R006", "R204"],
+      "help_text": "填写项目预算金额，包含单位（万元/亿元）"
+    },
+    "procurement_method": {
+      "label": "采购方式",
+      "type": "select",
+      "required": true,
+      "section": "basic",
+      "options_source": "procurement_methods",
+      "compliance_rule_ids": [],
+      "help_text": "依据政府采购法及相关规定选择采购方式"
+    },
+    "qualification_requirements": {
+      "label": "投标人资格要求",
+      "type": "textarea",
+      "placeholder": "逐条列出投标人应具备的资质条件…",
+      "required": true,
+      "section": "qualification",
+      "compliance_rule_ids": ["R001", "R101", "R102", "R104", "R109", "R110", "R111", "R112"],
+      "help_text": "包括资质等级、业绩要求、注册地要求等，不得设置歧视性条款",
+      "rows": 6
+    },
+    "bid_rejection_conditions": {
+      "label": "废标条件/无效投标条款",
+      "type": "textarea",
+      "placeholder": "逐条列明废标情形…",
+      "required": true,
+      "section": "qualification",
+      "compliance_rule_ids": ["R003", "R106", "R109", "R009", "R010", "R109_C"],
+      "help_text": "明确列出导致投标无效的具体情形，不得设置非法定废标条件",
+      "rows": 5
+    },
+    "technical_params": {
+      "label": "技术参数与规格要求",
+      "type": "textarea",
+      "placeholder": "详细描述采购标的的技术参数、规格、性能要求…",
+      "required": false,
+      "section": "technical",
+      "compliance_rule_ids": ["R007", "R105", "R107", "R108", "R111_B", "R012", "R203"],
+      "help_text": "参数不得指向特定品牌或具有排他性，应设置不少于3个品牌可满足的参数要求",
+      "rows": 8
+    },
+    "evaluation_method": {
+      "label": "评标方法",
+      "type": "select",
+      "required": true,
+      "section": "evaluation",
+      "options_source": "evaluation_methods",
+      "compliance_rule_ids": ["R002", "R201", "R206"],
+      "help_text": "依法必须选择法定评标方法之一"
+    },
+    "scoring_criteria": {
+      "label": "评分标准/分值分配",
+      "type": "textarea",
+      "placeholder": "详细说明各评分因素的权重分配与评分细则…",
+      "required": false,
+      "section": "evaluation",
+      "compliance_rule_ids": ["R103", "R112_B", "R113", "R008", "R011", "R202", "R205"],
+      "help_text": "评分标准应量化可验证，主观分值不得超过总分值的30%",
+      "rows": 8
+    }
+  },
+  "field_section_groups": {
+    "basic": {"label": "基础信息", "order": 1, "fields": ["project_name", "document_number", "owner", "budget", "procurement_method"]},
+    "qualification": {"label": "资格条件", "order": 2, "fields": ["qualification_requirements", "bid_rejection_conditions"]},
+    "technical": {"label": "技术规格", "order": 3, "fields": ["technical_params"]},
+    "evaluation": {"label": "评标标准", "order": 4, "fields": ["evaluation_method", "scoring_criteria"]}
+  }
+}

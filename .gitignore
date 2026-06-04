@@ -1,0 +1,39 @@
+# 环境变量（含密码/密钥，严禁提交）
+.env
+.env.*
+!.env.prod.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+
+# 数据库
+*.sqlite3
+
+# Docker 构建产物
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 本地测试文件
+/tmp/
+/uploads/
+
+# SSL 证书（生产证书不提交）
+nginx/ssl/*.pem
+nginx/ssl/*.crt
+nginx/ssl/*.key
+nginx/ssl/*.p12
+nginx/ssl/*.pfx
+!nginx/ssl/.gitkeep

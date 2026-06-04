@@ -1,0 +1,21 @@
+<!-- 欢迎邮件模板 — 从 hlgs email_service.py send_welcome_email 提取并适配 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif;padding:24px;background:#f0f2f6">
+<div style="max-width:480px;margin:0 auto;background:#fff;padding:32px;border-radius:12px;border:1px solid #E4E6E9">
+  <div style="font-size:24px;font-weight:600;color:#0B0D10;margin-bottom:16px">包合规</div>
+  <h2 style="margin:0 0 8px;color:#0B0D10">欢迎加入，{{ display_name }}！</h2>
+  <p style="color:#5B5F66;margin:0 0 16px">您的账户已创建成功。您现在可以：</p>
+  <ul style="color:#5B5F66;padding-left:20px;line-height:1.8">
+    <li>上传招标文件进行 AI 合规审查</li>
+    <li>使用 50+ 条专业规则库（基于 558 个真实投诉案例）</li>
+    <li>查看最新的违规警示案例通报</li>
+    <li>免费试用全部功能（{{ trial_days }} 天试用期）</li>
+  </ul>
+  <a href="{{ login_url }}" style="display:inline-block;background:#3D5AFE;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;margin:16px 0">开始使用</a>
+  <hr style="border:none;border-top:1px solid #E4E6E9;margin:24px 0">
+  <p style="font-size:12px;color:#8B8F95">© 2026 包合规</p>
+</div>
+</body>
+</html>

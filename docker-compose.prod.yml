@@ -1,0 +1,79 @@
+# ═══════════════════════════════════════════════════════════════
+# 生产环境配置
+# 使用方式: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  backend:
+    environment:
+      - BHG_DEBUG=false
+      - BHG_LLM_MOCK_MODE=false
+      - BHG_LLM_PROVIDER=openai_compatible
+      - BHG_LLM_API_BASE=${BHG_LLM_API_BASE:-http://llm:11434/v1}
+      - BHG_LLM_API_KEY=${BHG_LLM_API_KEY:-}
+      - BHG_LLM_MODEL=${BHG_LLM_MODEL:-qwen2.5:14b}
+      - BHG_SECRET_KEY=${BHG_SECRET_KEY:?必须设置 BHG_SECRET_KEY}
+      - BHG_LOG_LEVEL=warning
+    # 生产环境不挂载源码卷
+    volumes:
+      - uploads:/tmp/baohegui_uploads
+    # 重启策略更严格
+    restart: always
+    # 生产环境使用更严格的健康检查
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    restart: always
+    # 生产环境不挂载源码卷
+    volumes: []
+
+  db:
+    # 生产环境定期自动备份
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups/db:/backups
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-baohegui}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?必须设置 POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-baohegui}
+      - PGDATA=/var/lib/postgresql/data
+    restart: always
+
+  minio:
+    restart: always
+
+  # ══════════════════════════════════════════════════════════
+  # 生产环境附加服务
+  # ══════════════════════════════════════════════════════════
+
+  # 数据库定时备份（每天凌晨 3 点）
+  db-backup:
+    image: postgres:16-alpine
+    volumes:
+      - pgdata:/var/lib/postgresql/data:ro
+      - ./backups/db:/backups
+    entrypoint: |
+      sh -c '
+        echo "0 3 * * * pg_dump -h db -U $$POSTGRES_USER $$POSTGRES_DB | gzip > /backups/baohegui_$$(date +%%Y%%m%%d%%H%%M%%S).sql.gz && find /backups -name "*.sql.gz" -mtime +30 -delete" > /etc/crontabs/root
+        crond -f -l 2
+      '
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-baohegui}
+      - POSTGRES_DB=${POSTGRES_DB:-baohegui}
+      - PGPASSWORD=${POSTGRES_PASSWORD:?必须设置 POSTGRES_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - baohegui
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
