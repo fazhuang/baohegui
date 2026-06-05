@@ -382,6 +382,16 @@ const UploadPage: React.FC = () => {
 
   return (
     <div style={{ maxWidth: 800, margin: '0 auto' }}>
+      <style>{`
+@media (max-width: 768px) {
+  .upload-zone { padding: 24px 16px; min-height: 160px; }
+  .process-track { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .process-line { display: none; }
+  .process-node { flex-direction: row; align-items: center; gap: 12px; min-width: auto; }
+  .process-node-circle { width: 32px; height: 32px; font-size: 14px; }
+  .recent-check-strip { flex-wrap: wrap; }
+}
+`}</style>
       <Title level={3} style={{ fontSize: 20, fontWeight: 600, marginBottom: 4 }}>
         上传招标文件
       </Title>

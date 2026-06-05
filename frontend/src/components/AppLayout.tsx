@@ -188,7 +188,15 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
   // ── DESKTOP / TABLET LAYOUT ──────────────────────────
   if (!isMobile) {
     return (
-      <Layout style={{ minHeight: '100vh' }}>
+      <>
+        <style>{`
+@media (max-width: 768px) {
+  .ant-layout-sider { position: fixed; z-index: 1000; }
+  .app-content { padding: 12px; margin-left: 0; }
+  .app-header { padding: 0 12px; }
+}
+`}</style>
+        <Layout style={{ minHeight: '100vh' }}>
         {/* Top Brand Bar */}
         <Header
           style={{
@@ -329,6 +337,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
           </Content>
         </Layout>
       </Layout>
+      </>
     )
   }
 

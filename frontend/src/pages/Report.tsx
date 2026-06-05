@@ -904,6 +904,14 @@ const ReportPage: React.FC = () => {
 
   return (
     <div>
+      <style>{`
+@media (max-width: 768px) {
+  .report-page { max-width: 100%; padding: 12px; }
+  .report-page h3 { font-size: 18px; }
+  .ant-descriptions { font-size: 12px; }
+  .report-score-ring { width: 120px; height: 120px; }
+}
+`}</style>
       {/* ═══════ 报告头部 ═══════ */}
       <Title level={3} style={{ fontSize: 20, fontWeight: 600, marginBottom: 4 }}>
         合规审查报告
