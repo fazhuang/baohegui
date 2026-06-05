@@ -25,14 +25,11 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
+from app.engine.shared_types import Violation  # 从共享模块导入，避免循环依赖
 from app.services.prompt_manager import PromptManager, PromptNotFoundError
 from app.services.usage_tracker import (
-    LLMUsageTracker,
-    UsageRecord,
-    usage_tracker  as _global_tracker,
+    usage_tracker as _global_tracker,
 )
-
-from app.engine.shared_types import Violation  # 从共享模块导入，避免循环依赖
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +38,16 @@ logger = logging.getLogger(__name__)
 # 数据模型
 # ═══════════════════════════════════════════════════════════════
 
+
 class LLMViolation(BaseModel):
-    """大模型发现的一条语义违规"""
+    """大模型发现的一条语义违规
+
+    三段式可解释性字段（v3 新增）：
+    - evidence:    风险事实 — 从文档中逐字引用的原文证据
+    - consequence: 风险推演 — 若不修正的具体后果
+    - confidence:  置信度评分 0.0-1.0
+    """
+
     type: str = Field(
         ...,
         pattern=r"^(exclusivity|bias|hidden_barrier|ambiguity|high_risk)$",
@@ -58,10 +63,15 @@ class LLMViolation(BaseModel):
     suggestion: str = ""
     law_ref: Optional[str] = None
     weight: float = 10.0
+    # ── 三段式可解释性（v3 新增） ─────────────────────────
+    evidence: str = ""  # 风险事实：从文档逐字引用的原文
+    consequence: str = ""  # 风险推演：若不修正的具体后果
+    confidence: float = 0.0  # 置信度评分 (0.0-1.0)
 
 
 class LLMEngineResult(BaseModel):
     """语义引擎审查结果"""
+
     violations: list[LLMViolation] = []
     total_score: float = 100.0
     model_used: str = ""
@@ -69,14 +79,15 @@ class LLMEngineResult(BaseModel):
     tokens_input: int = 0
     tokens_output: int = 0
     cost_yuan: float = 0.0
-    sections_analyzed: int = 0            # 实际调 LLM 的章节数
-    sections_skipped: int = 0             # 被抽样跳过的章节数
+    sections_analyzed: int = 0  # 实际调 LLM 的章节数
+    sections_skipped: int = 0  # 被抽样跳过的章节数
     error: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════════════════
 # 工具函数
 # ═══════════════════════════════════════════════════════════════
+
 
 def _extract_json(text: str) -> Optional[list[dict]]:
     """
@@ -198,7 +209,7 @@ def _build_section_prompt(
     sections_skipped = 0
 
     # 粗略估计：1 个汉字 ≈ 2 tokens
-    EST_TOKENS_PER_CHAR = 2
+    est_tokens_per_char = 2
 
     for sec_name, sec_content in sections.items():
         # ── 成本优化：判断是否跳过 ──────────────────────────
@@ -210,12 +221,13 @@ def _build_section_prompt(
                 sections_skipped += 1
                 logger.debug(
                     "跳过章节 [%s]（规则引擎无违规，抽样 %.0f%% 未命中）",
-                    sec_name, sampling_rate * 100,
+                    sec_name,
+                    sampling_rate * 100,
                 )
                 continue
 
         # ── 定变分离：获取标记文本 ─────────────────────────
-        if marked_doc and hasattr(marked_doc, 'get_text_for_llm'):
+        if marked_doc and hasattr(marked_doc, "get_text_for_llm"):
             # 使用标记过的文本（<<TEMPLATE>> / <<REVIEW>> 分隔）
             marked_text = marked_doc.get_text_for_llm(sec_name)
             if marked_text.strip():
@@ -225,23 +237,54 @@ def _build_section_prompt(
         else:
             text_block = f"=== {sec_name} ===\n{sec_content}\n\n"
 
-        block_tokens = len(text_block) * EST_TOKENS_PER_CHAR
+        block_tokens = len(text_block) * est_tokens_per_char
 
         tag = "🔍 必检" if is_violated else "📊 抽检"
         logger.debug(
-            "%s 章节 [%s] (~%d tokens)", tag, sec_name, block_tokens,
+            "%s 章节 [%s] (~%d tokens)",
+            tag,
+            sec_name,
+            block_tokens,
         )
+
+        # ── 大章节拆分：防 413 ────────────────────────────────
+        if block_tokens > token_limit:
+            char_limit = token_limit // 2
+            text = text_block
+            for i in range(0, len(text), char_limit):
+                part = text[i : i + char_limit]
+                pname = f"{sec_name}({i // char_limit + 1})"
+                part_block = f"=== {pname} ===\n{part}\n\n"
+                pt = len(part_block) * 2
+                if current_size + pt > token_limit and current_chunk:
+                    combined = "".join(current_chunk)
+                    chunks.append(
+                        {
+                            "section_name": " + ".join(
+                                c.split("\n")[0].replace("=== ", "").replace(" ===", "")
+                                for c in current_chunk
+                            ),
+                            "prompt": prompt_template.replace("{text}", combined),
+                        }
+                    )
+                    current_chunk = []
+                    current_size = 0
+                current_chunk.append(part_block)
+                current_size += pt
+            continue
 
         if current_size + block_tokens > token_limit and current_chunk:
             # flush 当前批
             combined = "".join(current_chunk)
-            chunks.append({
-                "section_name": " + ".join(
-                    c.split("\n")[0].replace("=== ", "").replace(" ===", "")
-                    for c in current_chunk
-                ),
-                "prompt": prompt_template.replace("{text}", combined),
-            })
+            chunks.append(
+                {
+                    "section_name": " + ".join(
+                        c.split("\n")[0].replace("=== ", "").replace(" ===", "")
+                        for c in current_chunk
+                    ),
+                    "prompt": prompt_template.replace("{text}", combined),
+                }
+            )
             current_chunk = [text_block]
             current_size = block_tokens
         else:
@@ -251,20 +294,58 @@ def _build_section_prompt(
     # 最后一批
     if current_chunk:
         combined = "".join(current_chunk)
-        chunks.append({
-            "section_name": " + ".join(
-                c.split("\n")[0].replace("=== ", "").replace(" ===", "")
-                for c in current_chunk
-            ),
-            "prompt": prompt_template.replace("{text}", combined),
-        })
+        chunks.append(
+            {
+                "section_name": " + ".join(
+                    c.split("\n")[0].replace("=== ", "").replace(" ===", "") for c in current_chunk
+                ),
+                "prompt": prompt_template.replace("{text}", combined),
+            }
+        )
 
     return chunks, sections_skipped
+
+
+def _parse_violations(raw: list[dict]) -> list[LLMViolation]:
+    """
+    将 LLM JSON 响应解析为 LLMViolation 列表。
+
+    支持两种输出格式：
+    1. v2 格式（兼容）：type, section, text, risk_level, reason, suggestion, law_ref
+    2. v3 格式（新增）：额外包含 evidence, consequence, confidence
+
+    自动映射已知字段别名（如 evidence_text → evidence, basis → law_ref）。
+    """
+    violations: list[LLMViolation] = []
+
+    # 字段别名映射：LLM JSON key → LLMViolation field
+    _FIELD_ALIASES: dict[str, str] = {
+        "evidence_text": "evidence",
+        "basis": "law_ref",
+    }
+
+    for item in raw:
+        # 应用字段别名
+        for alias, target in _FIELD_ALIASES.items():
+            if alias in item and target not in item:
+                item[target] = item.pop(alias)
+
+        # 提取 v3 新字段，提供默认值
+        if "confidence" in item:
+            try:
+                item["confidence"] = float(item["confidence"])
+            except (TypeError, ValueError):
+                item["confidence"] = 0.0
+
+        violations.append(LLMViolation(**item))
+
+    return violations
 
 
 # ═══════════════════════════════════════════════════════════════
 # Provider 实现
 # ═══════════════════════════════════════════════════════════════
+
 
 class BaseProvider:
     """Provider 基类"""
@@ -295,7 +376,10 @@ class OpenAICompatibleProvider(BaseProvider):
         max_tokens: int,
         temperature: float,
     ) -> tuple[str, dict]:
-        url = f"{self.api_base}/chat/completions"
+        url = f"{self.api_base.rstrip('/')}/chat/completions"
+        # GitHub Models / Azure AI 需要 api-version
+        if "models.inference.ai.azure.com" in url:
+            url += "?api-version=2024-06-01"
         headers = {
             "Content-Type": "application/json",
         }
@@ -354,8 +438,7 @@ class OllamaProvider(BaseProvider):
         usage = {
             "prompt_tokens": data.get("prompt_eval_count", 0),
             "completion_tokens": data.get("eval_count", 0),
-            "total_tokens": (data.get("prompt_eval_count", 0)
-                             + data.get("eval_count", 0)),
+            "total_tokens": (data.get("prompt_eval_count", 0) + data.get("eval_count", 0)),
         }
         return content, usage
 
@@ -366,12 +449,12 @@ class OllamaProvider(BaseProvider):
 
 PROVIDER_COST_ESTIMATES: dict[str, tuple[float, float]] = {
     # (input_cost_per_1k, output_cost_per_1k) 单位：元
-    "qwen-turbo":       (0.0008, 0.002),
-    "qwen-plus":        (0.002,  0.006),
-    "qwen-max":         (0.004,  0.012),
-    "deepseek-chat":    (0.001,  0.002),
-    "deepseek-reasoner":(0.004,  0.016),
-    "glm-4-plus":       (0.005,  0.005),
+    "qwen-turbo": (0.0008, 0.002),
+    "qwen-plus": (0.002, 0.006),
+    "qwen-max": (0.004, 0.012),
+    "deepseek-chat": (0.001, 0.002),
+    "deepseek-reasoner": (0.004, 0.016),
+    "glm-4-plus": (0.005, 0.005),
 }
 
 
@@ -416,7 +499,9 @@ class LLMEngine:
                 self._prompt_template = tmpl.content
                 logger.info(
                     "加载 Prompt 模板: %s v%d (%s)",
-                    tmpl.name, tmpl.version, tmpl.path,
+                    tmpl.name,
+                    tmpl.version,
+                    tmpl.path,
                 )
             except PromptNotFoundError:
                 logger.warning("Prompt 模板未找到，使用内置默认模板")
@@ -510,10 +595,7 @@ class LLMEngine:
 
         # 如果指定了目标章节类型，只处理这些章节（用于精准语义分析）
         if target_section_types:
-            sections = {
-                k: v for k, v in sections.items()
-                if k in target_section_types
-            }
+            sections = {k: v for k, v in sections.items() if k in target_section_types}
             if not sections:
                 logger.info("目标章节类型 %s 均未在文档中找到，跳过 LLM 分析", target_section_types)
                 return LLMEngineResult(
@@ -523,14 +605,15 @@ class LLMEngine:
                 )
         if rule_violations:
             violated_sections = _extract_violated_sections(
-                rule_violations, all_section_names,
+                rule_violations,
+                all_section_names,
             )
             n_violated = len(violated_sections)
             n_clean = len(all_section_names) - n_violated
             logger.info(
-                "成本优化: %d 个章节有规则违规(100%%必检), "
-                "%d 个章节无违规(30%%抽样)",
-                n_violated, n_clean,
+                "成本优化: %d 个章节有规则违规(100%%必检), %d 个章节无违规(30%%抽样)",
+                n_violated,
+                n_clean,
             )
 
         # ── 构建 Prompt 分片 ────────────────────────────────
@@ -563,7 +646,8 @@ class LLMEngine:
             for chunk in chunks:
                 t_start = time.monotonic()
                 violations, usage, err = await self._call_with_retry(
-                    client, chunk["prompt"],
+                    client,
+                    chunk["prompt"],
                 )
                 duration = time.monotonic() - t_start
 
@@ -599,7 +683,9 @@ class LLMEngine:
                 elif err:
                     last_error = err
                     logger.warning(
-                        "章节 [%s] 审查失败: %s", chunk["section_name"], err,
+                        "章节 [%s] 审查失败: %s",
+                        chunk["section_name"],
+                        err,
                     )
                 else:
                     sections_ok += 1  # 无违规也是成功
@@ -642,36 +728,42 @@ class LLMEngine:
         for attempt in range(1, self.retry_count + 2):  # 1 + retry_count 次
             try:
                 content, usage = await self._provider.chat(
-                    prompt, client, self.max_tokens, self.temperature,
+                    prompt,
+                    client,
+                    self.max_tokens,
+                    self.temperature,
                 )
 
                 # 解析 JSON
                 raw = _extract_json(content)
                 if raw is None:
-                    raise ValueError(
-                        f"LLM 返回非 JSON 格式: {content[:200]}..."
-                    )
+                    raise ValueError(f"LLM 返回非 JSON 格式: {content[:200]}...")
 
-                violations = [LLMViolation(**v) for v in raw]
+                violations = _parse_violations(raw)
                 return violations, usage, None
 
             except httpx.HTTPStatusError as e:
                 last_error = f"HTTP {e.response.status_code}"
                 logger.warning(
                     "LLM 调用失败 (attempt %d/%d): %s",
-                    attempt, self.retry_count + 1, last_error,
+                    attempt,
+                    self.retry_count + 1,
+                    last_error,
                 )
             except httpx.TimeoutException:
                 last_error = "超时"
                 logger.warning(
                     "LLM 超时 (attempt %d/%d)",
-                    attempt, self.retry_count + 1,
+                    attempt,
+                    self.retry_count + 1,
                 )
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 last_error = str(e)
                 logger.warning(
                     "LLM 响应解析失败 (attempt %d/%d): %s",
-                    attempt, self.retry_count + 1, last_error,
+                    attempt,
+                    self.retry_count + 1,
+                    last_error,
                 )
                 # 解析错误不重试——模型能返回 JSON 但格式不对，重试一般无用
                 return [], {}, last_error
@@ -679,7 +771,9 @@ class LLMEngine:
                 last_error = f"{type(e).__name__}: {e}"
                 logger.error(
                     "LLM 未知错误 (attempt %d/%d): %s",
-                    attempt, self.retry_count + 1, last_error,
+                    attempt,
+                    self.retry_count + 1,
+                    last_error,
                 )
 
             if attempt <= self.retry_count:
@@ -702,10 +796,7 @@ class LLMEngine:
         # 否则按模型名查内置定价表
         for model_prefix, (in_cost, out_cost) in PROVIDER_COST_ESTIMATES.items():
             if self.model.startswith(model_prefix):
-                return (
-                    input_tokens / 1000 * in_cost
-                    + output_tokens / 1000 * out_cost
-                )
+                return input_tokens / 1000 * in_cost + output_tokens / 1000 * out_cost
 
         return 0.0
 
@@ -729,14 +820,14 @@ class LLMEngine:
         # ── 判断标记方法的可靠性 ──────────────────────────────
         is_fingerprint_mode = (
             marked_doc is not None
-            and hasattr(marked_doc, 'stats')
+            and hasattr(marked_doc, "stats")
             and marked_doc.stats.get("method") == "fingerprint"
         )
 
         # ── 获取每个章节需要检查的文本 ────────
         def _check_text(sec_name: str, sec_text: str) -> str:
             """返回该章节需要检查的文本"""
-            if is_fingerprint_mode and marked_doc and hasattr(marked_doc, 'get_variable_text'):
+            if is_fingerprint_mode and marked_doc and hasattr(marked_doc, "get_variable_text"):
                 variable_text = marked_doc.get_variable_text(sec_name)
                 # 如果变量文本为空，回退到原始文本
                 return variable_text if variable_text.strip() else sec_text
@@ -754,6 +845,9 @@ class LLMEngine:
                     suggestion="删除'本市注册'要求，改为全国范围内的符合资质供应商均可参与",
                     law_ref="《政府采购法》第五条",
                     weight=20,
+                    evidence="原文限定供应商注册地为本市，构成地域歧视",
+                    consequence="若不修正，将导致外地供应商无法参与，引发供应商质疑投诉，平台审查时将直接退回，严重情形下可能被财政部门认定为以不合理条件限制供应商，面临行政处罚",
+                    confidence=0.92,
                 ),
             },
             {
@@ -766,6 +860,9 @@ class LLMEngine:
                     suggestion="改为'或同等性能产品'，并提供技术参数要求",
                     law_ref="《政府采购法》第二十二条",
                     weight=20,
+                    evidence="原文明确指定了特定品牌，排除了其他合格品牌参与竞争",
+                    consequence="若不修正，平台形式审查将直接拦截，供应商可依据《政府采购法》第二十二条提出质疑投诉，行政机关可责令改正并处以罚款",
+                    confidence=0.95,
                 ),
             },
             {
@@ -777,6 +874,9 @@ class LLMEngine:
                     reason="评分标准可能存在倾向性",
                     suggestion="重新评估各评分项的权重分配，确保公平公正",
                     weight=10,
+                    evidence="评分标准条款中存在倾斜性指标设置",
+                    consequence="若不修正，落选供应商可能据此提出质疑投诉，影响采购效率，严重时可能导致中标结果无效",
+                    confidence=0.78,
                 ),
             },
             {
@@ -789,6 +889,9 @@ class LLMEngine:
                     suggestion="删除注册资金要求，改用项目履约能力相关的资格条件",
                     law_ref="《政府采购法实施条例》第二十条",
                     weight=15,
+                    evidence="原文将注册资金金额作为投标资格条件",
+                    consequence="若不修正，以注册资金门槛排斥中小企业参与，违反政府采购促进中小企业发展政策，供应商可依据《政府采购法实施条例》第二十条提出质疑",
+                    confidence=0.85,
                 ),
             },
             {
@@ -800,6 +903,9 @@ class LLMEngine:
                     reason="使用'仅限'属于排他性表述",
                     suggestion="删除排他性限定词，改为开放性的资格要求",
                     weight=20,
+                    evidence="原文使用排他性限定词，限制了合格供应商的范围",
+                    consequence="若不修正，被排斥的供应商可依据《政府采购法》提出质疑投诉，平台审查时将退回修改",
+                    confidence=0.90,
                 ),
             },
             {
@@ -811,6 +917,9 @@ class LLMEngine:
                     reason="'酌情'等表述存在歧义，容易引发质疑",
                     suggestion="明确具体标准和条件，避免模糊措辞",
                     weight=5,
+                    evidence="原文使用了模糊措辞，缺乏明确可量化的判断标准",
+                    consequence="若不修正，供应商可能对评审结果提出质疑，认为评审标准不明确导致评审不公，增加投诉风险",
+                    confidence=0.72,
                 ),
             },
         ]
@@ -825,7 +934,7 @@ class LLMEngine:
                         # 原文摘取（从原始 sec_text 摘取，保持可读性）
                         idx = sec_text.find(kw)
                         if idx >= 0:
-                            v.text = sec_text[max(0, idx - 15):idx + 30].strip()
+                            v.text = sec_text[max(0, idx - 15) : idx + 30].strip()
                         violations.append(v)
                         break
 

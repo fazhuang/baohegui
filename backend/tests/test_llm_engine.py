@@ -6,18 +6,19 @@ import pytest
 
 from app.engine.llm_engine import (
     LLMEngine,
-    LLMViolation,
     LLMEngineResult,
-    _extract_json,
+    LLMViolation,
     _build_section_prompt,
+    _extract_json,
     _extract_violated_sections,
+    _parse_violations,
 )
 from app.engine.rule_engine import Violation
-
 
 # ═══════════════════════════════════════════════════════════════
 # _extract_json
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestExtractJson:
     def test_plain_json(self):
@@ -32,7 +33,7 @@ class TestExtractJson:
         assert result == [{"type": "test"}]
 
     def test_json_embedded_in_text(self):
-        text = "分析结果如下：\n[\n  {\"type\": \"exclusivity\"}\n]\n完毕"
+        text = '分析结果如下：\n[\n  {"type": "exclusivity"}\n]\n完毕'
         result = _extract_json(text)
         assert result == [{"type": "exclusivity"}]
 
@@ -41,7 +42,7 @@ class TestExtractJson:
         assert _extract_json("") is None
 
     def test_multiple_code_blocks(self):
-        text = "```json\n[{\"type\":\"a\"}]\n```\n其他\n```\n[{\"type\":\"b\"}]\n```"
+        text = '```json\n[{"type":"a"}]\n```\n其他\n```\n[{"type":"b"}]\n```'
         result = _extract_json(text)
         assert result == [{"type": "a"}]  # 取第一个
 
@@ -50,28 +51,51 @@ class TestExtractJson:
 # _extract_violated_sections
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestExtractViolatedSections:
     def test_frombidden_location(self):
-        vs = [Violation(rule_id="F1", rule_type="forbidden",
-                        description="", location="评审办法 ~第1行", weight=10)]
+        vs = [
+            Violation(
+                rule_id="F1",
+                rule_type="forbidden",
+                description="",
+                location="评审办法 ~第1行",
+                weight=10,
+            )
+        ]
         result = _extract_violated_sections(vs, {"评审办法"})
         assert result == {"评审办法"}
 
     def test_keyword_required(self):
-        vs = [Violation(rule_id="K1", rule_type="keyword_required",
-                        description="", location="应在《资格要求》中", weight=10)]
+        vs = [
+            Violation(
+                rule_id="K1",
+                rule_type="keyword_required",
+                description="",
+                location="应在《资格要求》中",
+                weight=10,
+            )
+        ]
         result = _extract_violated_sections(vs, {"资格要求"})
         assert result == {"资格要求"}
 
     def test_chapter_required_ignored(self):
-        vs = [Violation(rule_id="S1", rule_type="chapter_required",
-                        description="缺少章节", weight=10)]
+        vs = [
+            Violation(rule_id="S1", rule_type="chapter_required", description="缺少章节", weight=10)
+        ]
         result = _extract_violated_sections(vs, {"其他章节"})
         assert result == set()  # chapter_required 被忽略
 
     def test_section_not_in_document(self):
-        vs = [Violation(rule_id="F1", rule_type="forbidden",
-                        description="", location="不存在章节 ~第1行", weight=10)]
+        vs = [
+            Violation(
+                rule_id="F1",
+                rule_type="forbidden",
+                description="",
+                location="不存在章节 ~第1行",
+                weight=10,
+            )
+        ]
         result = _extract_violated_sections(vs, {"实际章节"})
         assert result == set()
 
@@ -83,12 +107,15 @@ class TestExtractViolatedSections:
 # _build_section_prompt
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestBuildSectionPrompt:
     def test_basic_chunking(self):
         sections = {"A": "内容", "B": "内容"}
         # 设为必检避免抽样跳过
         chunks, skipped = _build_section_prompt(
-            sections, "模板:{text}", token_limit=99999,
+            sections,
+            "模板:{text}",
+            token_limit=99999,
             violated_sections={"A", "B"},
         )
         assert len(chunks) == 1
@@ -97,8 +124,11 @@ class TestBuildSectionPrompt:
     def test_violated_sections_always_included(self):
         sections = {"A": "x" * 100, "B": "y" * 100}
         chunks, skipped = _build_section_prompt(
-            sections, "{text}", token_limit=99999,
-            violated_sections={"A"}, sampling_rate=0.0,
+            sections,
+            "{text}",
+            token_limit=99999,
+            violated_sections={"A"},
+            sampling_rate=0.0,
         )
         # sampling_rate=0 → 所有非违规章节都被跳过
         assert "A" in chunks[0]["section_name"]
@@ -116,7 +146,9 @@ class TestBuildSectionPrompt:
         # 2 个章节=800＞limit=500 → 应分至少 2 片
         sections = {f"S{i}": "内容" * 100 for i in range(3)}
         chunks, _ = _build_section_prompt(
-            sections, "{text}", token_limit=500,
+            sections,
+            "{text}",
+            token_limit=500,
             violated_sections={"S0", "S1", "S2"},
         )
         assert len(chunks) >= 2, f"预期分片≥2，实际{len(chunks)}"
@@ -125,6 +157,7 @@ class TestBuildSectionPrompt:
 # ═══════════════════════════════════════════════════════════════
 # Mock 模式
 # ═══════════════════════════════════════════════════════════════
+
 
 @pytest.fixture
 def mock_engine() -> LLMEngine:
@@ -136,42 +169,37 @@ def mock_engine() -> LLMEngine:
 class TestMockAnalyze:
     def test_clean_text_no_violations(self, mock_engine):
         import asyncio
-        result = asyncio.run(
-            mock_engine.analyze({"招标公告": "本项目采用公开招标方式。"})
-        )
+
+        result = asyncio.run(mock_engine.analyze({"招标公告": "本项目采用公开招标方式。"}))
         assert isinstance(result, LLMEngineResult)
         # mock 模式无违规时返回空列表
         assert result.model_used == "mock"
 
     def test_local_enterprise_triggers_exclusivity(self, mock_engine):
         import asyncio
-        result = asyncio.run(
-            mock_engine.analyze({"资格要求": "投标人必须为本市注册企业。"})
-        )
+
+        result = asyncio.run(mock_engine.analyze({"资格要求": "投标人必须为本市注册企业。"}))
         types = {v.type for v in result.violations}
         assert "exclusivity" in types
 
     def test_specified_brand_triggers_exclusivity(self, mock_engine):
         import asyncio
-        result = asyncio.run(
-            mock_engine.analyze({"评审办法": "指定品牌XXXX。"})
-        )
+
+        result = asyncio.run(mock_engine.analyze({"评审办法": "指定品牌XXXX。"}))
         types = {v.type for v in result.violations}
         assert "exclusivity" in types
 
     def test_high_risk_level_propagated(self, mock_engine):
         import asyncio
-        result = asyncio.run(
-            mock_engine.analyze({"资格要求": "本市注册企业，指定品牌产品。"})
-        )
+
+        result = asyncio.run(mock_engine.analyze({"资格要求": "本市注册企业，指定品牌产品。"}))
         for v in result.violations:
             assert v.risk_level in ("high", "medium", "low")
 
     def test_score_calculation(self, mock_engine):
         import asyncio
-        result = asyncio.run(
-            mock_engine.analyze({"资格要求": "指定品牌。本地注册。"})
-        )
+
+        result = asyncio.run(mock_engine.analyze({"资格要求": "指定品牌。本地注册。"}))
         assert result.total_score < 100
         assert 0 <= result.total_score <= 100
 
@@ -179,6 +207,7 @@ class TestMockAnalyze:
 # ═══════════════════════════════════════════════════════════════
 # LLMViolation 数据模型
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestLLMViolation:
     def test_valid_types(self):
@@ -197,3 +226,131 @@ class TestLLMViolation:
     def test_invalid_type(self):
         with pytest.raises(Exception):
             LLMViolation(type="invalid", section="", text="")
+
+    def test_evidence_field_default(self):
+        """v3 新增：evidence 字段默认值为空字符串"""
+        v = LLMViolation(type="bias", section="", text="")
+        assert v.evidence == ""
+
+    def test_consequence_field_default(self):
+        """v3 新增：consequence 字段默认值为空字符串"""
+        v = LLMViolation(type="bias", section="", text="")
+        assert v.consequence == ""
+
+    def test_confidence_field_default(self):
+        """v3 新增：confidence 字段默认值为 0.0"""
+        v = LLMViolation(type="bias", section="", text="")
+        assert v.confidence == 0.0
+
+    def test_new_fields_populated(self):
+        """v3 新增：新字段可以正常赋值"""
+        v = LLMViolation(
+            type="exclusivity",
+            section="资格要求",
+            text="要求投标人必须为本市注册企业",
+            risk_level="high",
+            evidence="原文：投标人必须为本市注册企业",
+            consequence="若不修正，外地供应商无法参与，将引发质疑投诉",
+            confidence=0.92,
+        )
+        assert v.evidence == "原文：投标人必须为本市注册企业"
+        assert v.consequence == "若不修正，外地供应商无法参与，将引发质疑投诉"
+        assert v.confidence == 0.92
+
+
+# ═══════════════════════════════════════════════════════════════
+# _parse_violations — v3 字段解析
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestParseViolations:
+    def test_parse_v2_format_compat(self):
+        """v2 格式的 JSON 仍可正常解析"""
+        raw = [
+            {
+                "type": "exclusivity",
+                "section": "资格要求",
+                "text": "指定品牌产品",
+                "risk_level": "high",
+                "reason": "排他性条款",
+                "suggestion": "改为同等性能",
+                "law_ref": "《政府采购法》第二十二条",
+            }
+        ]
+        violations = _parse_violations(raw)
+        assert len(violations) == 1
+        v = violations[0]
+        assert v.type == "exclusivity"
+        assert v.evidence == ""  # v2 格式无此字段，取默认值
+        assert v.consequence == ""  # v2 格式无此字段，取默认值
+        assert v.confidence == 0.0  # v2 格式无此字段，取默认值
+
+    def test_parse_v3_format(self):
+        """v3 格式的 JSON 包含新字段"""
+        raw = [
+            {
+                "type": "exclusivity",
+                "section": "资格要求",
+                "text": "指定品牌产品",
+                "risk_level": "high",
+                "reason": "排他性条款",
+                "suggestion": "改为同等性能",
+                "law_ref": "《政府采购法》第二十二条",
+                "evidence": "原文明确指定了XX品牌",
+                "consequence": "平台将拦截并退回，供应商可依法投诉",
+                "confidence": 0.95,
+            }
+        ]
+        violations = _parse_violations(raw)
+        assert len(violations) == 1
+        v = violations[0]
+        assert v.evidence == "原文明确指定了XX品牌"
+        assert v.consequence == "平台将拦截并退回，供应商可依法投诉"
+        assert v.confidence == 0.95
+
+    def test_parse_evidence_text_alias(self):
+        """evidence_text 字段自动映射为 evidence"""
+        raw = [
+            {
+                "type": "bias",
+                "section": "",
+                "text": "test",
+                "risk_level": "medium",
+                "evidence_text": "逐字引用的原文",
+                "confidence": 0.8,
+            }
+        ]
+        violations = _parse_violations(raw)
+        assert violations[0].evidence == "逐字引用的原文"
+
+    def test_parse_basis_alias(self):
+        """basis 字段自动映射为 law_ref"""
+        raw = [
+            {
+                "type": "bias",
+                "section": "",
+                "text": "test",
+                "risk_level": "medium",
+                "basis": "《政府采购法》第五条",
+            }
+        ]
+        violations = _parse_violations(raw)
+        assert violations[0].law_ref == "《政府采购法》第五条"
+
+    def test_parse_confidence_invalid(self):
+        """confidence 为非数值时回退为 0.0"""
+        raw = [
+            {
+                "type": "bias",
+                "section": "",
+                "text": "test",
+                "risk_level": "medium",
+                "confidence": "high",
+            }
+        ]
+        violations = _parse_violations(raw)
+        assert violations[0].confidence == 0.0
+
+    def test_parse_empty_list(self):
+        """空列表返回空"""
+        assert _parse_violations([]) == []
