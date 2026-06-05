@@ -9,6 +9,7 @@ import {
   ExperimentOutlined, SafetyOutlined, CloseCircleOutlined, HistoryOutlined,
   ProfileOutlined, ArrowRightOutlined,
   ThunderboltOutlined, FlagOutlined, MergeCellsOutlined,
+  FileOutlined, LoadingOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { uploadFile, runCheck, getDashboardStats, listReports, getErrorMessage } from '../services/api'
@@ -51,6 +52,19 @@ interface PipelineResult {
   merge_high_risk_count: number
 }
 const stepIndex = (s: StepName) => STEP_ORDER.indexOf(s)
+
+// ── 批上传常量 ──────────────────────────────────────────────
+
+const MAX_BATCH = 5
+
+interface FileItemData {
+  id: number
+  file: File
+  status: 'pending' | 'uploading' | 'checking' | 'done' | 'error'
+  errorMsg?: string
+  result?: { report_id: number; score: number; pipeline?: PipelineResult }
+  dbId?: number
+}
 
 // ── 过程轨道节点 ────────────────────────────────────────────
 
@@ -182,15 +196,46 @@ const HistoryIcon: React.FC = () => (
   <HistoryOutlined style={{ fontSize: 14, color: "var(--color-text-tertiary)" }} />
 )
 
+// ── 文件队列列表项 ──────────────────────────────────────────
+
+const FileStatusIcon: React.FC<{ status: FileItemData['status'] }> = ({ status }) => {
+  switch (status) {
+    case 'pending':
+      return <FileOutlined style={{ color: 'var(--color-text-tertiary)' }} />
+    case 'uploading':
+    case 'checking':
+      return <LoadingOutlined style={{ color: 'var(--color-action)' }} />
+    case 'done':
+      return <CheckCircleOutlined style={{ color: 'var(--color-success)' }} />
+    case 'error':
+      return <CloseCircleOutlined style={{ color: 'var(--color-error)' }} />
+  }
+}
+
+const STATUS_LABELS: Record<FileItemData['status'], string> = {
+  pending: '等待中',
+  uploading: '上传中',
+  checking: '检查中',
+  done: '已完成',
+  error: '失败',
+}
+
 // ── 上传页主组件 ──────────────────────────────────────────
 
 const UploadPage: React.FC = () => {
   const navigate = useNavigate()
 
+  // ── Core processing state ──
   const [currentStep, setCurrentStep] = useState<StepName>('idle')
   const [error, setError] = useState<{ step: StepName; message: string } | null>(null)
   const [result, setResult] = useState<{ report_id: number; score: number; pipeline?: PipelineResult } | null>(null)
   const [progress, setProgress] = useState(10)
+
+  // ── Batch state ──
+  const [files, setFiles] = useState<FileItemData[]>([])
+  const nextFileId = useRef(0)
+  const filesRef = useRef<FileItemData[]>([])
+  const processingRef = useRef(false)
 
   // 行业选择
   const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
@@ -228,13 +273,31 @@ const UploadPage: React.FC = () => {
     return () => clearInterval(timer)
   }, [])
 
-  // 主流程
-  const startUpload = useCallback(async (file: File, industries?: string[]) => {
+  // ── 同步 ref 与 files state ──
+  const updateFiles = useCallback((updater: (prev: FileItemData[]) => FileItemData[]) => {
+    setFiles(prev => {
+      const next = updater(prev)
+      filesRef.current = next
+      return next
+    })
+  }, [])
+
+  // ── 计算属性 ──
+  const currentIdx = stepIndex(currentStep)
+  const isRunning = currentStep !== 'idle' && currentStep !== 'done' && !error
+  const isBatchMode = files.length > 1
+  const doneCount = files.filter(f => f.status === 'done').length
+  const totalFileCount = files.length
+
+  // ── 处理单个文件 ──
+  const processSingleFile = useCallback(async (item: FileItemData): Promise<void> => {
+    const { file } = item
+    const indStr = selectedIndustries.length > 0 ? selectedIndustries.join(',') : undefined
+
     fileRef.current = file
+    uploadResultRef.current = null
     setError(null)
     setResult(null)
-
-    const indStr = (industries && industries.length > 0) ? industries.join(',') : undefined
 
     try {
       setCurrentStep('uploading')
@@ -242,6 +305,10 @@ const UploadPage: React.FC = () => {
       const uploadResult = await uploadFile(file, indStr)
       setProgress(100)
       uploadResultRef.current = { db_id: uploadResult.db_id }
+
+      updateFiles(prev => prev.map(f =>
+        f.id === item.id ? { ...f, status: 'checking' as const, dbId: uploadResult.db_id } : f
+      ))
 
       await new Promise(r => setTimeout(r, 300))
       setCurrentStep('parsing')
@@ -283,25 +350,108 @@ const UploadPage: React.FC = () => {
         merge_high_risk_count: checkResult.merge_high_risk_count ?? 0,
       }
 
-      setCurrentStep('done')
-      setResult({ report_id: checkResult.report_id, score: checkResult.total_score, pipeline })
+      const fileResult = { report_id: checkResult.report_id, score: checkResult.total_score, pipeline }
+
+      updateFiles(prev => prev.map(f =>
+        f.id === item.id ? { ...f, status: 'done' as const, result: fileResult } : f
+      ))
     } catch (err: any) {
       const msg = getErrorMessage(err)
+      updateFiles(prev => prev.map(f =>
+        f.id === item.id ? { ...f, status: 'error' as const, errorMsg: msg } : f
+      ))
       setError({ step: currentStep, message: msg })
       setProgress(0)
     }
-  }, [currentStep, animateProgress])
+  }, [selectedIndustries, animateProgress, updateFiles, currentStep])
 
-  // 重试
-  const handleRetry = useCallback(async () => {
-    if (!fileRef.current) return
+  // ── 处理后队列 ──
+  const processQueue = useCallback(async () => {
+    if (processingRef.current) return
+    processingRef.current = true
+
+    try {
+      while (true) {
+        const snapshot = filesRef.current
+        const pendingIdx = snapshot.findIndex(f => f.status === 'pending')
+        if (pendingIdx === -1) break
+
+        const item = snapshot[pendingIdx]
+
+        updateFiles(prev => prev.map(f =>
+          f.id === item.id ? { ...f, status: 'uploading' as const } : f
+        ))
+
+        await processSingleFile(item)
+      }
+    } finally {
+      processingRef.current = false
+    }
+
+    // All files processed — set final global state
+    const snapshot = filesRef.current
+    const doneFiles = snapshot.filter(f => f.status === 'done')
+    if (doneFiles.length > 0) {
+      setCurrentStep('done')
+      setResult(doneFiles[doneFiles.length - 1].result!)
+    } else if (snapshot.length > 0) {
+      // All files failed — stay on idle so user can retry
+      setCurrentStep('idle')
+    }
+  }, [processSingleFile, updateFiles])
+
+  // ── 添加文件并开始处理 ──
+  const addAndProcessFiles = useCallback((newFiles: File[]) => {
+    if (newFiles.length === 0 || isRunning) return
+    setError(null)
+
+    const items: FileItemData[] = newFiles.map(f => ({
+      id: nextFileId.current++,
+      file: f,
+      status: 'pending' as const,
+    }))
+
+    updateFiles(prev => [...prev, ...items])
+  }, [isRunning, updateFiles])
+
+  // 当 files 中有新的 pending 项时，自动开始处理
+  useEffect(() => {
+    if (!files.some(f => f.status === 'pending')) return
+    if (processingRef.current) return
+    processQueue()
+  }, [files, processQueue])
+
+  // ── 单文件 startUpload（向后兼容，被 handleDrop / handleFileChange 单文件路径调用）──
+  const startUpload = useCallback(async (file: File, _industries?: string[]) => {
+    const item: FileItemData = { id: nextFileId.current++, file, status: 'pending' }
+    updateFiles(prev => [...prev, item])
+  }, [updateFiles])
+
+  // ── 重试 ──
+  const handleRetryFile = useCallback((fileId: number) => {
+    updateFiles(prev => prev.map(f =>
+      f.id === fileId ? { ...f, status: 'pending' as const, errorMsg: undefined, result: undefined } : f
+    ))
+  }, [updateFiles])
+
+  const handleRetryAll = useCallback(() => {
     setError(null)
     setResult(null)
-    const f = fileRef.current
-    fileRef.current = null
-    uploadResultRef.current = null
-    startUpload(f, selectedIndustries)
-  }, [startUpload, selectedIndustries])
+    updateFiles(prev => prev.map(f => ({
+      ...f,
+      status: 'pending' as const,
+      errorMsg: undefined,
+      result: undefined,
+      dbId: undefined,
+    })))
+  }, [updateFiles])
+
+  // 重试（旧接口 — 兼容单文件调用）
+  const handleRetry = useCallback(async () => {
+    if (files.length > 0) {
+      handleRetryAll()
+    }
+  }, [files, handleRetryAll])
 
   // 行业 Chip 切换
   const toggleIndustry = useCallback((value: string) => {
@@ -319,14 +469,11 @@ const UploadPage: React.FC = () => {
     { title: '等待检查', description: '自动完成上传→解析→五层审查流水线（智能路由、规则引擎、参数倾向性、AI语义、风险合并），约1-3分钟。', target: () => document.getElementById('process-track') as HTMLElement, placement: 'top' as const },
   ]
 
-  const currentIdx = stepIndex(currentStep)
-  const isRunning = currentStep !== 'idle' && currentStep !== 'done' && !error
-
   // 拖拽事件处理
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    if (!isRunning) setDragOver(true)
+    if (!isRunning && !processingRef.current) setDragOver(true)
   }
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault()
@@ -338,38 +485,55 @@ const UploadPage: React.FC = () => {
     e.stopPropagation()
     setDragOver(false)
 
-    if (isRunning) return
+    if (isRunning || processingRef.current) return
 
-    const file = e.dataTransfer.files?.[0]
-    if (!file) return
+    const droppedFiles = Array.from(e.dataTransfer.files)
+    if (droppedFiles.length === 0) return
 
-    const ext = file.name.split('.').pop()?.toLowerCase()
-    if (!['pdf', 'docx'].includes(ext || '')) {
-      setError({ step: 'idle', message: '仅支持 PDF 和 Word (.docx) 格式' })
-      return
+    // Validate each file
+    const validFiles: File[] = []
+    for (const file of droppedFiles.slice(0, MAX_BATCH)) {
+      const ext = file.name.split('.').pop()?.toLowerCase()
+      if (!['pdf', 'docx'].includes(ext || '')) {
+        setError({ step: 'idle', message: `"${file.name}" 格式不支持，仅支持 PDF 和 Word (.docx)` })
+        return
+      }
+      if (file.size > 50 * 1024 * 1024) {
+        setError({ step: 'idle', message: `"${file.name}" 超过 50MB 大小限制` })
+        return
+      }
+      validFiles.push(file)
     }
-    if (file.size > 50 * 1024 * 1024) {
-      setError({ step: 'idle', message: '文件大小不能超过 50MB' })
-      return
-    }
-    startUpload(file, selectedIndustries)
+
+    if (validFiles.length === 0) return
+    addAndProcessFiles(validFiles)
   }
 
   // 点击选择文件
   const fileInputRef = useRef<HTMLInputElement>(null)
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || isRunning) return
-    const ext = file.name.split('.').pop()?.toLowerCase()
-    if (!['pdf', 'docx'].includes(ext || '')) {
-      setError({ step: 'idle', message: '仅支持 PDF 和 Word (.docx) 格式' })
-      return
+    const selectedFiles = e.target.files
+    if (!selectedFiles || selectedFiles.length === 0 || isRunning || processingRef.current) return
+
+    const validFiles: File[] = []
+    for (const file of Array.from(selectedFiles).slice(0, MAX_BATCH)) {
+      const ext = file.name.split('.').pop()?.toLowerCase()
+      if (!['pdf', 'docx'].includes(ext || '')) {
+        setError({ step: 'idle', message: `"${file.name}" 格式不支持，仅支持 PDF 和 Word (.docx)` })
+        return
+      }
+      if (file.size > 50 * 1024 * 1024) {
+        setError({ step: 'idle', message: `"${file.name}" 超过 50MB 大小限制` })
+        return
+      }
+      validFiles.push(file)
     }
-    if (file.size > 50 * 1024 * 1024) {
-      setError({ step: 'idle', message: '文件大小不能超过 50MB' })
-      return
-    }
-    startUpload(file, selectedIndustries)
+
+    if (validFiles.length === 0) return
+
+    // Reset input so same file can be re-selected
+    e.target.value = ''
+    addAndProcessFiles(validFiles)
   }
 
   const getStepStatus = (key: StepName): 'wait' | 'active' | 'done' | 'error' => {
@@ -379,6 +543,19 @@ const UploadPage: React.FC = () => {
     if (currentIdx > idx || (currentStep === 'done' && idx < STEP_ORDER.length - 1)) return 'done'
     return 'wait'
   }
+
+  // 重置全部状态
+  const resetAll = useCallback(() => {
+    setCurrentStep('idle')
+    setError(null)
+    setResult(null)
+    setProgress(10)
+    fileRef.current = null
+    uploadResultRef.current = null
+    processingRef.current = false
+    setFiles([])
+    filesRef.current = []
+  }, [])
 
   return (
     <div style={{ maxWidth: 800, margin: '0 auto' }}>
@@ -396,16 +573,16 @@ const UploadPage: React.FC = () => {
         上传招标文件
       </Title>
       <Text type="secondary" style={{ marginBottom: 20, display: 'block', fontSize: 14 }}>
-        支持 PDF 和 Word 格式，单文件不超过 50MB
+        支持 PDF 和 Word 格式，单文件不超过 50MB，最多 {MAX_BATCH} 份文件
       </Text>
 
       {/* ── 最近检查概览 ────────────────────────── */}
-      {currentStep === 'idle' && (
+      {currentStep === 'idle' && files.length === 0 && (
         <RecentCheckStrip onClick={(id) => navigate(`/report/${id}`)} />
       )}
 
       {/* ── 行业选择 Chip ──────────────────────── */}
-      {currentStep === 'idle' && (
+      {currentStep === 'idle' && files.length === 0 && (
         <Card
           size="small"
           style={{
@@ -462,7 +639,7 @@ const UploadPage: React.FC = () => {
       )}
 
       {/* ── 首次使用引导 ────────────────────────── */}
-      {currentStep === 'idle' && (
+      {currentStep === 'idle' && files.length === 0 && (
         <Collapse
           ghost
           size="small"
@@ -499,7 +676,7 @@ const UploadPage: React.FC = () => {
       )}
 
       {/* ── 快速引导按钮 ────────────────────────── */}
-      {currentStep === 'idle' && (
+      {currentStep === 'idle' && files.length === 0 && (
         <div style={{ textAlign: 'right', marginBottom: 8 }}>
           <Button type="link" size="small" onClick={() => setTourOpen(true)}>
             快速入门引导
@@ -508,7 +685,7 @@ const UploadPage: React.FC = () => {
       )}
 
       {/* ── 自定义上传区域 ──────────────────────── */}
-      {currentStep === 'idle' && (
+      {!isRunning && !processingRef.current && files.length === 0 && (
         <div
           id="tour-upload-area"
           className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
@@ -521,6 +698,7 @@ const UploadPage: React.FC = () => {
             ref={fileInputRef}
             type="file"
             accept=".pdf,.docx"
+            multiple
             style={{ display: 'none' }}
             onChange={handleFileChange}
           />
@@ -530,39 +708,110 @@ const UploadPage: React.FC = () => {
         </div>
       )}
 
-      {/* ── 文件已选取信息 ──────────────────────── */}
-      {currentStep !== 'idle' && fileRef.current && (
+      {/* ── 文件队列 ────────────────────────────── */}
+      {files.length > 0 && (
         <Card
           size="small"
           style={{
-            marginBottom: 20,
-            borderRadius: 8,
-            background: 'var(--color-bg)',
+            marginBottom: 16,
+            borderRadius: 10,
             border: '1px solid var(--color-border)',
           }}
+          styles={{ body: { padding: '12px 16px' } }}
+          title={
+            <Space>
+              <FileOutlined />
+              <Text strong style={{ fontSize: 14 }}>文件列表</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {processingRef.current
+                  ? `正在处理 ${doneCount + 1}/${totalFileCount} 份文件`
+                  : currentStep === 'done'
+                    ? `已完成 ${doneCount}/${totalFileCount} 份文件`
+                    : `${totalFileCount} 份文件`}
+              </Text>
+            </Space>
+          }
         >
-          <Space>
-            <InboxOutlined style={{ fontSize: 18, color: 'var(--color-action)' }} />
-            <Text strong>{fileRef.current.name}</Text>
-            <Text type="secondary">
-              ({(fileRef.current.size / 1024 / 1024).toFixed(1)} MB)
-            </Text>
-            {!isRunning && !error && currentStep !== 'done' && (
-              <Button size="small" type="link" onClick={() => { setCurrentStep('idle'); setError(null) }}>
-                重新选择
-              </Button>
-            )}
-          </Space>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {files.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '6px 8px',
+                  borderRadius: 6,
+                  background: (item.status === 'uploading' || item.status === 'checking')
+                    ? 'var(--color-brand-light)'
+                    : item.status === 'error'
+                      ? '#fff2f0'
+                      : 'transparent',
+                }}
+              >
+                <FileStatusIcon status={item.status} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Text
+                    style={{ fontSize: 13, display: 'block' }}
+                    ellipsis
+                  >
+                    {item.file.name}
+                  </Text>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {(item.file.size / 1024 / 1024).toFixed(1)} MB
+                    {' · '}
+                    {STATUS_LABELS[item.status]}
+                    {item.status === 'done' && item.result && ` · 评分 ${item.result.score}`}
+                  </Text>
+                  {item.status === 'error' && item.errorMsg && (
+                    <Text type="danger" style={{ fontSize: 11, display: 'block' }}>
+                      {item.errorMsg}
+                    </Text>
+                  )}
+                </div>
+                {item.status === 'error' && (
+                  <Button
+                    size="small"
+                    type="link"
+                    icon={<ReloadOutlined />}
+                    onClick={() => handleRetryFile(item.id)}
+                  >
+                    重试
+                  </Button>
+                )}
+                {item.status === 'done' && item.result && (
+                  <Button
+                    size="small"
+                    type="link"
+                    icon={<ArrowRightOutlined />}
+                    onClick={() => navigate(`/report/${item.result!.report_id}`)}
+                  >
+                    报告
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 
       {/* ── 水平过程轨道 ────────────────────────── */}
-      {(isRunning || error || currentStep === 'done') && (
+      {(isRunning || error || currentStep === 'done') && (isRunning || error || currentStep === 'done') && fileRef.current && (
         <Card
           style={{ marginBottom: 20, borderRadius: 12 }}
           styles={{ body: { padding: '24px 16px' } }}
           id="process-track"
         >
+          {/* 当前文件标签 */}
+          {fileRef.current && (
+            <div style={{ marginBottom: 12, paddingLeft: 4 }}>
+              <Space>
+                <Text type="secondary" style={{ fontSize: 12 }}>当前文件：</Text>
+                <Text style={{ fontSize: 13, fontWeight: 500 }}>{fileRef.current.name}</Text>
+              </Space>
+            </div>
+          )}
+
           <div className="process-track">
             {STEPS.map((s, i) => (
               <React.Fragment key={s.key}>
@@ -570,7 +819,7 @@ const UploadPage: React.FC = () => {
                   step={s}
                   status={getStepStatus(s.key)}
                   errorMsg={error?.step === s.key ? error.message : undefined}
-                  onRetry={error?.step === s.key ? (s.key === 'uploading' ? handleRetry : () => startUpload(fileRef.current!)) : undefined}
+                  onRetry={error?.step === s.key ? (s.key === 'uploading' ? handleRetry : () => startUpload(fileRef.current!, selectedIndustries)) : undefined}
                   progressPct={getStepStatus(s.key) === 'active' ? Math.min(progress, 95) : getStepStatus(s.key) === 'done' ? 100 : 0}
                 />
                 {i < STEPS.length - 1 && (
@@ -604,21 +853,18 @@ const UploadPage: React.FC = () => {
               />
               <div style={{ textAlign: 'center', marginTop: 12 }}>
                 <Space size={12}>
-                  <Button
-                    onClick={() => {
-                      setCurrentStep('idle')
-                      setError(null)
-                      setResult(null)
-                      fileRef.current = null
-                      uploadResultRef.current = null
-                    }}
-                    style={{ borderRadius: 8 }}
-                  >
+                  <Button onClick={resetAll} style={{ borderRadius: 8 }}>
                     重新选择文件
                   </Button>
-                  <Button icon={<ReloadOutlined />} onClick={handleRetry} style={{ borderRadius: 8 }}>
-                    重试此文件
-                  </Button>
+                  {isBatchMode ? (
+                    <Button icon={<ReloadOutlined />} onClick={handleRetryAll} style={{ borderRadius: 8 }}>
+                      重试全部失败文件
+                    </Button>
+                  ) : (
+                    <Button icon={<ReloadOutlined />} onClick={handleRetry} style={{ borderRadius: 8 }}>
+                      重试此文件
+                    </Button>
+                  )}
                 </Space>
               </div>
             </>
@@ -627,13 +873,12 @@ const UploadPage: React.FC = () => {
       )}
 
       {/* ── 完成状态 ────────────────────────────── */}
-      {currentStep === 'done' && result && (
+      {currentStep === 'done' && result && totalFileCount === 1 && !isBatchMode && (
         <Result
           status="success"
           title="合规检查完成"
           subTitle="系统已完成对招标文件的全部合规审查"
           extra={[
-            /* ── 五层流水线摘要 ──────────────────── */
             result.pipeline && (
               <Card
                 key="pipeline-summary"
@@ -707,19 +952,100 @@ const UploadPage: React.FC = () => {
             </Button>,
             <Button
               key="new"
-              onClick={() => {
-                setCurrentStep('idle')
-                setError(null)
-                setResult(null)
-                fileRef.current = null
-                uploadResultRef.current = null
-              }}
+              onClick={resetAll}
               style={{ borderRadius: 8 }}
             >
               检查新文件
             </Button>,
           ]}
         />
+      )}
+
+      {/* ── 批完成状态 ──────────────────────────── */}
+      {currentStep === 'done' && isBatchMode && (
+        <Card
+          style={{ borderRadius: 12, marginBottom: 20 }}
+          styles={{ body: { padding: '24px 20px', textAlign: 'center' } }}
+        >
+          <CheckCircleOutlined style={{ fontSize: 48, color: 'var(--color-success)', marginBottom: 12 }} />
+          <Title level={4} style={{ marginBottom: 4 }}>
+            全部检查完成
+          </Title>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 20 }}>
+            已完成 {doneCount}/{totalFileCount} 份文件的合规审查
+          </Text>
+
+          {/* 文件结果摘要 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 500, margin: '0 auto 20px auto', textAlign: 'left' }}>
+            {files.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  background: item.status === 'done' ? 'var(--color-bg)' : '#fff2f0',
+                  border: '1px solid var(--color-border)',
+                }}
+              >
+                {item.status === 'done'
+                  ? <CheckCircleOutlined style={{ color: 'var(--color-success)', fontSize: 16 }} />
+                  : <CloseCircleOutlined style={{ color: 'var(--color-error)', fontSize: 16 }} />
+                }
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ fontSize: 13, display: 'block' }} ellipsis>{item.file.name}</Text>
+                  {item.status === 'done' && item.result && (
+                    <Tag
+                      color={item.result.score >= 85 ? 'green' : item.result.score >= 60 ? 'gold' : 'red'}
+                      style={{ marginTop: 2, fontSize: 11 }}
+                    >
+                      评分 {item.result.score}
+                    </Tag>
+                  )}
+                  {item.status === 'error' && (
+                    <Text type="danger" style={{ fontSize: 11, display: 'block' }}>
+                      {item.errorMsg || '处理失败'}
+                    </Text>
+                  )}
+                </div>
+                {item.status === 'done' && item.result && (
+                  <Button
+                    size="small"
+                    type="primary"
+                    ghost
+                    icon={<ArrowRightOutlined />}
+                    onClick={() => navigate(`/report/${item.result!.report_id}`)}
+                  >
+                    查看报告
+                  </Button>
+                )}
+                {item.status === 'error' && (
+                  <Button
+                    size="small"
+                    type="link"
+                    icon={<ReloadOutlined />}
+                    onClick={() => handleRetryFile(item.id)}
+                  >
+                    重试
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <Space>
+            <Button
+              type="primary"
+              size="large"
+              onClick={resetAll}
+              style={{ borderRadius: 8, paddingLeft: 28, paddingRight: 28 }}
+            >
+              检查新文件
+            </Button>
+          </Space>
+        </Card>
       )}
 
       {/* 文件校验错误（idle 态） */}
