@@ -8,32 +8,48 @@ import {
   CheckCircleOutlined, ReloadOutlined,
   ExperimentOutlined, SafetyOutlined, CloseCircleOutlined, HistoryOutlined,
   ProfileOutlined, ArrowRightOutlined,
+  ThunderboltOutlined, FlagOutlined, MergeCellsOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { uploadFile, runCheck, getDashboardStats, listReports } from '../services/api'
+import { uploadFile, runCheck, getDashboardStats, listReports, getErrorMessage } from '../services/api'
 import type { ReportListItem } from '../types'
 
 const { Title, Text } = Typography
 
 // ── 步骤定义 ────────────────────────────────────────────────
 
-type StepName = 'idle' | 'uploading' | 'parsing' | 'rule_check' | 'ai_analysis' | 'done'
+type StepName = 'idle' | 'uploading' | 'parsing' | 'routing' | 'rule_engine' | 'parameter_bias' | 'llm_analysis' | 'risk_merge' | 'done'
 
 interface StepConfig {
   key: StepName
   label: string
   icon: React.ReactNode
-  estimate: string
+  subtitle: string  // brief description
 }
 
 const STEPS: StepConfig[] = [
-  { key: 'uploading', label: '文件上传', icon: <UploadOutlined />, estimate: '~5 秒' },
-  { key: 'parsing', label: '文档解析', icon: <FileSearchOutlined />, estimate: '~10 秒' },
-  { key: 'rule_check', label: '规则检查', icon: <SafetyOutlined />, estimate: '~15 秒' },
-  { key: 'ai_analysis', label: 'AI 精准分析', icon: <ExperimentOutlined />, estimate: '~30 秒' },
+  { key: 'uploading', label: '文件上传', icon: <UploadOutlined />, subtitle: '上传并存储文件' },
+  { key: 'parsing', label: '文档解析', icon: <FileSearchOutlined />, subtitle: '章节结构化抽取' },
+  { key: 'routing', label: '智能路由', icon: <ThunderboltOutlined />, subtitle: '零Token风险分级' },
+  { key: 'rule_engine', label: '规则引擎', icon: <SafetyOutlined />, subtitle: '确定性规则检查' },
+  { key: 'parameter_bias', label: '参数倾向性', icon: <FlagOutlined />, subtitle: '9种违规模式检测' },
+  { key: 'llm_analysis', label: 'AI语义审查', icon: <ExperimentOutlined />, subtitle: '17维隐含风险分析' },
+  { key: 'risk_merge', label: '风险合并', icon: <MergeCellsOutlined />, subtitle: '四路结果汇总' },
 ]
 
-const STEP_ORDER: StepName[] = ['uploading', 'parsing', 'rule_check', 'ai_analysis', 'done']
+const STEP_ORDER: StepName[] = ['uploading', 'parsing', 'routing', 'rule_engine', 'parameter_bias', 'llm_analysis', 'risk_merge', 'done']
+
+interface PipelineResult {
+  traffic_light: string  // green/yellow/red
+  routing_reasoning: string
+  parameter_bias_score: number
+  parameter_bias_findings: number
+  merge_risk_level: string
+  merge_review_status: string
+  merge_requires_human_review: boolean
+  merge_confirmed_count: number
+  merge_high_risk_count: number
+}
 const stepIndex = (s: StepName) => STEP_ORDER.indexOf(s)
 
 // ── 过程轨道节点 ────────────────────────────────────────────
@@ -78,7 +94,7 @@ const ProcessNode: React.FC<{
         />
       )}
       {status === 'active' && (
-        <Text type="secondary" style={{ fontSize: 11 }}>{step.estimate}</Text>
+        <Text type="secondary" style={{ fontSize: 11 }}>{step.subtitle}</Text>
       )}
       {status === 'error' && errorMsg && (
         <div style={{ marginTop: 4, textAlign: 'center' }}>
@@ -173,7 +189,7 @@ const UploadPage: React.FC = () => {
 
   const [currentStep, setCurrentStep] = useState<StepName>('idle')
   const [error, setError] = useState<{ step: StepName; message: string } | null>(null)
-  const [result, setResult] = useState<{ report_id: number; score: number } | null>(null)
+  const [result, setResult] = useState<{ report_id: number; score: number; pipeline?: PipelineResult } | null>(null)
   const [progress, setProgress] = useState(10)
 
   // 行业选择
@@ -232,20 +248,45 @@ const UploadPage: React.FC = () => {
       animateProgress()
 
       await new Promise(r => setTimeout(r, 200))
-      setCurrentStep('rule_check')
+      setCurrentStep('routing')
       animateProgress()
 
       await new Promise(r => setTimeout(r, 200))
-      setCurrentStep('ai_analysis')
+      setCurrentStep('rule_engine')
+      animateProgress()
+
+      await new Promise(r => setTimeout(r, 200))
+      setCurrentStep('parameter_bias')
+      animateProgress()
+
+      await new Promise(r => setTimeout(r, 200))
+      setCurrentStep('llm_analysis')
+      animateProgress()
+
+      await new Promise(r => setTimeout(r, 200))
+      setCurrentStep('risk_merge')
       animateProgress()
 
       const checkResult = await runCheck(uploadResult.db_id, indStr)
       setProgress(100)
 
+      // Extract pipeline data from the check result
+      const pipeline: PipelineResult = {
+        traffic_light: checkResult.traffic_light || 'green',
+        routing_reasoning: checkResult.routing_reasoning || '',
+        parameter_bias_score: checkResult.parameter_bias_score ?? 0,
+        parameter_bias_findings: checkResult.parameter_bias_findings ?? 0,
+        merge_risk_level: checkResult.merge_risk_level || 'low',
+        merge_review_status: checkResult.merge_review_status || 'auto_passed',
+        merge_requires_human_review: checkResult.merge_requires_human_review ?? false,
+        merge_confirmed_count: checkResult.merge_confirmed_count ?? 0,
+        merge_high_risk_count: checkResult.merge_high_risk_count ?? 0,
+      }
+
       setCurrentStep('done')
-      setResult({ report_id: checkResult.report_id, score: checkResult.total_score })
+      setResult({ report_id: checkResult.report_id, score: checkResult.total_score, pipeline })
     } catch (err: any) {
-      const msg = err?.response?.data?.detail || err.message || '处理失败'
+      const msg = getErrorMessage(err)
       setError({ step: currentStep, message: msg })
       setProgress(0)
     }
@@ -275,7 +316,7 @@ const UploadPage: React.FC = () => {
     { title: '包合规操作指南', description: '帮助您在提交前发现合规问题。只需三步。', target: () => document.getElementById('tour-upload-area') as HTMLElement, placement: 'bottom' as const },
     { title: '上传文件', description: '拖拽招标文件到上传区域。支持 PDF 和 Word。', target: () => document.getElementById('tour-upload-area') as HTMLElement, placement: 'bottom' as const },
     { title: '查看操作指南', description: '点击此处查看详细的操作说明。', target: () => document.querySelector('.ant-collapse-header') as HTMLElement, placement: 'right' as const },
-    { title: '等待检查', description: '自动完成上传→解析→规则检查→AI精准分析（仅审查技术参数和评分细则），约1-3分钟。', target: () => document.getElementById('process-track') as HTMLElement, placement: 'top' as const },
+    { title: '等待检查', description: '自动完成上传→解析→五层审查流水线（智能路由、规则引擎、参数倾向性、AI语义、风险合并），约1-3分钟。', target: () => document.getElementById('process-track') as HTMLElement, placement: 'top' as const },
   ]
 
   const currentIdx = stepIndex(currentStep)
@@ -335,7 +376,7 @@ const UploadPage: React.FC = () => {
     const idx = stepIndex(key)
     if (error?.step === key) return 'error'
     if (currentStep === key && !error) return 'active'
-    if (currentIdx > idx || (currentStep === 'done' && idx < 4)) return 'done'
+    if (currentIdx > idx || (currentStep === 'done' && idx < STEP_ORDER.length - 1)) return 'done'
     return 'wait'
   }
 
@@ -424,9 +465,8 @@ const UploadPage: React.FC = () => {
                   {[
                     { step: 1, title: '上传文件', desc: '拖拽或选择 PDF/Word 文件，系统自动上传' },
                     { step: 2, title: '文档解析', desc: '自动提取招标文件的章节结构' },
-                    { step: 3, title: '规则检查', desc: '规则引擎检测章节完整性、关键字、禁用词' },
-                    { step: 4, title: 'AI 分析', desc: '大模型重点审查技术参数和评分细则中的排他性、倾向性' },
-                    { step: 5, title: '查看报告', desc: '获得合规评分和详细整改建议' },
+                    { step: 3, title: '五层审查', desc: '智能路由→规则引擎→参数倾向→AI语义→风险合并' },
+                    { step: 4, title: '查看报告', desc: '获得合规评分和详细整改建议' },
                   ].map(({ step, title, desc }) => (
                     <div key={step} style={{ flex: '1 0 140px', minWidth: 120 }}>
                       <div className="guide-step-icon">{step}</div>
@@ -583,6 +623,60 @@ const UploadPage: React.FC = () => {
           title="合规检查完成"
           subTitle="系统已完成对招标文件的全部合规审查"
           extra={[
+            /* ── 五层流水线摘要 ──────────────────── */
+            result.pipeline && (
+              <Card
+                key="pipeline-summary"
+                size="small"
+                style={{
+                  marginBottom: 16,
+                  borderRadius: 10,
+                  border: '1px solid var(--color-border)',
+                  textAlign: 'left',
+                  maxWidth: 480,
+                  margin: '0 auto 16px auto',
+                }}
+                styles={{ body: { padding: '14px 18px' } }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <ThunderboltOutlined style={{ color: 'var(--color-action)', fontSize: 14 }} />
+                    <Text style={{ fontSize: 13 }}>智能路由</Text>
+                    <Tag color={result.pipeline.traffic_light === 'green' ? 'green' : result.pipeline.traffic_light === 'yellow' ? 'gold' : 'red'} style={{ marginLeft: 'auto' }}>
+                      {result.pipeline.traffic_light === 'green' ? '🟢 绿灯' : result.pipeline.traffic_light === 'yellow' ? '🟡 黄灯' : '🔴 红灯'}
+                      {result.pipeline.traffic_light === 'green' ? ' · 跳过AI' : ' · 进入AI审查'}
+                    </Tag>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <SafetyOutlined style={{ color: 'var(--color-action)', fontSize: 14 }} />
+                    <Text style={{ fontSize: 13 }}>规则引擎</Text>
+                    <Text type="secondary" style={{ fontSize: 12, marginLeft: 'auto' }}>命中{result.score < 85 ? '违规' : '0'}项</Text>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <FlagOutlined style={{ color: 'var(--color-action)', fontSize: 14 }} />
+                    <Text style={{ fontSize: 13 }}>参数倾向性</Text>
+                    <Text type="secondary" style={{ fontSize: 12, marginLeft: 'auto' }}>
+                      发现{result.pipeline.parameter_bias_findings}个风险 · 得分{result.pipeline.parameter_bias_score}
+                    </Text>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <ExperimentOutlined style={{ color: 'var(--color-action)', fontSize: 14 }} />
+                    <Text style={{ fontSize: 13 }}>AI语义</Text>
+                    <Text type={result.pipeline.traffic_light === 'green' ? 'secondary' : undefined} style={{ fontSize: 12, marginLeft: 'auto' }}>
+                      {result.pipeline.traffic_light === 'green' ? '已跳过 (绿色路由)' : '分析完成'}
+                    </Text>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <MergeCellsOutlined style={{ color: 'var(--color-action)', fontSize: 14 }} />
+                    <Text style={{ fontSize: 13 }}>风险合并</Text>
+                    <Text type="secondary" style={{ fontSize: 12, marginLeft: 'auto' }}>
+                      {result.pipeline.merge_risk_level} · {result.pipeline.merge_review_status}
+                      {result.pipeline.merge_requires_human_review ? ' · 需人工复核' : ' · 自动通过'}
+                    </Text>
+                  </div>
+                </div>
+              </Card>
+            ),
             <div key="score" style={{ marginBottom: 16 }}>
               <Tag
                 color={result.score >= 85 ? 'green' : result.score >= 60 ? 'gold' : 'red'}

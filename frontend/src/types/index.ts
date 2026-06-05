@@ -77,6 +77,16 @@ export interface CheckResult {
   llm_cost_yuan: number
   llm_error: string | null
   industries?: string[] | null
+  /** 五层流水线字段 */
+  traffic_light?: string
+  routing_reasoning?: string
+  parameter_bias_score?: number
+  parameter_bias_findings?: number
+  merge_risk_level?: string
+  merge_review_status?: string
+  merge_requires_human_review?: boolean
+  merge_confirmed_count?: number
+  merge_high_risk_count?: number
 }
 
 /** 报告列表项 */
