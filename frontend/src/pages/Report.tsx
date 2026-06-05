@@ -8,7 +8,8 @@ import {
   CheckCircleFilled, ExperimentOutlined, DollarOutlined,
   ThunderboltOutlined, MergeCellsOutlined,
   SafetyCertificateOutlined, FileSearchOutlined,
-  FlagOutlined,
+  FlagOutlined, HeatMapOutlined, BranchesOutlined,
+  AimOutlined, FileTextOutlined,
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import { getReport, getReportPdfUrl } from '../services/api'
@@ -85,6 +86,18 @@ const getViolationIcon = (level: string) => {
 
 const formatText = (t: string) =>
   t.length > 200 ? t.slice(0, 200) + '…' : t
+
+/**
+ * 从违规位置字符串中提取章节名称。
+ * 支持格式: "第一章 招标公告 > 2.1 项目概况", "资格要求-3.2", "评审办法"
+ */
+const extractSectionName = (loc: string): string => {
+  if (!loc) return '其他'
+  const m = loc.match(/^[第]?[一二三四五六七八九十\d]+[章节篇部]\s*[>＞\-—\s]*(\S+)/)
+  if (m) return m[1] || m[0]
+  const first = loc.split(/[>＞\-—\n]/)[0].trim()
+  return first.length > 20 ? first.slice(0, 20) + '…' : (first || '其他')
+}
 
 // ═══════════════════════════════════════════════════════════════
 // SVG 雷达图
@@ -230,11 +243,23 @@ const QuoteBlock: React.FC<{ text: string }> = ({ text }) => (
 
 const ruleDetailRow = (record: RuleViolation) => (
   <div style={{ padding: '12px 24px' }}>
-    {record.text && (
+    {/* 原文引用 — 来自规则引擎的 evidence_text 或 text */}
+    {(record as any).evidence_text ? (
+      <div style={{ marginBottom: 10 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>违规证据（原文高亮）：</Text>
+        <QuoteBlock text={(record as any).evidence_text} />
+      </div>
+    ) : record.text ? (
       <div style={{ marginBottom: 10 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>原文引用：</Text>
         <QuoteBlock text={record.text} />
       </div>
+    ) : null}
+    {((record as any).start_offset !== undefined || (record as any).end_offset !== undefined) && (
+      <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 6 }}>
+        📍 位置: {(record as any).start_offset ?? '开头'} - {(record as any).end_offset ?? '结尾'}
+        {record.location && <span> ({record.location})</span>}
+      </Text>
     )}
     <Space size={[8, 4]} wrap>
       {getRuleTypeTag(record.rule_type)}
@@ -254,19 +279,33 @@ const ruleDetailRow = (record: RuleViolation) => (
 
 const llmDetailRow = (record: LLMViolation) => (
   <div style={{ padding: '12px 24px' }}>
+    {/* 原文证据 — 高亮引用 */}
     {record.text && (
       <div style={{ marginBottom: 10 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>原文引用：</Text>
         <QuoteBlock text={record.text} />
       </div>
     )}
+    {/* M2-1 三段式解释: 证据 → 法律依据 → 整改建议 */}
+    {(record as any).evidence_text && (
+      <div style={{ marginBottom: 10 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>违规证据：</Text>
+        <QuoteBlock text={(record as any).evidence_text} />
+      </div>
+    )}
     <div style={{ marginBottom: 6 }}>
       <Text type="secondary" style={{ fontSize: 12 }}>判断理由：</Text>
       <Text style={{ fontSize: 13 }}>{record.reason}</Text>
     </div>
+    {(record as any).legal_basis && (
+      <div style={{ marginBottom: 6 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>法律依据：</Text>
+        <Text style={{ fontSize: 13 }}>{(record as any).legal_basis}</Text>
+      </div>
+    )}
     <Space size={[8, 4]} wrap>
       {record.law_ref && <Tag color="blue">{record.law_ref}</Tag>}
-      <Text type="secondary" style={{ fontSize: 12 }}>建议：{record.suggestion}</Text>
+      <Text type="secondary" style={{ fontSize: 12 }}>建议：{(record as any).suggestion_detail || record.suggestion}</Text>
     </Space>
   </div>
 )
@@ -346,6 +385,243 @@ const PriorityCard: React.FC<{
           </div>
         </div>
       ))}
+    </Card>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 风险热力图 — 章节维度违规分布
+// ═══════════════════════════════════════════════════════════════
+
+const RiskHeatmap: React.FC<{
+  ruleViolations: RuleViolation[]
+  llmViolations: LLMViolation[]
+}> = ({ ruleViolations, llmViolations }) => {
+  const sectionRisks = useMemo(() => {
+    const sectionCounts: Record<string, { high: number; medium: number; low: number; total: number }> = {}
+
+    for (const v of ruleViolations) {
+      const loc = v.location || v.description || ''
+      const section = extractSectionName(loc)
+      if (!sectionCounts[section]) sectionCounts[section] = { high: 0, medium: 0, low: 0, total: 0 }
+      const risk = v.risk_level || 'low'
+      sectionCounts[section][risk as keyof typeof sectionCounts[string]]++
+      sectionCounts[section].total++
+    }
+
+    for (const v of llmViolations) {
+      const section = v.section || '其他'
+      if (!sectionCounts[section]) sectionCounts[section] = { high: 0, medium: 0, low: 0, total: 0 }
+      const risk = v.risk_level || 'low'
+      sectionCounts[section][risk as keyof typeof sectionCounts[string]]++
+      sectionCounts[section].total++
+    }
+
+    return Object.entries(sectionCounts)
+      .map(([name, counts]) => ({ name, ...counts }))
+      .sort((a, b) => b.total - a.total)
+  }, [ruleViolations, llmViolations])
+
+  if (sectionRisks.length === 0) return null
+
+  const maxTotal = sectionRisks[0]?.total || 1
+
+  return (
+    <Card
+      title={
+        <Space>
+          <HeatMapOutlined style={{ color: 'var(--color-error)' }} />
+          <span>风险热力图</span>
+          <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
+            章节维度违规分布
+          </Text>
+        </Space>
+      }
+      size="small"
+      style={{ marginBottom: 16, borderRadius: 12 }}
+    >
+      {sectionRisks.map(s => (
+        <div key={s.name} style={{ marginBottom: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <Text strong style={{ fontSize: 13 }}>{s.name}</Text>
+            <Space size={4}>
+              {s.high > 0 && <Tag color="red" style={{ fontSize: 11, lineHeight: '18px' }}>高 {s.high}</Tag>}
+              {s.medium > 0 && <Tag color="gold" style={{ fontSize: 11, lineHeight: '18px' }}>中 {s.medium}</Tag>}
+              {s.low > 0 && <Tag color="green" style={{ fontSize: 11, lineHeight: '18px' }}>低 {s.low}</Tag>}
+            </Space>
+          </div>
+          <div style={{ display: 'flex', height: 8, borderRadius: 4, overflow: 'hidden', background: '#f0f0f0' }}>
+            {s.high > 0 && (
+              <div style={{ width: `${(s.high / maxTotal) * 100}%`, background: 'var(--color-error)', transition: 'width 0.4s' }} />
+            )}
+            {s.medium > 0 && (
+              <div style={{ width: `${(s.medium / maxTotal) * 100}%`, background: 'var(--color-warning)', transition: 'width 0.4s' }} />
+            )}
+            {s.low > 0 && (
+              <div style={{ width: `${(s.low / maxTotal) * 100}%`, background: 'var(--color-success)', transition: 'width 0.4s' }} />
+            )}
+          </div>
+          <Text type="secondary" style={{ fontSize: 11, marginTop: 2, display: 'block' }}>
+            共 {s.total} 项违规
+          </Text>
+        </div>
+      ))}
+    </Card>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 五层流水线摘要
+// ═══════════════════════════════════════════════════════════════
+
+interface PipelineSummaryData {
+  traffic_light?: string
+  routing_reasoning?: string
+  parameter_bias_score?: number
+  parameter_bias_findings?: number
+  merge_risk_level?: string
+  merge_review_status?: string
+  merge_requires_human_review?: boolean
+  merge_confirmed_count?: number
+  merge_high_risk_count?: number
+  parse_quality?: string
+  parse_quality_detail?: string
+}
+
+const PipelineSummary: React.FC<{ data: PipelineSummaryData }> = ({ data }) => {
+  const trafficLightLabel = (light: string) => {
+    switch (light) {
+      case 'green': return { emoji: '🟢', label: '直接通过', color: 'var(--color-success)' }
+      case 'yellow': return { emoji: '🟡', label: '需 LLM 审查', color: 'var(--color-warning)' }
+      case 'red': return { emoji: '🔴', label: '高优先级审查', color: 'var(--color-error)' }
+      default: return { emoji: '⚪', label: light || '未知', color: 'var(--color-text-secondary)' }
+    }
+  }
+
+  const mergeRiskLabel = (level?: string) => {
+    const map: Record<string, { label: string; color: string }> = {
+      'none': { label: '无风险', color: 'green' },
+      'low': { label: '低风险', color: 'green' },
+      'medium': { label: '中风险', color: 'gold' },
+      'high': { label: '高风险', color: 'red' },
+      'critical': { label: '严重风险', color: 'volcano' },
+    }
+    return map[level || ''] || { label: level || '待评估', color: 'default' }
+  }
+
+  const reviewStatusLabel = (status?: string) => {
+    const map: Record<string, string> = {
+      'auto_passed': '自动通过',
+      'auto_failed': '自动不通过',
+      'needs_review': '待人工复核',
+      'reviewed_passed': '复核通过',
+      'reviewed_failed': '复核不通过',
+    }
+    return map[status || ''] || status || '-'
+  }
+
+  const parseQualityLabel = (q?: string) => {
+    const map: Record<string, { label: string; color: string }> = {
+      'ok': { label: '正常', color: 'green' },
+      'text_layer': { label: '文本层提取', color: 'green' },
+      'ocr': { label: 'OCR 识别', color: 'gold' },
+      'partial': { label: '部分解析', color: 'orange' },
+      'failed': { label: '解析失败', color: 'red' },
+    }
+    return map[q || ''] || { label: q || '未知', color: 'default' }
+  }
+
+  const tl = trafficLightLabel(data.traffic_light || '')
+  const mr = mergeRiskLabel(data.merge_risk_level)
+  const pq = parseQualityLabel(data.parse_quality)
+
+  return (
+    <Card
+      title={
+        <Space>
+          <BranchesOutlined style={{ color: 'var(--color-action)' }} />
+          <span>五层审查流水线摘要</span>
+        </Space>
+      }
+      style={{ marginBottom: 16, borderRadius: 12 }}
+    >
+      {/* 第一行: 交通灯 + 合并结论 + 解析质量 */}
+      <Row gutter={[16, 12]}>
+        <Col xs={24} sm={8}>
+          <div style={{ background: 'var(--color-bg)', borderRadius: 8, padding: 10 }}>
+            <div style={{ fontSize: 18, marginBottom: 4 }}>{tl.emoji} 第0层 路由审查</div>
+            <Tag color={tl.color === 'var(--color-success)' ? 'green' : tl.color === 'var(--color-warning)' ? 'gold' : 'red'}>{tl.label}</Tag>
+            {data.routing_reasoning && (
+              <Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 4 }}>
+                {data.routing_reasoning}
+              </Text>
+            )}
+          </div>
+        </Col>
+        <Col xs={24} sm={8}>
+          <div style={{ background: 'var(--color-bg)', borderRadius: 8, padding: 10 }}>
+            <div style={{ fontSize: 16, marginBottom: 4 }}>
+              <MergeCellsOutlined style={{ marginRight: 4 }} />
+              汇总层 风险合并
+            </div>
+            <Space size={4} wrap>
+              <Tag color={mr.color}>{mr.label}</Tag>
+              {data.merge_review_status && (
+                <Tag color="blue">{reviewStatusLabel(data.merge_review_status)}</Tag>
+              )}
+            </Space>
+            <div style={{ marginTop: 4 }}>
+              {data.merge_confirmed_count !== undefined && (
+                <Tag color="red" style={{ fontSize: 11 }}>确定违规 {data.merge_confirmed_count}</Tag>
+              )}
+              {data.merge_high_risk_count !== undefined && (
+                <Tag color="orange" style={{ fontSize: 11 }}>高风险 {data.merge_high_risk_count}</Tag>
+              )}
+              {data.merge_requires_human_review && (
+                <Tag color="volcano" style={{ fontSize: 11 }}>需人工复核</Tag>
+              )}
+            </div>
+          </div>
+        </Col>
+        <Col xs={24} sm={8}>
+          <div style={{ background: 'var(--color-bg)', borderRadius: 8, padding: 10 }}>
+            <div style={{ fontSize: 16, marginBottom: 4 }}>
+              <FileTextOutlined style={{ marginRight: 4 }} />
+              第4层 解析质量
+            </div>
+            <Tag color={pq.color}>{pq.label}</Tag>
+            {data.parse_quality_detail && (
+              <Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 4 }}>
+                {data.parse_quality_detail}
+              </Text>
+            )}
+          </div>
+        </Col>
+      </Row>
+
+      {/* 第二行: 参数倾向性 */}
+      {(data.parameter_bias_findings !== undefined || data.parameter_bias_score !== undefined) && (
+        <Row gutter={[16, 12]} style={{ marginTop: 12 }}>
+          <Col span={24}>
+            <div style={{ background: '#fff7ed', borderRadius: 8, padding: 10, border: '1px solid #fed7aa' }}>
+              <div style={{ fontSize: 16, marginBottom: 4 }}>
+                <AimOutlined style={{ marginRight: 4, color: '#ea580c' }} />
+                第2层 参数倾向性检测
+              </div>
+              <Space size={8} wrap>
+                {data.parameter_bias_score !== undefined && (
+                  <Text strong style={{ color: '#c2410c' }}>
+                    风险评分: {data.parameter_bias_score}%
+                  </Text>
+                )}
+                {data.parameter_bias_findings !== undefined && (
+                  <Tag color="orange">发现 {data.parameter_bias_findings} 项</Tag>
+                )}
+              </Space>
+            </div>
+          </Col>
+        </Row>
+      )}
     </Card>
   )
 }
@@ -474,6 +750,27 @@ const ReportPage: React.FC = () => {
     report.rule_violations.forEach(v => { if (v.location) sections.add(v.location) })
     report.llm_violations.forEach(v => { if (v.section) sections.add(v.section) })
     return Array.from(sections).map(s => ({ value: s, label: s }))
+  }, [report])
+
+  // ── 从 report_data 提取五层流水线数据 ──────────────────
+  const pipelineData = useMemo<PipelineSummaryData>(() => {
+    if (!report?.report_data) return {}
+    try {
+      const data = JSON.parse(report.report_data)
+      return {
+        traffic_light: data.traffic_light,
+        routing_reasoning: data.routing_reasoning,
+        parameter_bias_score: data.parameter_bias_score,
+        parameter_bias_findings: data.parameter_bias_findings,
+        merge_risk_level: data.merge_risk_level || data.merge_result?.risk_level,
+        merge_review_status: data.merge_review_status || data.merge_result?.review_status,
+        merge_requires_human_review: data.merge_requires_human_review ?? data.merge_result?.requires_human_review,
+        merge_confirmed_count: data.merge_confirmed_count ?? data.merge_result?.confirmed_count,
+        merge_high_risk_count: data.merge_high_risk_count ?? data.merge_result?.high_risk_count,
+        parse_quality: data.parse_quality,
+        parse_quality_detail: data.parse_quality_detail,
+      }
+    } catch { return {} }
   }, [report])
 
   // ── Loading ──────────────────────────────────────────
@@ -615,6 +912,9 @@ const ReportPage: React.FC = () => {
         {report.file_name} &middot; {report.check_time}
       </Text>
 
+      {/* ═══════ 五层流水线摘要 ═══════ */}
+      {pipelineData.traffic_light && <PipelineSummary data={pipelineData} />}
+
       {/* ═══════ 报告摘要横向条 ═══════ */}
       <div className="report-summary-strip" style={{ marginBottom: 20 }}>
         {/* 评分环 */}
@@ -720,6 +1020,14 @@ const ReportPage: React.FC = () => {
       {hasViolations && (
         <PriorityCard
           violations={report.rule_violations}
+          llmViolations={report.llm_violations}
+        />
+      )}
+
+      {/* ═══════ 风险热力图 ═══════ */}
+      {hasViolations && (
+        <RiskHeatmap
+          ruleViolations={report.rule_violations}
           llmViolations={report.llm_violations}
         />
       )}

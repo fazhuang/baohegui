@@ -48,6 +48,8 @@ export interface ComplianceReport {
   dedup_cross_engine: number
   dedup_intra_engine: number
   rule_count: number
+  /** M1+M2 升级后新增字段 — report_data JSON 字符串 */
+  report_data?: string
 }
 
 /** 上传响应 */
