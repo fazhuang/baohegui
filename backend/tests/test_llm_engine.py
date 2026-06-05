@@ -13,6 +13,7 @@ from app.engine.llm_engine import (
     _extract_json,
     _extract_violated_sections,
     _parse_violations,
+    _validate_schema,
 )
 from app.engine.rule_engine import Violation
 
@@ -284,7 +285,7 @@ class TestParseViolations:
         assert v.type == "exclusivity"
         assert v.evidence == ""  # v2 格式无此字段，取默认值
         assert v.consequence == ""  # v2 格式无此字段，取默认值
-        assert v.confidence == 0.0  # v2 格式无此字段，取默认值
+        assert v.confidence == 0.5  # v2 格式无此字段，取默认值 0.5
 
     def test_parse_v3_format(self):
         """v3 格式的 JSON 包含新字段"""
@@ -339,7 +340,7 @@ class TestParseViolations:
         assert violations[0].law_ref == "《政府采购法》第五条"
 
     def test_parse_confidence_invalid(self):
-        """confidence 为非数值时回退为 0.0"""
+        """confidence 为非数值时回退为 0.5"""
         raw = [
             {
                 "type": "bias",
@@ -350,11 +351,31 @@ class TestParseViolations:
             }
         ]
         violations = _parse_violations(raw)
-        assert violations[0].confidence == 0.0
+        assert violations[0].confidence == 0.5
 
-    def test_parse_empty_list(self):
-        """空列表返回空"""
-        assert _parse_violations([]) == []
+    def test_schema_validation_drops_invalid_type(self):
+        """Violations with invalid type should be dropped"""
+        raw = [{"type": "INVALID_TYPE", "text": "test", "risk_level": "high", "reason": "test", "confidence": 0.8}]
+        result = _parse_violations(raw)
+        assert len(result) == 0  # dropped
+
+    def test_schema_validation_coerces_confidence(self):
+        """Confidence should be coerced to float and clamped"""
+        raw = [{
+            "type": "exclusivity", "text": "test", "risk_level": "medium",
+            "reason": "test", "confidence": 1.5
+        }]
+        result = _parse_violations(raw)
+        assert len(result) == 1
+        assert result[0].confidence == 1.0  # clamped
+
+    def test_schema_validation_fills_defaults(self):
+        """Missing fields should get defaults"""
+        raw = [{"type": "exclusivity", "text": "test", "risk_level": "unknown", "reason": "test"}]
+        result = _parse_violations(raw)
+        assert len(result) == 1
+        assert result[0].risk_level == "medium"  # defaulted
+        assert result[0].confidence == 0.5  # default
 
 
 # ═══════════════════════════════════════════════════════════════

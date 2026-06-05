@@ -37,6 +37,62 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════
+# JSON Schema — LLM 输出结构定义
+# ═══════════════════════════════════════════════════════════════
+
+LLM_OUTPUT_SCHEMA = {
+    "type": "object",
+    "required": ["violations"],
+    "properties": {
+        "violations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["type", "text", "risk_level", "reason", "confidence"],
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "exclusivity", "bias", "hidden_barrier",
+                            "ambiguity", "high_risk", "format_issue",
+                            "legal_risk", "procedural_issue"
+                        ]
+                    },
+                    "section": {"type": "string"},
+                    "text": {"type": "string"},
+                    "risk_level": {"type": "string", "enum": ["high", "medium", "low"]},
+                    "reason": {"type": "string"},
+                    "suggestion": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                    "evidence": {"type": "string"},
+                    "law_ref": {"type": "string"},
+                    "consequence": {"type": "string"},
+                    "law_refs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "article": {"type": "string"}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+# 从 schema 中提取的可接受值集合（供 _validate_schema / _parse_violations 使用）
+_ALLOWED_VIOLATION_TYPES: set[str] = set(
+    LLM_OUTPUT_SCHEMA["properties"]["violations"]["items"]["properties"]["type"]["enum"]
+)
+_ALLOWED_RISK_LEVELS: set[str] = set(
+    LLM_OUTPUT_SCHEMA["properties"]["violations"]["items"]["properties"]["risk_level"]["enum"]
+)
+
+
+# ═══════════════════════════════════════════════════════════════
 # 数据模型
 # ═══════════════════════════════════════════════════════════════
 
@@ -52,8 +108,8 @@ class LLMViolation(BaseModel):
 
     type: str = Field(
         ...,
-        pattern=r"^(exclusivity|bias|hidden_barrier|ambiguity|high_risk)$",
-        description="违例类型：排他性/倾向性/隐性壁垒/含糊性/高风险",
+        pattern=r"^(exclusivity|bias|hidden_barrier|ambiguity|high_risk|format_issue|legal_risk|procedural_issue)$",
+        description="违例类型：排他性/倾向性/隐性壁垒/含糊性/高风险/格式问题/法律条款/程序问题",
     )
     section: str = ""
     text: str = ""
@@ -430,16 +486,80 @@ def _build_section_prompt(
     return chunks, sections_skipped
 
 
+def _validate_schema(violations: list[dict]) -> list[dict]:
+    """
+    手动验证每条违规记录是否符合 LLM_OUTPUT_SCHEMA 定义的结构。
+
+    验证规则：
+    1. 必须是 dict
+    2. 必须包含 type 字段且值在可接受枚举中
+    3. 必须包含 text 字段（非空字符串）
+
+    注意：confidence / risk_level / reason 等字段的缺失和无效值
+    由 _parse_violations 负责填充默认值，不在此处丢弃。
+
+    返回通过验证的违规记录列表（浅拷贝）。
+    对验证失败的记录记录警告日志并丢弃。
+    """
+    valid: list[dict] = []
+
+    for i, item in enumerate(violations):
+        if not isinstance(item, dict):
+            logger.warning("_validate_schema: item[%d] 不是 dict（类型=%s），丢弃", i, type(item).__name__)
+            continue
+
+        # ── 校验 type 字段存在且合法 ──────────────────────────
+        item_type = item.get("type")
+        if not isinstance(item_type, str) or item_type not in _ALLOWED_VIOLATION_TYPES:
+            logger.warning(
+                "_validate_schema: item[%d] type=%r 不在可接受枚举中，丢弃",
+                i,
+                item_type,
+            )
+            continue
+
+        # ── 校验 text 字段存在 ────────────────────────────────
+        item_text = item.get("text")
+        if not item_text or not isinstance(item_text, str):
+            logger.warning(
+                "_validate_schema: item[%d] text 缺失或非字符串，丢弃",
+                i,
+            )
+            continue
+
+        valid.append(item)
+
+    dropped = len(violations) - len(valid)
+    if dropped:
+        logger.info(
+            "_validate_schema: %d/%d 条违规通过 schema 校验，%d 条被丢弃",
+            len(valid),
+            len(violations),
+            dropped,
+        )
+
+    return valid
+
+
 def _parse_violations(raw: list[dict]) -> list[LLMViolation]:
     """
     将 LLM JSON 响应解析为 LLMViolation 列表。
 
-    支持两种输出格式：
+    增强处理流程：
+    1. Schema 验证（_validate_schema），丢弃不合规的违规记录
+    2. 字段别名映射（evidence_text → evidence, basis → law_ref）
+    3. confidence 强制转换为 float 并 clamp 到 [0.0, 1.0]
+    4. risk_level 缺失或无效时默认为 "medium"
+    5. type 归一化到允许的枚举值（不在枚举中的记录已在 _validate_schema 阶段丢弃）
+
+    支持三种输出格式：
     1. v2 格式（兼容）：type, section, text, risk_level, reason, suggestion, law_ref
     2. v3 格式（新增）：额外包含 evidence, consequence, confidence
-
-    自动映射已知字段别名（如 evidence_text → evidence, basis → law_ref）。
+    3. law_refs 格式：结构化法规引用列表
     """
+    # ── Step 1: Schema 验证 ─────────────────────────────────
+    validated = _validate_schema(raw)
+
     violations: list[LLMViolation] = []
 
     # 字段别名映射：LLM JSON key → LLMViolation field
@@ -448,20 +568,61 @@ def _parse_violations(raw: list[dict]) -> list[LLMViolation]:
         "basis": "law_ref",
     }
 
-    for item in raw:
-        # 应用字段别名
+    for i, item in enumerate(validated):
+        # ── Step 2: 应用字段别名 ───────────────────────────────
         for alias, target in _FIELD_ALIASES.items():
             if alias in item and target not in item:
                 item[target] = item.pop(alias)
 
-        # 提取 v3 新字段，提供默认值
+        # ── Step 3: confidence 强制转为 float 并 clamp ─────────
         if "confidence" in item:
             try:
                 item["confidence"] = float(item["confidence"])
             except (TypeError, ValueError):
+                item["confidence"] = 0.5  # 默认值
+            # Clamp 到 [0.0, 1.0]
+            if item["confidence"] > 1.0:
+                logger.warning(
+                    "_parse_violations: item[%d] confidence=%.2f 超过上限，clamp 到 1.0",
+                    i,
+                    item["confidence"],
+                )
+                item["confidence"] = 1.0
+            elif item["confidence"] < 0.0:
+                logger.warning(
+                    "_parse_violations: item[%d] confidence=%.2f 低于下限，clamp 到 0.0",
+                    i,
+                    item["confidence"],
+                )
                 item["confidence"] = 0.0
+        else:
+            # confidence 缺失时提供默认值
+            item["confidence"] = 0.5
 
-        violations.append(LLMViolation(**item))
+        # ── Step 4: risk_level 缺失或无效时默认 "medium" ────────
+        if "risk_level" in item:
+            if item["risk_level"] not in _ALLOWED_RISK_LEVELS:
+                logger.warning(
+                    "_parse_violations: item[%d] risk_level=%r 无效，默认设为 'medium'",
+                    i,
+                    item["risk_level"],
+                )
+                item["risk_level"] = "medium"
+        else:
+            item["risk_level"] = "medium"
+
+        # ── Step 5: type 归一化 ───────────────────────────────
+        # type 已通过 _validate_schema 的枚举校验，此处确保是小写形式
+        item["type"] = str(item["type"]).lower()
+
+        try:
+            violations.append(LLMViolation(**item))
+        except Exception as exc:
+            logger.warning(
+                "_parse_violations: item[%d] 构造 LLMViolation 失败: %s，丢弃",
+                i,
+                exc,
+            )
 
     return violations
 
