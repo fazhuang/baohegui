@@ -1,0 +1,42 @@
+{
+  "platform": "gansu",
+  "name": "甘肃省公共资源交易平台",
+  "version": "1.0.0",
+  "description": "甘肃省招标投标规则差异",
+  "threshold_overrides": {
+    "routing_green_budget_max": 500000,
+    "routing_yellow_budget_max": 3000000
+  },
+  "additional_rules": [
+    {
+      "rule_id": "GS-001",
+      "rule_name": "公告发布期限",
+      "category": "D",
+      "rule_type": "date_interval",
+      "description": "甘肃省要求招标公告发布不少于5个工作日",
+      "risk_level": "medium",
+      "suggestion": "确保公告发布时间满足甘肃省5个工作日的要求",
+      "regulation_basis": [{"title": "甘肃省招标投标条例", "article": "第十二条"}]
+    },
+    {
+      "rule_id": "GS-002",
+      "rule_name": "电子招投标要求",
+      "category": "D",
+      "rule_type": "required",
+      "description": "甘肃省要求使用全省统一的电子招投标系统",
+      "risk_level": "low",
+      "suggestion": "确认使用甘肃省公共资源交易电子服务系统",
+      "regulation_basis": [{"title": "甘肃省公共资源交易管理办法", "article": "第八条"}]
+    },
+    {
+      "rule_id": "GS-003",
+      "rule_name": "中小企业预留份额",
+      "category": "E",
+      "rule_type": "numeric_range",
+      "description": "甘肃省要求政府采购预算中预留30%以上面向中小企业",
+      "risk_level": "medium",
+      "suggestion": "确认项目是否面向中小企业预留足够份额",
+      "regulation_basis": [{"title": "甘肃省促进中小企业发展条例", "article": "第二十五条"}]
+    }
+  ]
+}

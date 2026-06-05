@@ -1,0 +1,42 @@
+{
+  "platform": "zhejiang",
+  "name": "浙江省公共资源交易平台",
+  "version": "1.0.0",
+  "description": "浙江省招标投标规则差异",
+  "threshold_overrides": {
+    "routing_green_budget_max": 600000,
+    "routing_yellow_budget_max": 3500000
+  },
+  "additional_rules": [
+    {
+      "rule_id": "ZJ-001",
+      "rule_name": "数字化招标要求",
+      "category": "D",
+      "rule_type": "required",
+      "description": "浙江省全面推进数字化招标投标，须通过浙江省公共资源交易服务平台进行全流程电子化操作",
+      "risk_level": "medium",
+      "suggestion": "确认项目通过浙江省公共资源交易服务平台进行全流程电子化操作",
+      "regulation_basis": [{"title": "浙江省公共资源交易管理条例", "article": "第十条"}]
+    },
+    {
+      "rule_id": "ZJ-002",
+      "rule_name": "信用评价体系",
+      "category": "B",
+      "rule_type": "required",
+      "description": "浙江省推行'信用+招投标'模式，信用评价结果应与评标办法挂钩",
+      "risk_level": "low",
+      "suggestion": "在评审办法中接入浙江省公共资源交易信用评价体系",
+      "regulation_basis": [{"title": "浙江省公共信用信息管理条例", "article": "第二十条"}]
+    },
+    {
+      "rule_id": "ZJ-003",
+      "rule_name": "保证金减免政策",
+      "category": "C",
+      "rule_type": "required",
+      "description": "浙江省推行工程建设领域涉企保证金制度改革，企业信用良好的可免缴投标保证金",
+      "risk_level": "medium",
+      "suggestion": "确认投标保证金设置是否符合浙江省涉企保证金减免政策",
+      "regulation_basis": [{"title": "浙江省关于开展涉企保证金清理规范工作的通知", "article": "第四条"}]
+    }
+  ]
+}
