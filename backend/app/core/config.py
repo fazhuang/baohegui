@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     # 规则文件路径
     rules_dir: str = "rules"
 
+    # 多模型路由
+    llm_multi_model_enabled: bool = False  # 是否启用多模型路由
+    llm_multi_model_config: str = "rules/prompts/model_routing.json"
+    # 各模型API密钥
+    llm_deepseek_api_key: str = ""
+    llm_qwen_api_key: str = ""
+
     # 文件上传限制
     max_file_size_mb: int = 50
     allowed_extensions: list[str] = ["pdf", "docx"]

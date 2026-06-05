@@ -8,6 +8,7 @@ from app.engine.llm_engine import (
     LLMEngine,
     LLMEngineResult,
     LLMViolation,
+    ModelRouter,
     _build_section_prompt,
     _extract_json,
     _extract_violated_sections,
@@ -354,3 +355,67 @@ class TestParseViolations:
     def test_parse_empty_list(self):
         """空列表返回空"""
         assert _parse_violations([]) == []
+
+
+# ═══════════════════════════════════════════════════════════════
+# ModelRouter — 多模型路由
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestModelRouter:
+    """多模型路由测试"""
+
+    def test_load_routing_config(self):
+        import os
+        # 解析相对于项目根目录的路径
+        config_path = "rules/prompts/model_routing.json"
+        router = ModelRouter(config_path)
+        assert router.default_model == "deepseek-chat"
+        assert len(router.dimension_routing) == 17
+
+    def test_route_known_dimension(self):
+        router = ModelRouter("rules/prompts/model_routing.json")
+        config = router.route("AI-BRAND")
+        assert config is not None
+        assert "provider" in config
+
+    def test_route_known_dimension_returns_proper_config(self):
+        """验证已知维度的配置包含必要字段"""
+        router = ModelRouter("rules/prompts/model_routing.json")
+        config = router.route("AI-STD")
+        assert config is not None
+        # qwen-plus 被指派给 AI-STD
+        assert config.get("model") == "qwen-plus"
+        assert config.get("provider") == "openai_compatible"
+
+    def test_route_unknown_dimension_falls_back(self):
+        router = ModelRouter("rules/prompts/model_routing.json")
+        config = router.route("SOME-UNKNOWN-DIM")
+        assert config is not None  # falls back to default
+        assert "provider" in config
+
+    def test_missing_config_file_uses_defaults(self, tmp_path):
+        p = tmp_path / "nonexistent.json"
+        router = ModelRouter(str(p))
+        # Should not crash, should have empty routing
+        config = router.route("AI-BRAND")
+        assert config is not None
+        assert "provider" in config
+
+    def test_get_api_key_from_env(self, monkeypatch):
+        """测试 API key 通过环境变量解析"""
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-ds-key")
+        router = ModelRouter("rules/prompts/model_routing.json")
+        config = router.model_configs.get("deepseek-chat", {})
+        key = router.get_api_key(config)
+        assert key == "test-ds-key"
+
+    def test_get_api_key_empty_when_not_set(self, monkeypatch):
+        """环境变量未设置时返回空字符串"""
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        monkeypatch.delenv("QWEN_API_KEY", raising=False)
+        router = ModelRouter("rules/prompts/model_routing.json")
+        config = router.model_configs.get("deepseek-chat", {})
+        key = router.get_api_key(config)
+        assert key == ""
+

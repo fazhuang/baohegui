@@ -17,8 +17,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
@@ -82,6 +84,128 @@ class LLMEngineResult(BaseModel):
     sections_analyzed: int = 0  # 实际调 LLM 的章节数
     sections_skipped: int = 0  # 被抽样跳过的章节数
     error: Optional[str] = None
+
+
+# ═══════════════════════════════════════════════════════════════
+# 多模型路由
+# ═══════════════════════════════════════════════════════════════
+
+
+class ModelRouter:
+    """多模型路由器
+
+    加载 model_routing.json，将审查维度（如 AI-BRAND）映射到最优模型配置。
+
+    用法::
+
+        router = ModelRouter("rules/prompts/model_routing.json")
+        config = router.route("AI-BRAND")
+        # → {"provider": "openai_compatible", "api_base": "https://...", ...}
+    """
+
+    def __init__(self, config_path: str):
+        self.config_path = config_path
+        self.default_model: str = "deepseek-chat"
+        self.dimension_routing: dict[str, str] = {}
+        self.model_configs: dict[str, dict] = {}
+        self._load_config()
+
+    def _load_config(self) -> None:
+        """加载并解析模型路由配置文件"""
+        # 支持相对于项目根、backend/ 目录的路径解析
+        resolved = self._resolve_path(self.config_path)
+        if not resolved or not resolved.exists():
+            logger.warning(
+                "模型路由配置文件不存在: %s，使用空路由表", self.config_path
+            )
+            return
+
+        try:
+            data = json.loads(resolved.read_text(encoding="utf-8"))
+            self.default_model = data.get("default_model", "deepseek-chat")
+            self.dimension_routing = data.get("dimension_routing", {})
+            self.model_configs = data.get("model_configs", {})
+            logger.info(
+                "ModelRouter 加载完成: %d 维路由, %d 模型配置, 默认=%s",
+                len(self.dimension_routing),
+                len(self.model_configs),
+                self.default_model,
+            )
+        except (json.JSONDecodeError, OSError) as e:
+            logger.error("模型路由配置解析失败: %s", e)
+            # 保持空路由表，不会崩溃——route() 会 fall back 到默认
+
+    @staticmethod
+    def _resolve_path(config_path: str) -> Path | None:
+        """解析配置文件路径，支持多种相对路径基准"""
+        candidates = [
+            lambda: Path(config_path),  # 直接路径 / 相对于 cwd
+            lambda: Path(__file__).resolve().parent.parent.parent.parent / config_path,
+            lambda: Path("backend") / config_path,
+        ]
+        for factory in candidates:
+            try:
+                p = factory()
+                if p.exists():
+                    return p
+            except Exception:
+                continue
+
+        # 最后一个存在则返回（哪怕不存在），让调用方自行处理
+        try:
+            return candidates[1]()
+        except Exception:
+            return None
+
+    def route(self, dimension_id: str) -> dict:
+        """获取指定维度的模型配置
+
+        Args:
+            dimension_id: 审查维度 ID，如 "AI-BRAND"、"AI-STD"
+
+        Returns:
+            模型配置 dict，包含 provider / api_base / model 等字段。
+            如果维度未在路由表中，fall back 到默认模型配置。
+            如果对应模型配置也不存在，返回兜底配置。
+        """
+        model_name = self.dimension_routing.get(dimension_id, self.default_model)
+        config = self.model_configs.get(model_name)
+
+        if config:
+            return config
+
+        # 终极兜底：构造一个 openai_compatible 配置
+        logger.warning(
+            "维度 %s 的模型 %s 无配置，使用兜底默认", dimension_id, model_name
+        )
+        return {
+            "provider": "openai_compatible",
+            "api_base": settings.llm_api_base,
+            "api_key_env": "",
+            "model": model_name,
+            "max_tokens": 4096,
+            "temperature": 0.1,
+            "cost_per_1k_input": 0.001,
+            "cost_per_1k_output": 0.002,
+        }
+
+    def get_api_key(self, config: dict) -> str:
+        """从模型配置中解析 API 密钥
+
+        优先级：config.api_key_env → settings 对应字段 → 默认空
+        """
+        env_var = config.get("api_key_env", "")
+        if env_var:
+            key = os.environ.get(env_var, "")
+            if key:
+                return key
+            # 尝试从 settings 获取
+            settings_attr = f"llm_{env_var.lower()}"
+            val = getattr(settings, settings_attr, "")
+            if val:
+                return val
+
+        return ""
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -478,6 +602,15 @@ class LLMEngine:
         self.cost_per_1k_input = settings.llm_cost_per_1k_input
         self.cost_per_1k_output = settings.llm_cost_per_1k_output
 
+        # 多模型路由
+        self.multi_model_enabled = settings.llm_multi_model_enabled
+        self._model_router: Optional[ModelRouter] = None
+        if self.multi_model_enabled:
+            self._model_router = ModelRouter(settings.llm_multi_model_config)
+            logger.info(
+                "多模型路由已启用，配置文件: %s", settings.llm_multi_model_config
+            )
+
         # 创建 PromptManager（热加载就绪）
         self.prompt_manager = PromptManager()
         self._prompt_template: Optional[str] = None  # 懒加载缓存
@@ -551,6 +684,204 @@ class LLMEngine:
             )
             cls = OpenAICompatibleProvider
         return cls(self.api_base, self.api_key, self.model)
+
+    def _build_provider_for_config(self, config: dict) -> BaseProvider:
+        """根据模型路由配置创建 Provider 实例"""
+        provider_name = config.get("provider", "openai_compatible")
+        api_base = config.get("api_base", self.api_base)
+        model = config.get("model", self.model)
+        api_key = config.get("api_key", "") or ""
+        # 尝试通过 api_key_env 解析密钥
+        if not api_key and self._model_router:
+            api_key = self._model_router.get_api_key(config)
+        if not api_key:
+            api_key = self.api_key  # fallback to default
+
+        provider_map: dict[str, type[BaseProvider]] = {
+            "openai_compatible": OpenAICompatibleProvider,
+            "ollama": OllamaProvider,
+        }
+        cls = provider_map.get(provider_name)
+        if not cls:
+            logger.warning(
+                "未知 Provider '%s'，回退到 openai_compatible",
+                provider_name,
+            )
+            cls = OpenAICompatibleProvider
+        return cls(api_base, api_key, model)
+
+    def _get_models_for_chunk(self, chunk: dict) -> list[tuple[str, dict]]:
+        """返回处理某个 chunk 需要用到的一组 (model_name, model_config)。
+
+        多模型模式：返回所有配置的模型（去重）
+        单模型模式：返回唯一默认模型
+        """
+        if not self.multi_model_enabled or not self._model_router:
+            # 单模型：返回当前默认 provider 的配置
+            return [(self.model, {
+                "provider": self.provider_name,
+                "api_base": self.api_base,
+                "model": self.model,
+                "api_key_env": "",
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "cost_per_1k_input": self.cost_per_1k_input,
+                "cost_per_1k_output": self.cost_per_1k_output,
+            })]
+
+        # 多模型：收集所有不重复的模型
+        seen_models: set[str] = set()
+        result: list[tuple[str, dict]] = []
+
+        # 先添加默认模型
+        default_config = self._model_router.model_configs.get(
+            self._model_router.default_model
+        )
+        if default_config:
+            seen_models.add(self._model_router.default_model)
+            result.append((self._model_router.default_model, default_config))
+
+        # 再添加路由表中引用的其他模型
+        for model_name in self._model_router.dimension_routing.values():
+            if model_name not in seen_models:
+                config = self._model_router.model_configs.get(model_name)
+                if config:
+                    seen_models.add(model_name)
+                    result.append((model_name, config))
+
+        if not result:
+            # 兜底：使用默认 provider
+            return [(self.model, {
+                "provider": self.provider_name,
+                "api_base": self.api_base,
+                "model": self.model,
+                "api_key_env": "",
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "cost_per_1k_input": self.cost_per_1k_input,
+                "cost_per_1k_output": self.cost_per_1k_output,
+            })]
+
+        logger.debug("多模型路由: %d 个模型将被调用", len(result))
+        return result
+
+    async def _call_model_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        prompt: str,
+        model_config: dict,
+        model_name: str,
+    ) -> tuple[list[LLMViolation], dict, Optional[str]]:
+        """调用指定模型的 Provider 并解析结果
+
+        Args:
+            client: httpx 客户端
+            prompt: Prompt 内容
+            model_config: 模型配置 dict（含 provider/api_base/model 等）
+            model_name: 模型名称（用于日志和成本计算）
+
+        Returns:
+            (violations, usage_dict, error_message)
+        """
+        provider = self._build_provider_for_config(model_config)
+        max_tokens = model_config.get("max_tokens", self.max_tokens)
+        temperature = model_config.get("temperature", self.temperature)
+
+        last_error: Optional[str] = None
+        for attempt in range(1, self.retry_count + 2):
+            try:
+                content, usage = await provider.chat(
+                    prompt,
+                    client,
+                    max_tokens,
+                    temperature,
+                )
+                raw = _extract_json(content)
+                if raw is None:
+                    raise ValueError(f"LLM 返回非 JSON 格式: {content[:200]}...")
+                violations = _parse_violations(raw)
+                return violations, usage, None
+
+            except httpx.HTTPStatusError as e:
+                last_error = f"HTTP {e.response.status_code}"
+                logger.warning(
+                    "模型 [%s] 调用失败 (attempt %d/%d): %s",
+                    model_name,
+                    attempt,
+                    self.retry_count + 1,
+                    last_error,
+                )
+            except httpx.TimeoutException:
+                last_error = "超时"
+                logger.warning(
+                    "模型 [%s] 超时 (attempt %d/%d)",
+                    model_name,
+                    attempt,
+                    self.retry_count + 1,
+                )
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                last_error = str(e)
+                logger.warning(
+                    "模型 [%s] 响应解析失败 (attempt %d/%d): %s",
+                    model_name,
+                    attempt,
+                    self.retry_count + 1,
+                    last_error,
+                )
+                return [], {}, last_error
+            except Exception as e:
+                last_error = f"{type(e).__name__}: {e}"
+                logger.error(
+                    "模型 [%s] 未知错误 (attempt %d/%d): %s",
+                    model_name,
+                    attempt,
+                    self.retry_count + 1,
+                    last_error,
+                )
+
+            if attempt <= self.retry_count:
+                delay = self.retry_delay * (2 ** (attempt - 1))
+                await asyncio.sleep(delay)
+
+        return [], {}, last_error
+
+    def _deduplicate_violations(
+        self,
+        violations: list[LLMViolation],
+    ) -> list[LLMViolation]:
+        """合并去重：按 (type, section, text 前缀) 去重，保留置信度最高的"""
+        if not violations:
+            return []
+
+        keyed: dict[str, LLMViolation] = {}
+        for v in violations:
+            # 生成去重键：类型 + 章节 + 文本前 40 字符
+            key = f"{v.type}|{v.section}|{v.text[:40]}"
+            if key in keyed:
+                # 保留置信度更高的
+                if v.confidence > keyed[key].confidence:
+                    keyed[key] = v
+            else:
+                keyed[key] = v
+
+        return list(keyed.values())
+
+    def _calc_cost_for_model(
+        self, input_tokens: int, output_tokens: int, model_config: dict
+    ) -> float:
+        """根据模型配置计算成本"""
+        in_cost = model_config.get("cost_per_1k_input", 0)
+        out_cost = model_config.get("cost_per_1k_output", 0)
+        if in_cost > 0 or out_cost > 0:
+            return input_tokens / 1000 * in_cost + output_tokens / 1000 * out_cost
+
+        # 回退到全局估算
+        model_name = model_config.get("model", "")
+        for prefix, (ic, oc) in PROVIDER_COST_ESTIMATES.items():
+            if model_name.startswith(prefix):
+                return input_tokens / 1000 * ic + output_tokens / 1000 * oc
+
+        return self._calc_cost(input_tokens, output_tokens)
 
     # ── 核心审查方法 ────────────────────────────────────────
 
@@ -633,6 +964,11 @@ class LLMEngine:
                 sections_skipped=sections_skipped,
             )
 
+        # ── 确定要调用的模型列表 ─────────────────────────────
+        models = self._get_models_for_chunk(chunks[0])
+        model_names = [name for name, _ in models]
+        models_used_str = "+".join(model_names) if models else self.model
+
         all_violations: list[LLMViolation] = []
         total_input_tokens = 0
         total_output_tokens = 0
@@ -645,52 +981,107 @@ class LLMEngine:
         async with httpx.AsyncClient(timeout=timeout_cfg, limits=limits) as client:
             for chunk in chunks:
                 t_start = time.monotonic()
-                violations, usage, err = await self._call_with_retry(
-                    client,
-                    chunk["prompt"],
-                )
+
+                if self.multi_model_enabled and len(models) > 1:
+                    # ── 多模型模式：并行调用所有模型，合并结果 ──
+                    tasks = []
+                    for model_name, model_cfg in models:
+                        tasks.append(
+                            self._call_model_with_retry(
+                                client,
+                                chunk["prompt"],
+                                model_cfg,
+                                model_name,
+                            )
+                        )
+
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    chunk_violations: list[LLMViolation] = []
+                    chunk_usage_total = {"prompt_tokens": 0, "completion_tokens": 0}
+                    chunk_err: Optional[str] = None
+
+                    for i, result in enumerate(results):
+                        model_name = models[i][0]
+                        if isinstance(result, Exception):
+                            chunk_err = f"{model_name}: {result}"
+                            logger.warning(
+                                "模型 [%s] 调用异常: %s", model_name, result
+                            )
+                            continue
+                        violations, usage, err = result
+                        if err:
+                            if not chunk_err:
+                                chunk_err = err
+                            logger.warning(
+                                "模型 [%s] 返回错误: %s", model_name, err
+                            )
+                        chunk_usage_total["prompt_tokens"] += usage.get("prompt_tokens", 0)
+                        chunk_usage_total["completion_tokens"] += usage.get("completion_tokens", 0)
+                        if violations:
+                            chunk_violations.extend(violations)
+                else:
+                    # ── 单模型模式：保持原有行为 ──
+                    model_name, model_cfg = models[0]
+                    chunk_violations, chunk_usage_total, chunk_err = (
+                        await self._call_model_with_retry(
+                            client,
+                            chunk["prompt"],
+                            model_cfg,
+                            model_name,
+                        )
+                    )
+
                 duration = time.monotonic() - t_start
 
-                pt = usage.get("prompt_tokens", 0)
-                ct = usage.get("completion_tokens", 0)
+                pt = chunk_usage_total.get("prompt_tokens", 0)
+                ct = chunk_usage_total.get("completion_tokens", 0)
                 total_input_tokens += pt
                 total_output_tokens += ct
 
                 # ── 记录用量 ─────────────────────────────────
                 if not self.mock_mode:
-                    chunk_cost = self._calc_cost(pt, ct)
+                    # 多模型使用混合模型成本
+                    chunk_cost = self._calc_cost_for_model(
+                        pt, ct,
+                        {"cost_per_1k_input": self.cost_per_1k_input,
+                         "cost_per_1k_output": self.cost_per_1k_output,
+                         "model": models_used_str},
+                    )
                     self.usage_tracker.record_call(
-                        model=self.model,
+                        model=models_used_str,
                         provider=self.provider_name,
                         prompt_tokens=pt,
                         completion_tokens=ct,
                         duration_seconds=duration,
                         cost_yuan=chunk_cost,
-                        success=(err is None),
-                        error_message=err or "",
+                        success=(chunk_err is None),
+                        error_message=chunk_err or "",
                         file_id=file_id,
                         user_id=user_id,
                         section_name=chunk["section_name"],
                         prompt_length=len(chunk["prompt"]),
                     )
 
-                if violations:
-                    for v in violations:
+                if chunk_violations:
+                    for v in chunk_violations:
                         if not v.section:
                             v.section = chunk["section_name"]
-                    all_violations.extend(violations)
+                    all_violations.extend(chunk_violations)
                     sections_ok += 1
-                elif err:
-                    last_error = err
+                elif chunk_err:
+                    last_error = chunk_err
                     logger.warning(
                         "章节 [%s] 审查失败: %s",
                         chunk["section_name"],
-                        err,
+                        chunk_err,
                     )
                 else:
                     sections_ok += 1  # 无违规也是成功
 
         total_tokens = total_input_tokens + total_output_tokens
+
+        # ── 去重合并 ─────────────────────────────────────────
+        all_violations = self._deduplicate_violations(all_violations)
 
         # 计算成本
         cost = self._calc_cost(total_input_tokens, total_output_tokens)
@@ -702,7 +1093,7 @@ class LLMEngine:
         return LLMEngineResult(
             violations=all_violations,
             total_score=round(total_score, 1),
-            model_used=self.model,
+            model_used=models_used_str,
             tokens_used=total_tokens,
             tokens_input=total_input_tokens,
             tokens_output=total_output_tokens,
