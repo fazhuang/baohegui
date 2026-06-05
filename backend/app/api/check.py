@@ -1,19 +1,25 @@
 """合规检查 API"""
 
+import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
 from app.core.config import settings
+from app.core.security import get_current_user
 from app.db.database import get_db
-from app.engine.fusion import fusion_engine
+from app.engine.fusion import fusion_engine, four_way_merger
+from app.engine.parameter_bias import ParameterBiasDetector
+from app.engine.routing import compliance_router
 from app.engine.llm_engine import llm_engine
 from app.engine.rule_engine import rule_engine
 from app.engine.variable_marker import variable_marker
 from app.models.document import ComplianceReport, UploadedFile
 from app.services.parser import parser
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/check", tags=["check"])
 
@@ -21,9 +27,18 @@ router = APIRouter(prefix="/api/check", tags=["check"])
 @router.post("/{file_id}")
 async def run_compliance_check(
     file_id: int,
-    industries: str | None = Query(default=None, description="行业标识，逗号分隔，如 it,healthcare"),
-    sector: str | None = Query(default=None, description="招标行业：政府采购/公路工程/水利工程/铁路工程"),
-    procurement_method: str | None = Query(default=None, description="采购方式：公开招标/邀请招标/竞争性谈判/竞争性磋商/询价/单一来源"),
+    industries: str | None = Query(
+        default=None,
+        description="行业标识，逗号分隔，如 it,healthcare",
+    ),
+    sector: str | None = Query(
+        default=None,
+        description="招标行业：政府采购/公路工程/水利工程/铁路工程",
+    ),
+    procurement_method: str | None = Query(
+        default=None,
+        description="采购方式：公开招标/邀请招标/竞争性谈判/竞争性磋商/询价/单一来源",
+    ),
     project_type: str | None = Query(default=None, description="项目类型：货物类/服务类/工程类"),
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
@@ -55,6 +70,14 @@ async def run_compliance_check(
         industry_list = [ind.strip() for ind in industries.split(",") if ind.strip()]
         rule_engine.set_active_industries(industry_list)
 
+    # ── 第0层：零Token路由审查 ──────────────────────────────
+    budget = _extract_budget_from_document(parsed)
+    routing_result = compliance_router.route(
+        budget=budget,
+        procurement_method=procurement_method or "",
+        project_type=project_type or "",
+    )
+
     # ── 定变分离预处理 ──────────────────────────────────────
     # 对文档内容进行模板固定内容 vs 代理机构填写内容的标记
     marked_doc = None
@@ -76,22 +99,29 @@ async def run_compliance_check(
         marked_doc=marked_doc,
     )
 
-    # LLM 语义检查（传入 marked_doc → <<TEMPLATE>>/<<REVIEW>> 标记文本）
-    # 对所有解析出的章节进行语义审查，而非仅限「评审办法」「技术要求」
-    # 定变分离模式下，LLM 会自行判断 <<TEMPLATE>> 区域无需审查
+    # ── 第2层：参数倾向性检测 ──────────────────────────────────
+    parameter_bias_detector = ParameterBiasDetector()
+    parameter_bias_result = parameter_bias_detector.run(
+        sections=parsed.sections,
+    )
+
+    # ── 第3层：LLM语义审查（遵循路由决策）──────────────────────
     target_sections = set(parsed.sections.keys()) if parsed.sections else set()
     if not target_sections:
-        # 降级：如果解析器没有识别出任何章节，至少检查这两个核心章节
         target_sections = {"评审办法", "技术要求"}
 
-    llm_result = await llm_engine.analyze(
-        sections=parsed.sections,
-        rule_violations=rule_result.violations,
-        file_id=file_id,
-        user_id=int(user["sub"]),
-        target_section_types=target_sections,
-        marked_doc=marked_doc,
-    )
+    if routing_result.skip_llm:
+        logger.info("路由判定跳过LLM审查: %s", routing_result.reasoning)
+        llm_result = None
+    else:
+        llm_result = await llm_engine.analyze(
+            sections=parsed.sections,
+            rule_violations=rule_result.violations,
+            file_id=file_id,
+            user_id=int(user["sub"]),
+            target_section_types=target_sections,
+            marked_doc=marked_doc,
+        )
 
     # 融合结果
     report = fusion_engine.merge(
@@ -101,8 +131,19 @@ async def run_compliance_check(
         check_time=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
     )
 
+    # ── 四路风险合并（新版） ──────────────────────────────────
+    parse_quality = getattr(parsed, 'parse_quality', 'ok')
+    merge_result = four_way_merger.merge(
+        routing_result=routing_result,
+        rule_engine_result=rule_result,
+        parameter_bias_result=parameter_bias_result,
+        llm_result=llm_result,
+        parse_quality=parse_quality,
+    )
+
     # 保存报告
     import json
+
     template_stats = marked_doc.stats if marked_doc else {}
 
     # ── 审查诊断信息 ──────────────────────────────────────────
@@ -111,9 +152,7 @@ async def run_compliance_check(
         "parser": {
             "sections_found": len(parsed.sections),
             "section_names": list(parsed.sections.keys()),
-            "section_content_lengths": {
-                k: len(v) for k, v in parsed.sections.items()
-            },
+            "section_content_lengths": {k: len(v) for k, v in parsed.sections.items()},
             "full_text_length": len(parsed.full_text),
             "page_count": parsed.page_count,
             "headings_count": len(parsed.headings),
@@ -124,20 +163,14 @@ async def run_compliance_check(
             "section_violations": len(rule_result.violations),
             "by_type": {
                 "chapter_required": sum(
-                    1 for v in rule_result.violations
-                    if v.rule_type == "chapter_required"
+                    1 for v in rule_result.violations if v.rule_type == "chapter_required"
                 ),
                 "keyword_required": sum(
-                    1 for v in rule_result.violations
-                    if v.rule_type == "keyword_required"
+                    1 for v in rule_result.violations if v.rule_type == "keyword_required"
                 ),
-                "forbidden": sum(
-                    1 for v in rule_result.violations
-                    if v.rule_type == "forbidden"
-                ),
+                "forbidden": sum(1 for v in rule_result.violations if v.rule_type == "forbidden"),
                 "format_required": sum(
-                    1 for v in rule_result.violations
-                    if v.rule_type == "format_required"
+                    1 for v in rule_result.violations if v.rule_type == "format_required"
                 ),
             },
         },
@@ -146,11 +179,31 @@ async def run_compliance_check(
             "model": settings.llm_model,
             "mock_mode": settings.llm_mock_mode,
             "target_section_types": list(target_sections),
-            "sections_analyzed": llm_result.sections_analyzed,
-            "sections_skipped": llm_result.sections_skipped,
-            "tokens_used": llm_result.tokens_used,
-            "cost_yuan": llm_result.cost_yuan,
-            "error": llm_result.error,
+            "sections_analyzed": llm_result.sections_analyzed if llm_result else 0,
+            "sections_skipped": llm_result.sections_skipped if llm_result else 0,
+            "tokens_used": llm_result.tokens_used if llm_result else 0,
+            "cost_yuan": llm_result.cost_yuan if llm_result else 0.0,
+            "error": llm_result.error if llm_result else "skipped_by_routing",
+        },
+        "routing": {
+            "traffic_light": routing_result.traffic_light.value,
+            "skip_llm": routing_result.skip_llm,
+            "reasoning": routing_result.reasoning,
+        },
+        "parameter_bias": {
+            "findings_count": len(parameter_bias_result.findings),
+            "risk_score": parameter_bias_result.risk_score,
+            "critical_count": parameter_bias_result.critical_count,
+            "high_count": parameter_bias_result.high_count,
+        },
+        "merge_result": {
+            "final_passed": merge_result.final_passed,
+            "risk_level": merge_result.risk_level,
+            "review_status": merge_result.review_status,
+            "requires_human_review": merge_result.requires_human_review,
+            "confirmed_count": merge_result.confirmed_count,
+            "high_risk_count": merge_result.high_risk_count,
+            "needs_review_count": merge_result.needs_review_count,
         },
     }
 
@@ -162,10 +215,13 @@ async def run_compliance_check(
         forbidden_score=report.forbidden_score,
         semantic_score=report.semantic_score,
         violation_count=report.total_violations,
-        report_data=json.dumps({
-            **report.model_dump(),
-            "_diagnostics": diagnostics,
-        }, ensure_ascii=False),
+        report_data=json.dumps(
+            {
+                **report.model_dump(),
+                "_diagnostics": diagnostics,
+            },
+            ensure_ascii=False,
+        ),
         checked_by=int(user["sub"]),
     )
     db.add(db_report)
@@ -173,6 +229,14 @@ async def run_compliance_check(
     db_file.status = "completed"
     db.commit()
     db.refresh(db_report)
+
+    # ── 检查成功后才消耗配额（先执行检查 → 成功后消耗）────
+    # 避免用户因系统故障损失配额
+    from app.services.quota_service import consume_file, consume_tokens
+
+    consume_file(db, int(user["sub"]))
+    if llm_result and llm_result.tokens_used:
+        consume_tokens(db, int(user["sub"]), llm_result.tokens_used, llm_result.cost_yuan)
 
     return {
         "report_id": db_report.id,
@@ -191,4 +255,37 @@ async def run_compliance_check(
         "llm_error": report.llm_error,
         "industries": industry_list or None,
         "template_stats": template_stats,
+        "traffic_light": routing_result.traffic_light.value,
+        "routing_reasoning": routing_result.reasoning,
+        "parameter_bias_score": parameter_bias_result.risk_score,
+        "parameter_bias_findings": parameter_bias_result.critical_count + parameter_bias_result.high_count,
+        "merge_risk_level": merge_result.risk_level,
+        "merge_review_status": merge_result.review_status,
+        "merge_requires_human_review": merge_result.requires_human_review,
+        "merge_confirmed_count": merge_result.confirmed_count,
+        "merge_high_risk_count": merge_result.high_risk_count,
     }
+
+
+def _extract_budget_from_document(parsed) -> Optional[float]:
+    """从解析后的文档中智能提取预算金额"""
+    import re
+
+    full_text = parsed.full_text or ""
+    patterns = [
+        r"(?:预算|采购预算|项目预算|预算金额|最高限价)[：:\s]*(\d[\d,.]*)\s*(?:万元|万元人民币|元)",
+        r"(?:预算|采购预算|项目预算)[：:\s]*人民币\s*(\d[\d,.]*)\s*(?:万元|元)",
+        r"(\d[\d,.]*)\s*(?:万元|元)\s*(?:人民币)?[。，,\s]*(?:预算|最高限价)",
+    ]
+    for pat in patterns:
+        match = re.search(pat, full_text)
+        if match:
+            amount_str = match.group(1).replace(",", "").replace("_", "")
+            try:
+                amount = float(amount_str)
+                if "万" in match.group(0):
+                    amount *= 10_000
+                return amount
+            except ValueError:
+                pass
+    return None
