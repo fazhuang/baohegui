@@ -675,11 +675,103 @@ class TestBatch2IndustryRules:
                     f"{rid} 缺少 condition"
 
     def test_total_rules_after_batch2(self):
-        """Batch 2 后规则总数为 72"""
+        """Batch 2 + Batch 3 后规则总数为 82"""
         import json, os
         rules_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
         )
         with open(rules_path) as f:
             data = json.load(f)
-        assert len(data["rules"]) == 72, f"Expected 72 rules, got {len(data['rules'])}"
+        assert len(data["rules"]) == 82, f"Expected 82 rules, got {len(data['rules'])}"
+
+
+class TestBatch3ConditionVariants:
+    """验证 10 条条件变体规则正确追加"""
+
+    def test_r116_c_single_source_expert_review(self):
+        """R116_C: 单一来源须有专家论证"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        r116 = next(r for r in data["rules"] if r["rule_id"] == "R116_C")
+        assert r116["condition"] == "evaluation_method == '单一来源'"
+        assert r116["risk_level"] == "critical"
+        assert "专家" in r116["pattern"]
+
+    def test_r120_b_qualification_not_scoring_factor(self):
+        """R120_B: 资格条件不得作为评分因素"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        r120 = next(r for r in data["rules"] if r["rule_id"] == "R120_B")
+        assert r120["condition"] == "evaluation_method == '综合评分法'"
+        assert r120["risk_level"] == "critical"
+        assert "资格条件" in r120["forbidden_message"]
+
+    def test_r121_a_sme_policy_for_large_budget(self):
+        """R121_A: 预算≥200万须有中小企业政策"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        r121 = next(r for r in data["rules"] if r["rule_id"] == "R121_A")
+        assert r121["condition"] == "budget >= 2000000"
+        assert "中小企业" in str(r121.get("semantic_keywords", ""))
+
+    def test_all_10_variant_rules_present(self):
+        """验证 10 条条件变体规则均存在"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        expected_ids = [
+            "R114_C", "R115_C", "R116_C", "R117_C", "R118_C",
+            "R119_B", "R120_B", "R121_A", "R122_C", "R123_D",
+        ]
+        for rid in expected_ids:
+            rule = next((r for r in data["rules"] if r["rule_id"] == rid), None)
+            assert rule is not None, f"{rid} 缺失"
+            assert "rule_name" in rule
+            assert "rule_type" in rule
+
+    def test_total_rules_after_batch3(self):
+        """Batch 3 后规则总数为 82"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        assert len(data["rules"]) == 82, f"Expected 82 rules, got {len(data['rules'])}"
+
+    def test_condition_rules_count(self):
+        """条件规则数量从 8 增加到 18+"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        conditional = [r for r in data["rules"] if r.get("condition")]
+        assert len(conditional) >= 18, f"Expected >=18 conditional rules, got {len(conditional)}"
+
+    def test_rule_id_uniqueness(self):
+        """验证无重复 rule_id"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        ids = [r["rule_id"] for r in data["rules"]]
+        assert len(ids) == len(set(ids)), f"重复 rule_id: {[x for x in ids if ids.count(x) > 1]}"
