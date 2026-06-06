@@ -275,4 +275,16 @@ export async function getBillingStatus(): Promise<{
   return data
 }
 
+/** 发送密码重置邮件 */
+export async function forgotPassword(email: string): Promise<{ message: string }> {
+  const { data } = await api.post('/auth/forgot-password', { email })
+  return data
+}
+
+/** 重置密码 */
+export async function resetPassword(token: string, new_password: string): Promise<{ message: string }> {
+  const { data } = await api.post('/auth/reset-password', { token, new_password })
+  return data
+}
+
 export default api

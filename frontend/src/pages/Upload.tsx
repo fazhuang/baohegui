@@ -12,7 +12,7 @@ import {
   FileOutlined, LoadingOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { uploadFile, runCheck, getDashboardStats, listReports, getErrorMessage } from '../services/api'
+import { uploadFile, runCheck, getDashboardStats, listReports } from '../services/api'
 import type { ReportListItem } from '../types'
 
 const { Title, Text } = Typography
@@ -356,7 +356,7 @@ const UploadPage: React.FC = () => {
         f.id === item.id ? { ...f, status: 'done' as const, result: fileResult } : f
       ))
     } catch (err: any) {
-      const msg = getErrorMessage(err)
+      const msg = err?.response?.data?.detail || err.message || '处理失败'
       updateFiles(prev => prev.map(f =>
         f.id === item.id ? { ...f, status: 'error' as const, errorMsg: msg } : f
       ))
@@ -560,7 +560,7 @@ const UploadPage: React.FC = () => {
   return (
     <div style={{ maxWidth: 800, margin: '0 auto' }}>
       <style>{`
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .upload-zone { padding: 24px 16px; min-height: 160px; }
   .process-track { flex-direction: column; align-items: flex-start; gap: 12px; }
   .process-line { display: none; }

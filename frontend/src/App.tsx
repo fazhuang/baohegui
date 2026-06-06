@@ -10,6 +10,8 @@ import LoginPage from './pages/Login'
 import DashboardPage from './pages/Dashboard'
 import AdminRulesPage from './pages/AdminRules'
 import AdminPanel from './pages/AdminPanel'
+import ForgotPassword from './pages/ForgotPassword'
+import ResetPassword from './pages/ResetPassword'
 
 const theme = {
   token: {
@@ -104,6 +106,8 @@ function AppRoutes() {
           navigate('/', { replace: true })
         }} />
       } />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/" element={isLoggedIn ? <AppLayout onLogout={() => {
         localStorage.removeItem('token')
         localStorage.removeItem('role')

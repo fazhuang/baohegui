@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import {
   Row, Col, Card, Typography, Button, Tag,
-  Skeleton, Space, Tooltip, Empty,
+  Skeleton, Space, Tooltip, Empty, message,
 } from 'antd'
 import {
   UploadOutlined, HistoryOutlined, FileSearchOutlined,
@@ -323,6 +323,7 @@ const DashboardPage: React.FC = () => {
           monthly_trend: dash?.compliance?.monthly_trend || [],
         })
       } catch {
+        message.error('数据加载失败，请检查网络连接')
         // 后端未就绪时静默使用空数据
         if (!data) {
           setData({
@@ -415,7 +416,7 @@ const DashboardPage: React.FC = () => {
                 icon={<UploadOutlined />}
                 label="新建合规审查"
                 description="上传招标文件进行合规自检"
-                onClick={() => navigate('/')}
+                onClick={() => navigate('/upload')}
                 primary
               />
               <QuickAction
@@ -540,7 +541,7 @@ const DashboardPage: React.FC = () => {
                 description="暂无审查记录"
                 style={{ padding: '24px 0' }}
               >
-                <Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/')}>
+                <Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/upload')}>
                   开始第一次审查
                 </Button>
               </Empty>
