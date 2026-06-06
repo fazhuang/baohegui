@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import {
   Card, Descriptions, Table, Tag, Button, Space, Typography, Spin,
   Alert, Progress, Tooltip, Row, Col, Empty, Select,
@@ -9,7 +9,7 @@ import {
   ThunderboltOutlined, MergeCellsOutlined,
   SafetyCertificateOutlined, FileSearchOutlined,
   FlagOutlined, HeatMapOutlined, BranchesOutlined,
-  AimOutlined, FileTextOutlined,
+  AimOutlined, FileTextOutlined, WarningOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import { getReport, getReportPdfUrl } from '../services/api'
@@ -697,6 +697,21 @@ const ReportPage: React.FC = () => {
   const isMobile = useMobile()
   const [report, setReport] = useState<ComplianceReport | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchReport = useCallback(() => {
+    if (id) {
+      setLoading(true)
+      setError(null)
+      getReport(Number(id))
+        .then(setReport)
+        .catch((err: any) => {
+          const msg = err?.response?.data?.detail || err.message || '加载报告失败'
+          setError(msg)
+        })
+        .finally(() => setLoading(false))
+    }
+  }, [id])
 
   // ── 全局筛选 ──────────────────────────────────────────
   const [globalRisk, setGlobalRisk] = useState<string | null>(null)
@@ -716,13 +731,8 @@ const ReportPage: React.FC = () => {
 
   useEffect(() => {
     document.title = '合规审查报告 - 包合规'
-    if (id) {
-      getReport(Number(id))
-        .then(setReport)
-        .catch(console.error)
-        .finally(() => setLoading(false))
-    }
-  }, [id])
+    fetchReport()
+  }, [fetchReport])
 
   // 全局筛选
   const filteredRules = useMemo(() => {
@@ -786,7 +796,16 @@ const ReportPage: React.FC = () => {
   }
 
   if (!report) {
-    return <Alert message="未找到报告" type="error" showIcon style={{ marginTop: 24 }} />
+    return (
+      <div className="state-container">
+        <WarningOutlined style={{ fontSize: 48, color: 'var(--color-error)' }} />
+        <Typography.Title level={4} style={{ marginTop: 8 }}>报告未找到</Typography.Title>
+        <Typography.Text type="secondary">{error || '请确认报告 ID 是否正确'}</Typography.Text>
+        <Button icon={<ReloadOutlined />} onClick={fetchReport} style={{ marginTop: 16 }}>
+          重新加载
+        </Button>
+      </div>
+    )
   }
 
   const hasViolations = report.total_violations > 0
@@ -905,7 +924,7 @@ const ReportPage: React.FC = () => {
   return (
     <div>
       <style>{`
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .report-page { max-width: 100%; padding: 12px; }
   .report-page h3 { font-size: 18px; }
   .ant-descriptions { font-size: 12px; }
