@@ -944,7 +944,7 @@
       "rule_type": "forbidden_pattern",
       "required": false,
       "condition": "project_type == '工程'",
-      "forbidden_pattern": "(?:三级资质.*[预][算].*[超].*\\d{4,}|二级资质.*[预][算].*[超].*\\d{6,}|一级资质.*[预][算].*[超].*\\d{7,}|特级资质.*[预][算].*[不].*[足])",
+      "forbidden_pattern": "(?:三级资质.*预算.{0,10}超.*\\d{4,}|二级资质.*预算.{0,10}超.*\\d{6,}|一级资质.*预算.{0,10}超.*\\d{7,}|特级资质.*预算.{0,10}[不].*[足])",
       "forbidden_message": "资质等级与项目预算规模不匹配，或资质等级过高构成隐性门槛",
       "message": "施工资质等级应与项目预算规模相匹配，不得过高要求资质等级",
       "applicable_scope": {"project_type": ["工程"], "region": ["全国"], "amount_range": "全部"},
