@@ -11,6 +11,7 @@ from app.core.security import get_current_user
 from app.db.database import get_db
 from app.engine.fusion import ComplianceReport
 from app.models.document import ComplianceReport as ReportModel
+from app.services.clause_generator import clause_generator
 from app.services.feedback_service import feedback_service
 from app.services.report_gen import report_generator
 
@@ -120,3 +121,35 @@ async def list_rules_needing_review(
     """获取待审核的规则列表"""
     rules = feedback_service.get_rules_needing_review(db)
     return {"rules": rules}
+
+
+# ── 智能条款生成 API ────────────────────────────────────────
+
+
+class GenerateClauseRequest(BaseModel):
+    original_text: str
+    rule_description: str
+    suggestion: str
+    project_type: str = ""
+    budget: str = ""
+    industry: str = ""
+
+
+@router.post("/generate-clause")
+async def generate_clause(
+    req: GenerateClauseRequest,
+    user: dict = Depends(get_current_user),
+):
+    """生成合规替代条款"""
+    if not req.original_text or not req.suggestion:
+        raise HTTPException(status_code=400, detail="缺少必要参数 original_text 或 suggestion")
+
+    result = await clause_generator.generate(
+        original_text=req.original_text,
+        rule_description=req.rule_description,
+        suggestion=req.suggestion,
+        project_type=req.project_type,
+        budget=req.budget,
+        industry=req.industry,
+    )
+    return result
