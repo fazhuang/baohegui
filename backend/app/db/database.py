@@ -29,6 +29,7 @@ def init_db():
     """初始化所有表"""
     # 延迟导入以确保表类注册到对应 Base.metadata
     from app.services.feedback_service import FeedbackRecord, RuleConfidence  # noqa: F401
+    from app.models.knowledge_graph import KGNode, KGEdge  # noqa: F401
 
     DocumentBase.metadata.create_all(bind=engine)
     RuleBase.metadata.create_all(bind=engine)

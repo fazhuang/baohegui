@@ -109,6 +109,8 @@ _TABLES_TO_CLEAN = [
     "rules",
     "announcements",
     "users",
+    "kg_edges",
+    "kg_nodes",
 ]
 
 
@@ -117,6 +119,7 @@ def _ensure_tables(engine):
     from app.core.audit import AuditBase
     from app.models.announcement import Base as AnnouncementBase
     from app.models.document import Base as DocumentBase
+    from app.models.knowledge_graph import KGNode, KGEdge  # noqa: F401
     from app.models.rule import Base as RuleBase
     from app.models.subscription import Base as SubscriptionBase
     from app.services.feedback_service import FeedbackRecord, RuleConfidence  # noqa: F401
