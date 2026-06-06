@@ -309,19 +309,31 @@ async def rollback_rules(
     if not filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少 filename 参数")
 
+    # SECURITY: Prevent path traversal
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的文件名")
+
     versions_dir = os.path.join(settings.rules_dir, "versions")
     source_path = os.path.join(versions_dir, filename)
-    target_path = os.path.join(settings.rules_dir, "compliance_rules.json")
 
-    if not os.path.isfile(source_path):
+    # Resolve real paths and verify containment
+    real_versions_dir = os.path.realpath(versions_dir)
+    real_source = os.path.realpath(source_path)
+
+    if not real_source.startswith(real_versions_dir + os.sep):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="路径遍历不允许")
+
+    if not os.path.isfile(real_source):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"版本文件不存在: {filename}")
+
+    target_path = os.path.join(settings.rules_dir, "compliance_rules.json")
 
     # 备份当前版本
     backup_path = os.path.join(versions_dir, f"backup-{int(time.time())}.json")
     shutil.copy2(target_path, backup_path)
 
     # 回滚
-    shutil.copy2(source_path, target_path)
+    shutil.copy2(real_source, target_path)
 
     # 热重载
     rule_engine.reload()

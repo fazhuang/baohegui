@@ -1,11 +1,12 @@
 """文件上传 API"""
 
 import hashlib
+import logging
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, status
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -13,7 +14,6 @@ from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.document import UploadedFile
 from app.services.minio_service import minio_service
-import logging
 from app.services.parser import parser
 from app.services.quota_service import check_quota, consume_file
 
@@ -30,9 +30,10 @@ def _object_key(file_id: str, filename: str) -> str:
 
 @router.post("/")
 async def upload_file(
-
     file: UploadFile,
-    industry: Optional[str] = Form(default=None, description="行业标识，如 it/construction/healthcare，支持逗号分隔多选"),
+    industry: Optional[str] = Form(
+        default=None, description="行业标识，如 it/construction/healthcare，支持逗号分隔多选"
+    ),
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -50,11 +51,26 @@ async def upload_file(
         )
 
     # 验证扩展名
-    ext = file.filename.split(".")[-1].lower() if "." in file.filename else ""
+    filename = file.filename or ""
+    ext = filename.split(".")[-1].lower() if "." in filename else ""
     if ext not in settings.allowed_extensions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"不支持的文件格式: {ext}，仅支持 {', '.join(settings.allowed_extensions)}",
+        )
+
+    # 验证 MIME 类型
+    allowed_mime_types = {
+        "pdf": ["application/pdf"],
+        "docx": [
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ],
+    }
+    content_type = (file.content_type or "").lower()
+    if content_type and content_type not in allowed_mime_types.get(ext, []):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"文件 MIME 类型不匹配: {content_type}",
         )
 
     # 读取文件内容
@@ -72,7 +88,11 @@ async def upload_file(
     file_id = str(uuid.uuid4())
     storage_key = _object_key(file_id, file.filename)
 
-    content_type = "application/pdf" if ext == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    content_type = (
+        "application/pdf"
+        if ext == "pdf"
+        else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
     try:
         minio_service.upload(storage_key, content, content_type=content_type)
     except Exception as e:
@@ -97,8 +117,6 @@ async def upload_file(
                 detail=f"文件解析失败: {str(e)}",
             )
 
-
-
     # 归一化行业参数
     industries: list[str] = []
     if industry:
@@ -118,11 +136,9 @@ async def upload_file(
     db.commit()
     db.refresh(db_file)
 
-    # ── 消耗文件配额 ──────────────────────────────────────
-    consume_file(db, user_id)
-
     # 保存章节
     from app.models.document import DocumentSection
+
     for sec in parsed.raw_sections:
         db_section = DocumentSection(
             file_id=db_file.id,
@@ -134,6 +150,9 @@ async def upload_file(
         )
         db.add(db_section)
     db.commit()
+
+    # ── 上传成功后才消耗配额（先上传→成功后消耗），避免用户因系统故障损失配额 ──
+    consume_file(db, user_id)
 
     return {
         "file_id": file_id,

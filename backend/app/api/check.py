@@ -2,6 +2,7 @@
 
 import logging
 import time
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -24,6 +25,24 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/check", tags=["check"])
 
+# ── Simple in-memory rate limiter ────────────────────────────
+_rate_limit_store: dict[str, list[float]] = defaultdict(list)
+_RATE_LIMIT_WINDOW = 60  # seconds
+_RATE_LIMIT_MAX = 10     # max requests per window
+
+
+def _check_rate_limit(user_id: str) -> bool:
+    """Returns True if rate limit not exceeded"""
+    now = time.time()
+    window_start = now - _RATE_LIMIT_WINDOW
+    _rate_limit_store[user_id] = [
+        t for t in _rate_limit_store[user_id] if t > window_start
+    ]
+    if len(_rate_limit_store[user_id]) >= _RATE_LIMIT_MAX:
+        return False
+    _rate_limit_store[user_id].append(now)
+    return True
+
 
 @router.post("/{file_id}")
 async def run_compliance_check(
@@ -45,6 +64,14 @@ async def run_compliance_check(
     user: dict = Depends(get_current_user),
 ):
     """对指定文件执行合规检查（支持行业规则激活 + 定变分离优化）"""
+    # Rate limit check
+    user_id_str = str(user["sub"])
+    if not _check_rate_limit(user_id_str):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="请求过于频繁，请稍后再试（每分钟最多10次）",
+        )
+
     db_file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
     if not db_file:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在")
