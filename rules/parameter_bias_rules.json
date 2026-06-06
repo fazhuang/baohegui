@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "description": "参数倾向性检测规则 — 从 hlgs（华招国际）parameter_bias_rules.json 移植，基于甘肃省政府采购网 558 个投诉案例中 337 个参数相关案例分析",
-  "last_updated": "2026-06-04",
+  "last_updated": "2026-06-06",
   "source": "hlgs config/rules/parameter_bias_rules.json",
   "stats": {
     "total_cases": 558,
@@ -117,6 +117,53 @@
       "check_logic": "引用标准应符合：标准号+年号格式，验证标准是否存在且现行有效",
       "suggestion": "核实引用标准的有效性，使用现行有效版本",
       "rule_id": "AI-BIAS-010"
+    },
+    "case_driven_authorization_lock": {
+      "severity": "high",
+      "risk_level": "高",
+      "description": "案例驱动：特定厂家授权锁——基于某高校智慧校园建设通报案例（hlgs R_AUTO_D1F457）",
+      "keywords": [
+        "厂家授权函",
+        "原厂授权",
+        "特定厂商",
+        "核心软硬件厂商",
+        "厂商授权书"
+      ],
+      "check_fields": ["qualification_requirements"],
+      "check_logic": "搜索资格要求中是否含特定厂家授权相关的强制性要求",
+      "suggestion": "移除厂家授权作为资格条件的条款，改为技术参数满足即可",
+      "rule_id": "R301"
+    },
+    "case_driven_local_branch_lock": {
+      "severity": "high",
+      "risk_level": "高",
+      "description": "案例驱动：本地分支机构要求——基于工程类招标违规要求当地分支机构证明的警示（hlgs R_AUTO_C15A5C）",
+      "keywords": [
+        "设有分公司",
+        "当地分支机构",
+        "项目所在地.*分支",
+        "在本市.*设有",
+        "注册.*分支机构"
+      ],
+      "check_fields": ["qualification_requirements"],
+      "check_logic": "搜索是否要求投标人在项目所在地设有分支机构",
+      "suggestion": "取消分支机构证明要求，改为中标后设立或承诺提供本地化服务",
+      "rule_id": "R307"
+    },
+    "case_driven_high_threshold_scoring": {
+      "severity": "medium",
+      "risk_level": "中",
+      "description": "案例驱动：评标标准畸高——基于交通监控设施项目评标标准畸高通报（hlgs R_AUTO_9464A4）",
+      "keywords": [
+        "业绩分值",
+        "评分权重",
+        "技术分.*占比",
+        "业绩.*分.*高"
+      ],
+      "check_fields": ["scoring_criteria", "evaluation_criteria"],
+      "check_logic": "评估评分标准中业绩分值或技术分值是否畸高",
+      "suggestion": "确保评审因素分值分配合理，业绩分不宜超过总分30%",
+      "rule_id": "R308"
     }
   }
 }

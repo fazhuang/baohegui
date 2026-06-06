@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.engine.rule_engine import RuleEngine, Violation, RuleEngineResult
+from app.engine.rule_engine import RuleEngine, RuleEngineResult
 
 
 @pytest.fixture
@@ -15,6 +15,7 @@ def engine() -> RuleEngine:
 # ═══════════════════════════════════════════════════════════════
 # 规则加载
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestRuleLoading:
     def test_rules_loaded(self, engine):
@@ -38,13 +39,19 @@ class TestRuleLoading:
 # 章节完整性检查
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestCheckSections:
     def test_all_sections_present(self, engine):
         sections = {
-            "招标公告": "...", "招标范围": "...", "资格要求": "...",
-            "评审办法": "...", "投标须知": "...",
-            "合同条款": "...", "投标文件格式": "...",
-            "报价要求": "...", "履约要求": "...",
+            "招标公告": "...",
+            "招标范围": "...",
+            "资格要求": "...",
+            "评审办法": "...",
+            "投标须知": "...",
+            "合同条款": "...",
+            "投标文件格式": "...",
+            "报价要求": "...",
+            "履约要求": "...",
         }
         vs = engine.check_sections(parsed_sections=sections)
         # 剩余缺失: 投标保证金(SEC-007), 保密条款(SEC-011), 知识产权(SEC-012)
@@ -77,13 +84,21 @@ class TestCheckSections:
 # 关键字合规检查
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestCheckKeywords:
     def test_keywords_present(self, engine):
         sections = {
             "招标公告": "本项目采用公开招标方式。开标时间为2026年7月1日。",
             "评审办法": "评审标准详见评分细则。",
-            "投标须知": "投标截止时间2026年7月1日。投标有效期90天。废标情形如下。质疑投诉渠道如下。保密要求。信用中国查询。开标时间。履约保证金。报价有效期。",
-            "资格要求": "投标人应公平竞争。允许联合体投标。允许分包。中小企业优惠。节能环保产品优先。廉洁承诺。",
+            "投标须知": (
+                "投标截止时间2026年7月1日。投标有效期90天。废标情形如下。"
+                "质疑投诉渠道如下。保密要求。信用中国查询。开标时间。"
+                "履约保证金。报价有效期。"
+            ),
+            "资格要求": (
+                "投标人应公平竞争。允许联合体投标。允许分包。"
+                "中小企业优惠。节能环保产品优先。廉洁承诺。"
+            ),
             "合同条款": "付款方式。验收程序。违约责任。争议解决方式。",
         }
         vs = engine.check_keywords(sections)
@@ -111,6 +126,7 @@ class TestCheckKeywords:
 # ═══════════════════════════════════════════════════════════════
 # 禁用词检测
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestCheckForbidden:
     def test_detect_forbidden_words(self, engine):
@@ -145,6 +161,7 @@ class TestCheckForbidden:
 # ═══════════════════════════════════════════════════════════════
 # 完整运行
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestRun:
     def test_full_run(self, engine, sample_sections):
@@ -182,9 +199,16 @@ class TestRun:
         sections = {
             "招标公告": "本项目采用公开招标方式，欢迎合格供应商。采购预算500万元。",
             "招标范围": "采购内容详见附件。项目背景：提升信息化水平。",
-            "资格要求": "公平竞争，允许联合体投标，允许分包。中小企业优惠。投标人应具有独立法人资格。",
+            "资格要求": (
+                "公平竞争，允许联合体投标，允许分包。中小企业优惠。投标人应具有独立法人资格。"
+            ),
             "评审办法": "综合评分法。评审标准：技术方案40分，价格30分。节能环保产品加分。",
-            "投标须知": "投标截止时间：2026年7月1日。投标有效期90天。废标情形详见条款。质疑投诉渠道：XXX。信用中国查询。开标时间。保密要求。廉洁承诺。踏勘安排详见附件。报价有效期90天。",
+            "投标须知": (
+                "投标截止时间：2026年7月1日。投标有效期90天。"
+                "废标情形详见条款。质疑投诉渠道：XXX。信用中国查询。"
+                "开标时间。保密要求。廉洁承诺。踏勘安排详见附件。"
+                "报价有效期90天。"
+            ),
             "合同条款": "双方权利义务，付款方式，验收标准，违约责任，争议解决方式。履约保证金。",
             "投标文件格式": "投标函、报价表、资格证明文件。",
             "投标保证金": "保证金金额10万元。",
@@ -197,7 +221,9 @@ class TestRun:
 
         # 章节完整性：SEC-005(评标办法) target="评标办法"→ 归一映射为"评审办法" → 不报
         section_vs = [v for v in result.violations if v.rule_type == "chapter_required"]
-        assert len(section_vs) <= 1, f"预期至多1条章节缺失，实际: {[(v.rule_id,v.description) for v in section_vs]}"
+        assert len(section_vs) <= 1, (
+            f"预期至多1条章节缺失，实际: {[(v.rule_id, v.description) for v in section_vs]}"
+        )
 
         # 关键字：大部分关键字覆盖 → 少量可能缺失
         keyword_vs = [v for v in result.violations if v.rule_type == "keyword_required"]
@@ -249,15 +275,13 @@ class TestRun:
                 "2. 投标人须获得XX品牌唯一授权。"
             ),
             "评审办法": (
-                "指定品牌产品优先。本地注册企业加分。独家代理权作为评分项。"
-                "地域限制违反政府采购法。"
+                "指定品牌产品优先。本地注册企业加分。独家代理权作为评分项。地域限制违反政府采购法。"
             ),
         }
         vs = engine.check_forbidden_words(sections)
         # FORB-A04(指定品牌), FORB-H02(本地注册), FORB-A03(唯一授权),
         # FORB-H04(地域限制), FORB-A05(独家), FORB-H02(本地)
-        expected_new = {"FORB-A04", "FORB-H02", "FORB-A03",
-                    "FORB-H04", "FORB-A05"}
+        expected_new = {"FORB-A04", "FORB-H02", "FORB-A03", "FORB-H04", "FORB-A05"}
         found = {v.rule_id for v in vs}
         missing = expected_new - found
         assert len(found) >= 3, f"预期至少3条违规，实际 {found}，缺失 {missing}"
@@ -305,10 +329,9 @@ class TestRun:
     def test_large_document_speed(self, engine):
         """200 页规模的大文档规则引擎应在 1 秒内完成"""
         import time
+
         # 模拟 200 页 ≈ 200 个段落，每段约 200 字
-        large_content = "\n\n".join(
-            f"第{i}段：" + "合规内容。" * 30 for i in range(200)
-        )
+        large_content = "\n\n".join(f"第{i}段：" + "合规内容。" * 30 for i in range(200))
         sections = {
             "招标公告": large_content[:5000],
             "招标范围": large_content[:5000],
@@ -350,7 +373,6 @@ class TestRun:
     def test_reload_after_file_change(self, engine, tmp_path):
         """修改规则 JSON 文件后 reload() 应反映变更"""
         import json
-        from pathlib import Path
 
         # 在临时目录创建自定义规则文件
         rules_dir = tmp_path / "rules"
@@ -368,15 +390,18 @@ class TestRun:
             ],
         }
         (rules_dir / "base_rules.json").write_text(
-            json.dumps(custom_rules, ensure_ascii=False), encoding="utf-8",
+            json.dumps(custom_rules, ensure_ascii=False),
+            encoding="utf-8",
         )
         # 空的禁用词文件（避免加载错误）
         (rules_dir / "forbidden_words.json").write_text(
-            json.dumps({"patterns": {}}), encoding="utf-8",
+            json.dumps({"patterns": {}}),
+            encoding="utf-8",
         )
         # 空的平台映射
         (rules_dir / "platform_rules.json").write_text(
-            json.dumps({"mappings": []}), encoding="utf-8",
+            json.dumps({"mappings": []}),
+            encoding="utf-8",
         )
 
         # 创建新引擎指向临时目录
@@ -385,17 +410,20 @@ class TestRun:
         assert custom_engine.rules[0].id == "CUSTOM-001"
 
         # 修改规则文件
-        custom_rules["rules"].append({
-            "id": "CUSTOM-002",
-            "type": "keyword_required",
-            "target": "关键字测试",
-            "keyword": "测试关键字",
-            "weight": 10,
-            "description": "第二个自定义规则",
-            "suggestion": "补充关键字",
-        })
+        custom_rules["rules"].append(
+            {
+                "id": "CUSTOM-002",
+                "type": "keyword_required",
+                "target": "关键字测试",
+                "keyword": "测试关键字",
+                "weight": 10,
+                "description": "第二个自定义规则",
+                "suggestion": "补充关键字",
+            }
+        )
         (rules_dir / "base_rules.json").write_text(
-            json.dumps(custom_rules, ensure_ascii=False), encoding="utf-8",
+            json.dumps(custom_rules, ensure_ascii=False),
+            encoding="utf-8",
         )
 
         # 热加载
@@ -412,28 +440,40 @@ class TestRun:
 
         # 基础规则（空）
         (rules_dir / "base_rules.json").write_text(
-            json.dumps({"rules": []}), encoding="utf-8",
+            json.dumps({"rules": []}),
+            encoding="utf-8",
         )
         # 平台映射（空）
         (rules_dir / "platform_rules.json").write_text(
-            json.dumps({"mappings": []}), encoding="utf-8",
+            json.dumps({"mappings": []}),
+            encoding="utf-8",
         )
 
         # 初始禁用词 — 使用 engine 读取的 "patterns" 格式
-        (rules_dir / "forbidden_words.json").write_text(json.dumps({
-            "version": "1.0",
-            "patterns": {
-                "test_cat": {
-                    "label": "测试分类",
-                    "severity": "high",
-                    "regex_list": [
-                        {"id": "FORB-T1", "pattern": "测试词A", "weight": 10,
-                         "message": "测试禁用词A", "suggestion": "修改A",
-                         "severity": "high"},
-                    ],
-                },
-            },
-        }), encoding="utf-8")
+        (rules_dir / "forbidden_words.json").write_text(
+            json.dumps(
+                {
+                    "version": "1.0",
+                    "patterns": {
+                        "test_cat": {
+                            "label": "测试分类",
+                            "severity": "high",
+                            "regex_list": [
+                                {
+                                    "id": "FORB-T1",
+                                    "pattern": "测试词A",
+                                    "weight": 10,
+                                    "message": "测试禁用词A",
+                                    "suggestion": "修改A",
+                                    "severity": "high",
+                                },
+                            ],
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
         engine_custom = RuleEngine(rules_dir=str(rules_dir))
         assert len(engine_custom.rules) == 1
@@ -441,28 +481,41 @@ class TestRun:
         assert forb_ids == {"FORB-T1"}
 
         # 添加新禁用词
-        (rules_dir / "forbidden_words.json").write_text(json.dumps({
-            "version": "1.0",
-            "patterns": {
-                "test_cat": {
-                    "label": "测试分类",
-                    "severity": "high",
-                    "regex_list": [
-                        {"id": "FORB-T1", "pattern": "测试词A", "weight": 10,
-                         "message": "测试禁用词A", "suggestion": "修改A",
-                         "severity": "high"},
-                        {"id": "FORB-T2", "pattern": "测试词B", "weight": 15,
-                         "message": "测试禁用词B", "suggestion": "修改B",
-                         "severity": "medium"},
-                    ],
-                },
-            },
-        }), encoding="utf-8")
+        (rules_dir / "forbidden_words.json").write_text(
+            json.dumps(
+                {
+                    "version": "1.0",
+                    "patterns": {
+                        "test_cat": {
+                            "label": "测试分类",
+                            "severity": "high",
+                            "regex_list": [
+                                {
+                                    "id": "FORB-T1",
+                                    "pattern": "测试词A",
+                                    "weight": 10,
+                                    "message": "测试禁用词A",
+                                    "suggestion": "修改A",
+                                    "severity": "high",
+                                },
+                                {
+                                    "id": "FORB-T2",
+                                    "pattern": "测试词B",
+                                    "weight": 15,
+                                    "message": "测试禁用词B",
+                                    "suggestion": "修改B",
+                                    "severity": "medium",
+                                },
+                            ],
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
         engine_custom.reload()
-        forb_ids_after = {
-            r.id for r in engine_custom.rules if r.type == "forbidden"
-        }
+        forb_ids_after = {r.id for r in engine_custom.rules if r.type == "forbidden"}
         assert forb_ids_after == {"FORB-T1", "FORB-T2"}
 
     def test_reload_no_file_fallback(self, engine, tmp_path):
@@ -471,3 +524,65 @@ class TestRun:
         # reload 不应抛异常
         empty_engine.reload()
         assert len(empty_engine.rules) == 0
+
+
+# ═══════════════════════════════════════════════════════════════
+# Batch 1: hlgs 通报资产规则验证
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestBatch1HlgsAutoRules:
+    """验证 12 条 hlgs 通报资产规则正确追加到 compliance_rules.json"""
+
+    def test_r301_auth_lock_detected(self):
+        """R301: 特定厂家授权作为资格条件"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        r301 = next(r for r in data["rules"] if r["rule_id"] == "R301")
+        assert r301["category"] == "A"
+        assert r301["rule_type"] == "forbidden_pattern"
+        assert "厂家授权" in r301["forbidden_pattern"]
+
+    def test_r307_local_branch_detected(self):
+        """R307: 要求当地分支机构证明"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        r307 = next(r for r in data["rules"] if r["rule_id"] == "R307")
+        assert r307["category"] == "A"
+        assert "分支" in r307["forbidden_pattern"]
+
+    def test_all_12_hlgs_rules_present(self):
+        """验证 12 条 R301-R312 规则均存在且格式正确"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        for rid in [f"R{300 + i}" for i in range(1, 13)]:  # R301 - R312
+            rule = next((r for r in data["rules"] if r["rule_id"] == rid), None)
+            assert rule is not None, f"{rid} 缺失"
+            assert "rule_id" in rule
+            assert "rule_name" in rule
+            assert "rule_type" in rule
+            assert "forbidden_pattern" in rule
+            assert "risk_level" in rule
+            assert "regulation_basis" in rule
+
+    def test_total_rules_after_batch1(self):
+        """Batch 1 后规则总数为 47"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        assert len(data["rules"]) == 47, f"Expected 47 rules, got {len(data['rules'])}"
