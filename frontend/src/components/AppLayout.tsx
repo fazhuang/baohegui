@@ -82,11 +82,14 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
   }, [navigate])
 
   const handleLogout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('role')
-    localStorage.removeItem('username')
-    if (onLogout) onLogout()
-    navigate('/login')
+    if (onLogout) {
+      onLogout()
+    } else {
+      localStorage.removeItem('token')
+      localStorage.removeItem('role')
+      localStorage.removeItem('username')
+      navigate('/login')
+    }
   }
 
   // ── Sidebar menu items (icon only) ───────────────────

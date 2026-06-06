@@ -30,7 +30,8 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
-      window.location.href = '/login'
+      // 使用 root path 而非 /login 避免 Vercel SPA 硬导航 404
+      window.location.href = '/'
     }
     return Promise.reject(error)
   }
