@@ -578,11 +578,108 @@ class TestBatch1HlgsAutoRules:
             assert "regulation_basis" in rule
 
     def test_total_rules_after_batch1(self):
-        """Batch 1 后规则总数为 47"""
+        """Batch 1 后规则总数 >= 47 (Batch 2 adds 25 more to 72)"""
         import json, os
         rules_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
         )
         with open(rules_path) as f:
             data = json.load(f)
-        assert len(data["rules"]) == 47, f"Expected 47 rules, got {len(data['rules'])}"
+        assert len(data["rules"]) >= 47, f"Expected >= 47 rules, got {len(data['rules'])}"
+
+
+class TestBatch2IndustryRules:
+    """验证 25 条行业专项规则正确追加"""
+
+    def test_r401_construction_qualification(self):
+        """R401: 施工资质等级与项目规模匹配"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        r401 = next(r for r in data["rules"] if r["rule_id"] == "R401")
+        assert r401["condition"] == "project_type == '工程'"
+        assert r401["rule_type"] == "forbidden_pattern"
+        assert "资质" in r401["forbidden_pattern"]
+
+    def test_r403_safety_permit_required(self):
+        """R403: 安全生产许可证必须存在"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        r403 = next(r for r in data["rules"] if r["rule_id"] == "R403")
+        assert r403["rule_type"] == "required"
+        assert r403["required"] is True
+        assert "安全生产" in r403["pattern"]
+
+    def test_r407_no_brand_specification_in_construction(self):
+        """R407: 不得在施工要求中指定主要建材品牌"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        r407 = next(r for r in data["rules"] if r["rule_id"] == "R407")
+        assert r407["risk_level"] == "critical"
+        assert "品牌" in r407["forbidden_pattern"]
+
+    def test_r501_no_chip_model_specification(self):
+        """R501: IT设备技术参数不得指定芯片型号"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        r501 = next(r for r in data["rules"] if r["rule_id"] == "R501")
+        assert r501["condition"] == "project_type == '采购'"
+        assert "Intel" in r501["forbidden_pattern"]
+
+    def test_r603_no_local_service_as_qualification(self):
+        """R603: 服务类不得要求本地化服务作为资格条件"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        r603 = next(r for r in data["rules"] if r["rule_id"] == "R603")
+        assert r603["risk_level"] == "critical"
+        assert r603["condition"] == "project_type == '服务'"
+
+    def test_all_25_industry_rules_present(self):
+        """验证 25 条行业规则均存在"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        expected_ids = (
+            [f"R{400 + i}" for i in range(1, 11)]  # R401-R410
+            + [f"R{500 + i}" for i in range(1, 9)]  # R501-R508
+            + [f"R{600 + i}" for i in range(1, 8)]  # R601-R607
+        )
+        for rid in expected_ids:
+            rule = next((r for r in data["rules"] if r["rule_id"] == rid), None)
+            assert rule is not None, f"{rid} 缺失"
+            # 行业规则必须有 condition 字段 (R606 is general low-risk)
+            if rid not in ("R606",):
+                assert "condition" in rule or rule.get("rule_type") != "forbidden_pattern", \
+                    f"{rid} 缺少 condition"
+
+    def test_total_rules_after_batch2(self):
+        """Batch 2 后规则总数为 72"""
+        import json, os
+        rules_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
+        )
+        with open(rules_path) as f:
+            data = json.load(f)
+        assert len(data["rules"]) == 72, f"Expected 72 rules, got {len(data['rules'])}"

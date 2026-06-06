@@ -164,6 +164,36 @@
       "check_logic": "评估评分标准中业绩分值或技术分值是否畸高",
       "suggestion": "确保评审因素分值分配合理，业绩分不宜超过总分30%",
       "rule_id": "R308"
+    },
+    "construction_exclusivity": {
+      "severity": "critical",
+      "risk_level": "严重",
+      "description": "工程建设参数排他：检测施工要求中是否指定主要建材品牌、施工工艺等排他性内容",
+      "keywords": ["须采用*品牌", "指定*品牌*材料", "钢材须为*品牌", "水泥指定", "电缆指定*品牌", "涂料指定*品牌"],
+      "check_fields": ["technical_params"],
+      "check_logic": "搜索施工技术参数中是否含指定主要建材品牌的表述",
+      "suggestion": "改用性能指标而非指定品牌，或列出至少3个同等档次品牌并注明'或同等品'",
+      "rule_id": "R407"
+    },
+    "it_brand_lock": {
+      "severity": "critical",
+      "risk_level": "严重",
+      "description": "IT品牌锁定：检测IT设备技术参数是否通过芯片型号、整机认证、软件授权等构成组合品牌锁定",
+      "keywords": ["Intel Core", "AMD Ryzen", "整机原厂认证", "原厂出厂检测", "指定软件版本", "无缝对接", "Oracle*版本", "SQL Server*版本"],
+      "check_fields": ["technical_params"],
+      "check_logic": "搜索IT设备技术参数中是否含芯片型号指定、整机认证要求、软件版本锁定等组合锁定模式",
+      "suggestion": "使用性能指标代替品牌型号，确保至少3个品牌可满足",
+      "rule_id": "R501"
+    },
+    "service_cert_lock": {
+      "severity": "high",
+      "risk_level": "高",
+      "description": "服务认证排他：检测服务类招标中是否通过认证体系、学历要求、本地化等组合限制竞争",
+      "keywords": ["ISO*认证", "特定认证体系", "学历必须", "本科及以上", "研究生学历", "本地服务必须", "须在*本*有*服务", "须在*本*设有"],
+      "check_fields": ["qualification_requirements"],
+      "check_logic": "搜索服务类招标资格要求中是否含特定认证体系、学历限制、本地化服务等组合排他条件",
+      "suggestion": "认证要求限于国家强制性认证或与项目直接相关，学历要求改为能力要求，本地化服务改为中标后承诺",
+      "rule_id": "R603"
     }
   }
 }
