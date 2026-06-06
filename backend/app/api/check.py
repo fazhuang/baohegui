@@ -1,6 +1,7 @@
 """合规检查 API"""
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -70,15 +71,21 @@ async def run_compliance_check(
         industry_list = [ind.strip() for ind in industries.split(",") if ind.strip()]
         rule_engine.set_active_industries(industry_list)
 
+    # ── 性能计时 ──────────────────────────────────────────────
+    t_check_start = time.monotonic()
+
     # ── 第0层：零Token路由审查 ──────────────────────────────
+    t0 = time.monotonic()
     budget = _extract_budget_from_document(parsed)
     routing_result = compliance_router.route(
         budget=budget,
         procurement_method=procurement_method or "",
         project_type=project_type or "",
     )
+    t_routing = time.monotonic() - t0
 
     # ── 定变分离预处理 ──────────────────────────────────────
+    t0 = time.monotonic()
     # 对文档内容进行模板固定内容 vs 代理机构填写内容的标记
     marked_doc = None
     try:
@@ -91,21 +98,27 @@ async def run_compliance_check(
     except Exception as e:
         # 定变分离失败不影响审查主流程（回退到无过滤模式）
         logger.warning("定变分离标记失败，将跳过模板过滤: %s", e)
+    t_marker = time.monotonic() - t0
 
-    # 规则引擎检查（传入 marked_doc → 智能跳过 FIXED 区域）
+    # ── 第1层：规则引擎检查（传入 marked_doc → 智能跳过 FIXED 区域）──
+    t0 = time.monotonic()
     rule_result = rule_engine.run(
         sections=parsed.sections,
         full_text=parsed.full_text,
         marked_doc=marked_doc,
     )
+    t_rules = time.monotonic() - t0
 
     # ── 第2层：参数倾向性检测 ──────────────────────────────────
+    t0 = time.monotonic()
     parameter_bias_detector = ParameterBiasDetector()
     parameter_bias_result = parameter_bias_detector.run(
         sections=parsed.sections,
     )
+    t_param_bias = time.monotonic() - t0
 
     # ── 第3层：LLM语义审查（遵循路由决策）──────────────────────
+    t0 = time.monotonic()
     target_sections = set(parsed.sections.keys()) if parsed.sections else set()
     if not target_sections:
         target_sections = {"评审办法", "技术要求"}
@@ -122,8 +135,12 @@ async def run_compliance_check(
             target_section_types=target_sections,
             marked_doc=marked_doc,
         )
+    t_llm = time.monotonic() - t0
 
-    # 融合结果
+    # ── 汇总层：融合结果 ─────────────────────────────────────
+    t0 = time.monotonic()
+    # ── 汇总层：融合结果 ─────────────────────────────────────
+    t0 = time.monotonic()
     report = fusion_engine.merge(
         rule_result=rule_result,
         llm_result=llm_result,
@@ -140,6 +157,10 @@ async def run_compliance_check(
         llm_result=llm_result,
         parse_quality=parse_quality,
     )
+    t_fusion = time.monotonic() - t0
+
+    # ── 总耗时 ──────────────────────────────────────────────
+    t_total = time.monotonic() - t_check_start
 
     # 保存报告
     import json
@@ -205,6 +226,15 @@ async def run_compliance_check(
             "high_risk_count": merge_result.high_risk_count,
             "needs_review_count": merge_result.needs_review_count,
         },
+        "timing": {
+            "total_seconds": round(t_total, 3),
+            "routing_ms": round(t_routing * 1000, 1),
+            "marker_ms": round(t_marker * 1000, 1),
+            "rules_ms": round(t_rules * 1000, 1),
+            "param_bias_ms": round(t_param_bias * 1000, 1),
+            "llm_ms": round(t_llm * 1000, 1),
+            "fusion_ms": round(t_fusion * 1000, 1),
+        },
     }
 
     db_report = ComplianceReport(
@@ -264,6 +294,15 @@ async def run_compliance_check(
         "merge_requires_human_review": merge_result.requires_human_review,
         "merge_confirmed_count": merge_result.confirmed_count,
         "merge_high_risk_count": merge_result.high_risk_count,
+        "timing": {
+            "total_seconds": round(t_total, 3),
+            "routing_ms": round(t_routing * 1000, 1),
+            "marker_ms": round(t_marker * 1000, 1),
+            "rules_ms": round(t_rules * 1000, 1),
+            "param_bias_ms": round(t_param_bias * 1000, 1),
+            "llm_ms": round(t_llm * 1000, 1),
+            "fusion_ms": round(t_fusion * 1000, 1),
+        },
     }
 
 

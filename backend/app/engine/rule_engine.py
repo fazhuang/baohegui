@@ -10,12 +10,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Optional
+
 from pydantic import BaseModel, Field
 
 # 共享类型：Violation / RuleEngineResult 提取到 shared_types，消除循环导入
@@ -25,11 +28,31 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════
+# Simple hash-based cache for rule engine results
+# ═══════════════════════════════════════════════════════════════
+
+_cache: dict[str, tuple[float, RuleEngineResult]] = {}
+_CACHE_MAX_SIZE = 50
+
+
+def _cache_key(sections: dict[str, str], marked_doc: Any = None) -> str:
+    """Generate a deterministic cache key from section content hashes.
+
+    Uses section-name + content-length to detect content changes
+    while being fast to compute (avoids hashing large full-text bodies).
+    """
+    content = "|".join(f"{k}:{len(v)}" for k, v in sorted(sections.items()))
+    return hashlib.md5(content.encode()).hexdigest()
+
+
+# ═══════════════════════════════════════════════════════════════
 # 数据模型
 # ═══════════════════════════════════════════════════════════════
 
+
 class RuleDefinition(BaseModel):
     """单条规则定义（来自 JSON 配置）"""
+
     id: str
     type: str = Field(
         ...,
@@ -41,10 +64,10 @@ class RuleDefinition(BaseModel):
     law_ref: Optional[str] = None
     suggestion: str = ""
     category: str = "base"
-    keyword: Optional[str] = None        # 关键字规则：必备关键字
-    target_section: Optional[str] = None # 关键字规则：期望关键字所在的章节
-    pattern: Optional[str] = None        # 禁用词规则：正则匹配模式
-    severity: str = "medium"             # 禁用词规则：严重程度
+    keyword: Optional[str] = None  # 关键字规则：必备关键字
+    target_section: Optional[str] = None  # 关键字规则：期望关键字所在的章节
+    pattern: Optional[str] = None  # 禁用词规则：正则匹配模式
+    severity: str = "medium"  # 禁用词规则：严重程度
     exclude_contexts: Optional[list[str]] = None  # 禁用词排除上下文（FORB-008 等）
 
 
@@ -55,8 +78,9 @@ __all__ = ["RuleDefinition", "Violation", "RuleEngineResult", "RuleEngine", "rul
 
 # ── 默认路径常量 ─────────────────────────────────────────────
 _RULES_DIR_DEFAULT = (
-    "/app/rules" if os.path.exists("/app") else
-    str(Path(__file__).resolve().parent.parent.parent.parent / "rules")
+    "/app/rules"
+    if os.path.exists("/app")
+    else str(Path(__file__).resolve().parent.parent.parent.parent / "rules")
 )
 
 # ── 章节同义词反向映射 ──────────────────────────────────────
@@ -107,15 +131,15 @@ _SECTION_SYNONYM_MAP: dict[str, str] = {
     "投标文件编制": "投标文件格式",
     "投标文件的编制": "投标文件格式",
     "投标保证金": "投标保证金",
-    "预算金额":"预算金额",
-    "预算控制价":"预算金额",
-    "最高限价":"预算金额",
-    "报价要求":"报价要求",
-    "履约要求":"履约要求",
-    "保密条款":"保密条款",
-    "知识产权":"知识产权",
-    "招标项目需求": "招标范围",          # 规则 SEC-003 target → 归入招标范围
-    "投标人": "资格要求",               # 广义关联
+    "预算金额": "预算金额",
+    "预算控制价": "预算金额",
+    "最高限价": "预算金额",
+    "报价要求": "报价要求",
+    "履约要求": "履约要求",
+    "保密条款": "保密条款",
+    "知识产权": "知识产权",
+    "招标项目需求": "招标范围",  # 规则 SEC-003 target → 归入招标范围
+    "投标人": "资格要求",  # 广义关联
     "技术规格": "招标范围",
     "验收标准": "验收标准",
     "耗材与配件": "耗材与配件",
@@ -125,6 +149,7 @@ _SECTION_SYNONYM_MAP: dict[str, str] = {
 # ═══════════════════════════════════════════════════════════════
 # 规则引擎核心
 # ═══════════════════════════════════════════════════════════════
+
 
 class RuleEngine:
     """
@@ -194,7 +219,7 @@ class RuleEngine:
                 for item in regex_list:
                     self.rules.append(
                         RuleDefinition(
-                            id=item.get("id", f"FORB-{len(self.rules)+1:03d}"),
+                            id=item.get("id", f"FORB-{len(self.rules) + 1:03d}"),
                             type="forbidden",
                             target=item.get("pattern", ""),
                             weight=item.get("weight", 10),
@@ -208,9 +233,11 @@ class RuleEngine:
                         )
                     )
 
-            logger.info("已加载 %d 条禁用词规则 (来自 %d 个分类)",
-                        len([r for r in self.rules if r.type == "forbidden"]),
-                        len(patterns_data))
+            logger.info(
+                "已加载 %d 条禁用词规则 (来自 %d 个分类)",
+                len([r for r in self.rules if r.type == "forbidden"]),
+                len(patterns_data),
+            )
 
         # 3. 行业细分规则
         if industry:
@@ -224,7 +251,9 @@ class RuleEngine:
                     self.rules.append(RuleDefinition(**r))
                 logger.info(
                     "已加载 %d 条行业规则（%s: %s）",
-                    len(ind_rules), industry_name, industry_path,
+                    len(ind_rules),
+                    industry_name,
+                    industry_path,
                 )
             else:
                 logger.warning("行业规则文件不存在: %s", industry_path)
@@ -346,7 +375,10 @@ class RuleEngine:
 
         logger.info(
             "已加载 %d 条行业规则（%s: %s），当前共 %d 条",
-            count, industry_name, industry_path, len(self.rules),
+            count,
+            industry_name,
+            industry_path,
+            len(self.rules),
         )
         return count
 
@@ -374,7 +406,8 @@ class RuleEngine:
 
         logger.info(
             "已设置活跃行业 %s，共 %d 条规则",
-            ", ".join(industries), len(self.rules),
+            ", ".join(industries),
+            len(self.rules),
         )
         return result
 
@@ -505,18 +538,22 @@ class RuleEngine:
         # ── 判断标记方法的可靠性 ──────────────────────────────
         is_fingerprint_mode = (
             marked_doc is not None
-            and hasattr(marked_doc, 'stats')
+            and hasattr(marked_doc, "stats")
             and marked_doc.stats.get("method") == "fingerprint"
         )
 
         for rule in keyword_rules:
             # 确定检查范围：指定章节（经同义词归一）或全文
-            target_sec = _SECTION_SYNONYM_MAP.get(rule.target_section, rule.target_section) if rule.target_section else None
+            target_sec = (
+                _SECTION_SYNONYM_MAP.get(rule.target_section, rule.target_section)
+                if rule.target_section
+                else None
+            )
             if target_sec:
                 target_text = sections.get(target_sec, "")
 
                 # 定变分离：仅在指纹库模式下信任 VARIABLE 过滤
-                if is_fingerprint_mode and hasattr(marked_doc, 'get_variable_text'):
+                if is_fingerprint_mode and hasattr(marked_doc, "get_variable_text"):
                     variable_text = marked_doc.get_variable_text(target_sec)
                     # 如果变量文本为空（可能全部被标为 FIXED），回退到原始文本
                     if variable_text.strip():
@@ -524,10 +561,11 @@ class RuleEngine:
                     else:
                         logger.debug(
                             "章节 [%s] 的变量文本为空，回退到原始文本进行关键字检查 (%d 字符)",
-                            target_sec, len(target_text),
+                            target_sec,
+                            len(target_text),
                         )
             else:
-                if is_fingerprint_mode and hasattr(marked_doc, 'get_variable_text'):
+                if is_fingerprint_mode and hasattr(marked_doc, "get_variable_text"):
                     variable_text = marked_doc.get_variable_text()
                     if variable_text.strip():
                         target_text = variable_text
@@ -538,10 +576,7 @@ class RuleEngine:
 
             if rule.keyword and rule.keyword not in target_text:
                 risk = "high" if rule.weight >= 15 else "medium"
-                location = (
-                    f"应在《{target_sec}》中" if target_sec
-                    else "全文"
-                )
+                location = f"应在《{target_sec}》中" if target_sec else "全文"
                 violations.append(
                     Violation(
                         rule_id=rule.id,
@@ -587,7 +622,7 @@ class RuleEngine:
         # ── 判断标记方法的可靠性 ──────────────────────────────
         is_fingerprint_mode = (
             marked_doc is not None
-            and hasattr(marked_doc, 'stats')
+            and hasattr(marked_doc, "stats")
             and marked_doc.stats.get("method") == "fingerprint"
         )
 
@@ -602,13 +637,12 @@ class RuleEngine:
             for sec_name, sec_text in sections.items():
                 # ── 定变分离：获取该章节的文本段列表 ──────────
                 spans = None
-                if marked_doc and hasattr(marked_doc, 'sections'):
+                if marked_doc and hasattr(marked_doc, "sections"):
                     spans = marked_doc.sections.get(sec_name)
 
                 for match in pattern.finditer(sec_text):
                     # 上下文排除：如果规则定义了 exclude_contexts，检查匹配片段是否在排除上下文中
                     if rule.exclude_contexts:
-                        match_text = match.group()
                         ctx_start = max(0, match.start() - 10)
                         ctx_end = min(len(sec_text), match.end() + 10)
                         surrounding = sec_text[ctx_start:ctx_end]
@@ -621,14 +655,14 @@ class RuleEngine:
                     tp_conf = 0.0
 
                     if spans:
-                        span_label = self._find_span_label(
-                            spans, match.start(), match.end()
-                        )
+                        span_label = self._find_span_label(spans, match.start(), match.end())
                         # 仅在指纹库模式下信任 FIXED 标签跳过匹配
                         if is_fingerprint_mode and span_label == "FIXED":
                             logger.debug(
                                 "跳过规则 %s 在 [%s] 的匹配（FIXED 模板区域，指纹库模式）: %s",
-                                rule.id, sec_name, match.group()[:50],
+                                rule.id,
+                                sec_name,
+                                match.group()[:50],
                             )
                             continue
                         # UNCERTAIN 区域的匹配 → 标记但保留
@@ -640,7 +674,9 @@ class RuleEngine:
                             tp_conf = 0.3  # 低置信度：启发式 FIXED 不可靠
                             logger.debug(
                                 "规则 %s 在 [%s] 启发式 FIXED 区域匹配，保留供审核: %s",
-                                rule.id, sec_name, match.group()[:50],
+                                rule.id,
+                                sec_name,
+                                match.group()[:50],
                             )
 
                     # 计算近似行号
@@ -681,7 +717,7 @@ class RuleEngine:
         fmt_rules = [r for r in self.rules if r.type == "format_required"]
 
         # format_required 规则 → 对应的搜索关键词
-        FORMAT_KEYWORD_MAP: dict[str, str] = {
+        format_keyword_map: dict[str, str] = {
             "页码": "页码",
             "密封要求": "密封",
             "签章要求": "签章",
@@ -692,7 +728,7 @@ class RuleEngine:
         }
 
         for rule in fmt_rules:
-            kw = FORMAT_KEYWORD_MAP.get(rule.target, rule.target)
+            kw = format_keyword_map.get(rule.target, rule.target)
             found = False
             for sec_text in sections.values():
                 if kw in sec_text:
@@ -765,12 +801,10 @@ class RuleEngine:
             return 100.0
 
         import math
+
         # 按 weight 降序排列，让高权重违规排前面（扣分更多）
         sorted_v = sorted(violations, key=lambda v: v.weight, reverse=True)
-        deduction = sum(
-            v.weight * 1.0 / math.sqrt(i + 1)
-            for i, v in enumerate(sorted_v)
-        )
+        deduction = sum(v.weight * 1.0 / math.sqrt(i + 1) for i, v in enumerate(sorted_v))
         # 最低保留 5 分
         return round(max(5.0, 100.0 - deduction), 1)
 
@@ -799,25 +833,39 @@ class RuleEngine:
         Returns:
             RuleEngineResult
         """
+        # ── 缓存检查：相同章节内容直接返回缓存结果 ─────────────────
+        key = _cache_key(sections, marked_doc)
+        if key in _cache:
+            logger.debug("RuleEngine cache hit (key=%s...)", key[:8])
+            return _cache[key][1]
+
         section_violations = self.check_sections(parsed_sections=sections, full_text=full_text)
         keyword_violations = self.check_keywords(sections, marked_doc=marked_doc)
         forbidden_violations = self.check_forbidden_words(sections, marked_doc=marked_doc)
         format_violations = self.check_format_keywords(sections)
 
-        all_violations = section_violations + keyword_violations + forbidden_violations + format_violations
+        all_violations = (
+            section_violations + keyword_violations + forbidden_violations + format_violations
+        )
 
         # 统计模板误报数
         tp_count = sum(1 for v in all_violations if v.is_template_false_positive)
         if tp_count > 0:
             logger.info("规则引擎检测到 %d 条模板误报（已跳过FIXED区域匹配）", tp_count)
 
-        return RuleEngineResult(
+        result = RuleEngineResult(
             violations=all_violations,
             section_score=self._calc_score(section_violations),
             keyword_score=self._calc_score(keyword_violations),
             forbidden_score=self._calc_score(forbidden_violations),
             total_score=self._calc_score(all_violations),
         )
+
+        # ── 存入缓存 ───────────────────────────────────────────
+        if len(_cache) >= _CACHE_MAX_SIZE:
+            _cache.pop(next(iter(_cache)))
+        _cache[key] = (time.time(), result)
+        return result
 
     # ── 辅助：全文降级章节抽取 ──────────────────────────────
 

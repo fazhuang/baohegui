@@ -1044,6 +1044,63 @@ class LLMEngine:
 
         return self._calc_cost(input_tokens, output_tokens)
 
+    async def _process_chunk(
+        self,
+        client: httpx.AsyncClient,
+        chunk: dict,
+        models: list[tuple[str, dict]],
+    ) -> tuple[list[LLMViolation], dict, Optional[str], float]:
+        """Process a single chunk by calling the appropriate LLM(s).
+
+        Supports both single-model and multi-model (parallel) calling.
+        Each chunk is independent — safe to call concurrently for multiple chunks.
+
+        Returns:
+            (violations, usage_dict, error_message, duration_seconds)
+        """
+        t_start = time.monotonic()
+
+        if self.multi_model_enabled and len(models) > 1:
+            # ── Multi-model mode: parallel calls for this chunk ──
+            tasks = []
+            for model_name, model_cfg in models:
+                tasks.append(
+                    self._call_model_with_retry(
+                        client, chunk["prompt"], model_cfg, model_name,
+                    )
+                )
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            chunk_violations: list[LLMViolation] = []
+            chunk_usage_total: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+            chunk_err: Optional[str] = None
+
+            for i, result in enumerate(results):
+                model_name = models[i][0]
+                if isinstance(result, Exception):
+                    chunk_err = f"{model_name}: {result}"
+                    logger.warning("Model [%s] call exception: %s", model_name, result)
+                    continue
+                violations, usage, err = result
+                if err:
+                    if not chunk_err:
+                        chunk_err = err
+                    logger.warning("Model [%s] returned error: %s", model_name, err)
+                chunk_usage_total["prompt_tokens"] += usage.get("prompt_tokens", 0)
+                chunk_usage_total["completion_tokens"] += usage.get("completion_tokens", 0)
+                if violations:
+                    chunk_violations.extend(violations)
+        else:
+            # ── Single-model mode ──
+            model_name, model_cfg = models[0]
+            chunk_violations, chunk_usage_total, chunk_err = (
+                await self._call_model_with_retry(
+                    client, chunk["prompt"], model_cfg, model_name,
+                )
+            )
+
+        duration = time.monotonic() - t_start
+        return chunk_violations, chunk_usage_total, chunk_err, duration
+
     # ── 核心审查方法 ────────────────────────────────────────
 
     async def analyze(
@@ -1139,105 +1196,68 @@ class LLMEngine:
         timeout_cfg = httpx.Timeout(self.timeout, connect=15.0)
         limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
 
+        # ── 并行处理多个 chunk（每个 chunk 独立，安全并发） ──
         async with httpx.AsyncClient(timeout=timeout_cfg, limits=limits) as client:
-            for chunk in chunks:
-                t_start = time.monotonic()
+            tasks = [self._process_chunk(client, chunk, models) for chunk in chunks]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                if self.multi_model_enabled and len(models) > 1:
-                    # ── 多模型模式：并行调用所有模型，合并结果 ──
-                    tasks = []
-                    for model_name, model_cfg in models:
-                        tasks.append(
-                            self._call_model_with_retry(
-                                client,
-                                chunk["prompt"],
-                                model_cfg,
-                                model_name,
-                            )
-                        )
+        for i, result in enumerate(results):
+            chunk = chunks[i]
 
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
-                    chunk_violations: list[LLMViolation] = []
-                    chunk_usage_total = {"prompt_tokens": 0, "completion_tokens": 0}
-                    chunk_err: Optional[str] = None
+            if isinstance(result, Exception):
+                logger.warning(
+                    "章节 [%s] 并行处理异常: %s",
+                    chunk["section_name"],
+                    result,
+                )
+                last_error = str(result)
+                continue
 
-                    for i, result in enumerate(results):
-                        model_name = models[i][0]
-                        if isinstance(result, Exception):
-                            chunk_err = f"{model_name}: {result}"
-                            logger.warning(
-                                "模型 [%s] 调用异常: %s", model_name, result
-                            )
-                            continue
-                        violations, usage, err = result
-                        if err:
-                            if not chunk_err:
-                                chunk_err = err
-                            logger.warning(
-                                "模型 [%s] 返回错误: %s", model_name, err
-                            )
-                        chunk_usage_total["prompt_tokens"] += usage.get("prompt_tokens", 0)
-                        chunk_usage_total["completion_tokens"] += usage.get("completion_tokens", 0)
-                        if violations:
-                            chunk_violations.extend(violations)
-                else:
-                    # ── 单模型模式：保持原有行为 ──
-                    model_name, model_cfg = models[0]
-                    chunk_violations, chunk_usage_total, chunk_err = (
-                        await self._call_model_with_retry(
-                            client,
-                            chunk["prompt"],
-                            model_cfg,
-                            model_name,
-                        )
-                    )
+            chunk_violations, chunk_usage_total, chunk_err, duration = result
 
-                duration = time.monotonic() - t_start
+            pt = chunk_usage_total.get("prompt_tokens", 0)
+            ct = chunk_usage_total.get("completion_tokens", 0)
+            total_input_tokens += pt
+            total_output_tokens += ct
 
-                pt = chunk_usage_total.get("prompt_tokens", 0)
-                ct = chunk_usage_total.get("completion_tokens", 0)
-                total_input_tokens += pt
-                total_output_tokens += ct
+            # ── Record usage ─────────────────────────────
+            if not self.mock_mode:
+                chunk_cost = self._calc_cost_for_model(
+                    pt, ct,
+                    {"cost_per_1k_input": self.cost_per_1k_input,
+                     "cost_per_1k_output": self.cost_per_1k_output,
+                     "model": models_used_str},
+                )
+                self.usage_tracker.record_call(
+                    model=models_used_str,
+                    provider=self.provider_name,
+                    prompt_tokens=pt,
+                    completion_tokens=ct,
+                    duration_seconds=duration,
+                    cost_yuan=chunk_cost,
+                    success=(chunk_err is None),
+                    error_message=chunk_err or "",
+                    file_id=file_id,
+                    user_id=user_id,
+                    section_name=chunk["section_name"],
+                    prompt_length=len(chunk["prompt"]),
+                )
 
-                # ── 记录用量 ─────────────────────────────────
-                if not self.mock_mode:
-                    # 多模型使用混合模型成本
-                    chunk_cost = self._calc_cost_for_model(
-                        pt, ct,
-                        {"cost_per_1k_input": self.cost_per_1k_input,
-                         "cost_per_1k_output": self.cost_per_1k_output,
-                         "model": models_used_str},
-                    )
-                    self.usage_tracker.record_call(
-                        model=models_used_str,
-                        provider=self.provider_name,
-                        prompt_tokens=pt,
-                        completion_tokens=ct,
-                        duration_seconds=duration,
-                        cost_yuan=chunk_cost,
-                        success=(chunk_err is None),
-                        error_message=chunk_err or "",
-                        file_id=file_id,
-                        user_id=user_id,
-                        section_name=chunk["section_name"],
-                        prompt_length=len(chunk["prompt"]),
-                    )
-
-                if chunk_violations:
-                    for v in chunk_violations:
-                        if not v.section:
-                            v.section = chunk["section_name"]
-                    all_violations.extend(chunk_violations)
-                    sections_ok += 1
-                elif chunk_err:
-                    last_error = chunk_err
-                    logger.warning(
-                        "章节 [%s] 审查失败: %s",
-                        chunk["section_name"],
-                        chunk_err,
-                    )
-                else:
-                    sections_ok += 1  # 无违规也是成功
+            if chunk_violations:
+                for v in chunk_violations:
+                    if not v.section:
+                        v.section = chunk["section_name"]
+                all_violations.extend(chunk_violations)
+                sections_ok += 1
+            elif chunk_err:
+                last_error = chunk_err
+                logger.warning(
+                    "章节 [%s] 审查失败: %s",
+                    chunk["section_name"],
+                    chunk_err,
+                )
+            else:
+                sections_ok += 1  # no violations is also success
 
         total_tokens = total_input_tokens + total_output_tokens
 
