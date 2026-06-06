@@ -35,13 +35,15 @@ _cache: dict[str, tuple[float, RuleEngineResult]] = {}
 _CACHE_MAX_SIZE = 50
 
 
-def _cache_key(sections: dict[str, str], marked_doc: Any = None) -> str:
-    """Generate a deterministic cache key from section content hashes.
+def _cache_key(sections: dict[str, str], rule_count: int, marked_doc: Any = None) -> str:
+    """Generate a deterministic cache key from section content hashes + rule count.
 
-    Uses section-name + content-length to detect content changes
-    while being fast to compute (avoids hashing large full-text bodies).
+    Uses section-name + content-length + rule_count to detect content or rule changes.
+    Rule count ensures cache is invalidated when rules are added/removed,
+    avoiding stale results when rules change but document content stays the same.
     """
     content = "|".join(f"{k}:{len(v)}" for k, v in sorted(sections.items()))
+    content += f"|rules:{rule_count}"
     return hashlib.md5(content.encode()).hexdigest()
 
 
@@ -325,6 +327,7 @@ class RuleEngine:
 
     def reload(self) -> None:
         """热加载规则文件（运行时调用，无需重启）"""
+        _cache.clear()  # 清除缓存，确保规则变更后不再返回旧结果
         if self.active_industries:
             self.set_active_industries(self.active_industries)
         else:
@@ -833,8 +836,8 @@ class RuleEngine:
         Returns:
             RuleEngineResult
         """
-        # ── 缓存检查：相同章节内容直接返回缓存结果 ─────────────────
-        key = _cache_key(sections, marked_doc)
+        # ── 缓存检查：相同章节内容+规则数直接返回缓存结果 ─────────────────
+        key = _cache_key(sections, len(self.rules), marked_doc)
         if key in _cache:
             logger.debug("RuleEngine cache hit (key=%s...)", key[:8])
             return _cache[key][1]
