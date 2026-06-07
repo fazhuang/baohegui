@@ -418,6 +418,9 @@ class TestCostEstimation:
 
     def test_engine_calc_cost(self, monkeypatch):
         monkeypatch.setattr("app.core.config.settings.llm_mock_mode", True)
+        monkeypatch.setattr("app.core.config.settings.llm_model", "deepseek-chat")
+        monkeypatch.setattr("app.core.config.settings.llm_cost_per_1k_input", 0.0)
+        monkeypatch.setattr("app.core.config.settings.llm_cost_per_1k_output", 0.0)
         engine = LLMEngine()
         cost = engine._calc_cost(1000, 500)
         # deepseek-chat: input 0.001/k + output 0.002/k → 1000*0.001/1000 + 500*0.002/1000 = 0.002
