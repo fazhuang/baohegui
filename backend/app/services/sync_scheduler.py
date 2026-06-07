@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Any, Callable, Optional
 
 from app.services.rule_sync import rule_sync_service, rule_version_manager, SyncResult
+from app.core.config import settings as app_settings
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +69,18 @@ class SyncScheduler:
         sync_interval_hours: int = 24,
         max_retries: int = 3,
         on_sync_complete: Optional[OnSyncCallback] = None,
+        case_scrape_interval_hours: int = 168,
     ):
         self.sync_interval_hours = sync_interval_hours
         self.max_retries = max_retries
         self.on_sync_complete = on_sync_complete
+        self.case_scrape_interval_hours = case_scrape_interval_hours
 
         self._task: Optional[asyncio.Task] = None
+        self._case_task: Optional[asyncio.Task] = None
         self._running = False
         self._history: list[SyncTaskRecord] = []
+        self._case_history: list[SyncTaskRecord] = []
         self._max_history = 50
 
     # ── 生命周期 ─────────────────────────────────────────
@@ -90,6 +95,9 @@ class SyncScheduler:
             "同步调度器已启动（间隔 %d 小时，最大重试 %d 次）",
             self.sync_interval_hours, self.max_retries,
         )
+        if app_settings.case_scrape_enabled:
+            self._case_task = asyncio.create_task(self._run_case_scrape_loop())
+            logger.info("案例采集循环已启动（间隔 %d 小时）", self.case_scrape_interval_hours)
 
     async def stop(self) -> None:
         """停止定时调度"""
@@ -101,29 +109,77 @@ class SyncScheduler:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        if self._case_task:
+            self._case_task.cancel()
+            try:
+                await self._case_task
+            except asyncio.CancelledError:
+                pass
+            self._case_task = None
         logger.info("同步调度器已停止")
 
     async def _run_loop(self) -> None:
-        """后台循环：按间隔执行同步"""
+        """后台循环：按间隔执行规则同步"""
         while self._running:
             try:
-                # 凌晨 2 点执行（简化：启动后等 interval/2 首次执行）
                 await asyncio.sleep(self.sync_interval_hours * 3600)
-
                 if not self._running:
                     break
-
-                # 对所有已配置的平台执行同步
                 platforms = rule_sync_service.get_platforms()
                 for platform in platforms:
                     if not self._running:
                         break
                     await self.sync(platform)
-
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error("定时同步异常: %s", e)
+
+    async def _run_case_scrape_loop(self) -> None:
+        """后台循环：按间隔执行案例采集"""
+        while self._running:
+            try:
+                await asyncio.sleep(self.case_scrape_interval_hours * 3600)
+                if not self._running:
+                    break
+                await self.scrape_cases()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("案例采集异常: %s", e)
+
+    async def scrape_cases(self) -> SyncTaskRecord:
+        """执行一轮案例采集"""
+        from app.services.crawler_service import crawl_all
+
+        record = SyncTaskRecord(
+            id=self._next_id(),
+            platform="crawler",
+            status=SyncStatus.RUNNING,
+            started_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        try:
+            stats = await crawl_all()
+            record.status = SyncStatus.SUCCESS
+            record.result = SyncResult(
+                new_rules=0,
+                updated_rules=0,
+                errors=stats.get("errors", []),
+            )
+            logger.info(
+                "案例采集完成: CCGP=%d 宁夏=%d 总保存=%d",
+                stats.get("ccgp", 0),
+                stats.get("ningxia", 0),
+                stats.get("cases_saved", 0),
+            )
+        except Exception as e:
+            record.status = SyncStatus.FAILED
+            record.error_message = str(e)
+            logger.error("案例采集失败: %s", e)
+
+        record.finished_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        self._case_history.append(record)
+        return record
 
     # ── 手动同步 ─────────────────────────────────────────
 
@@ -215,6 +271,7 @@ class SyncScheduler:
             r.status == SyncStatus.RUNNING for r in self._history[-5:]
         )
         last_sync = self._history[-1] if self._history else None
+        last_case = self._case_history[-1] if self._case_history else None
         return {
             "running": self._running,
             "actively_syncing": running,
@@ -225,6 +282,13 @@ class SyncScheduler:
                 "time": last_sync.finished_at,
             } if last_sync else None,
             "sync_interval_hours": self.sync_interval_hours,
+            "case_scrape_enabled": app_settings.case_scrape_enabled,
+            "case_scrape_interval_hours": self.case_scrape_interval_hours,
+            "last_case_scrape": {
+                "status": last_case.status.value,
+                "time": last_case.finished_at,
+                "error": last_case.error_message,
+            } if last_case else None,
         }
 
     def get_history(self, n: int = 10) -> list[dict]:
@@ -252,4 +316,6 @@ class SyncScheduler:
 
 
 # 模块级单例
-sync_scheduler = SyncScheduler()
+sync_scheduler = SyncScheduler(
+    case_scrape_interval_hours=app_settings.case_scrape_interval_hours,
+)

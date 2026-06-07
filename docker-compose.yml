@@ -265,6 +265,49 @@ services:
     networks:
       - baohegui
 
+  # ═══════════════════════════════════════════════════════════
+  # 案例采集服务（独立进程，不与 FastAPI 争资源）
+  # ═══════════════════════════════════════════════════════════
+  crawler:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    profiles:
+      - crawler
+    command: >
+      sh -c "python -c '
+import time, logging
+logging.basicConfig(level=logging.INFO)
+from app.db.database import init_db
+from app.services.sync_scheduler import sync_scheduler
+import asyncio
+async def run():
+    init_db()
+    await sync_scheduler.scrape_cases()
+    print(\"采集完成\")
+asyncio.run(run())
+'"
+    environment:
+      - BHG_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - BHG_SECRET_KEY=${BHG_SECRET_KEY}
+      - BHG_DEBUG=false
+      - BHG_LOG_LEVEL=${BHG_LOG_LEVEL:-info}
+      - BHG_RULES_DIR=/app/rules
+      - BHG_CASE_SCRAPE_ENABLED=true
+    volumes:
+      - ./rules:/app/rules:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - baohegui
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
 volumes:
   pgdata:
   miniodata:

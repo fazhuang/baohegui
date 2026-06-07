@@ -1,8 +1,8 @@
 {
-  "version": "3.0.0",
-  "description": "禁用词与违规模式库 — 融合 baohegui 原版 + hlgs（华招国际）提取模式，按违规维度分类",
-  "last_updated": "2026-06-06",
-  "source": "baohegui v2.0.0 + hlgs config/rules/*.json forbidden_pattern 合计",
+  "version": "3.2.0",
+  "description": "禁用词与违规模式库 — 融合 baohegui + hlgs + 陕青宁新 + 全国 ccgp.gov.cn + 四川/甘肃/福建/河北等典型案例增强",
+  "last_updated": "2026-06-07",
+  "source": "baohegui v2.0.0 + hlgs config/rules/*.json forbidden_pattern + 陕青宁新 + 全国 ccgp.gov.cn 监督处罚 + 财政部信息公告 + 四川通报5起典型案例 + 多省市级公告",
   "categories": {
     "discrimination": "歧视排他类",
     "brand_lock": "品牌锁定类",
@@ -15,7 +15,9 @@
     "import_restrict": "进口限制类",
     "capital_restrict": "规模/资金限制类",
     "document_restrict": "文件形式限制类",
-    "other_discrimination": "其他歧视/排他类"
+    "other_discrimination": "其他歧视/排他类",
+    "standard_validity": "标准有效性类",
+    "bid_procedure": "采购程序规范类"
   },
   "patterns": {
     "discrimination": {
@@ -653,6 +655,54 @@
           "weight": 20,
           "law_ref": "《政府采购法实施条例》第三十四条",
           "suggestion": "将服务方案评分细化为可量化指标"
+        }
+      ]
+    },
+    "standard_validity": {
+      "label": "标准有效性检查",
+      "description": "技术参数中引用已废止或不存在的国家标准/行业标准",
+      "severity": "high",
+      "risk_level": "高",
+      "regex_list": [
+        {
+          "id": "FORB-S01",
+          "pattern": "GB\\s*\\d{4,}\\.?\\d*-?\\d{4}",
+          "message": "引用标准须验证有效性 — 标准号可能已废止或不存（如青海职大案引用废止标准GB18584-2001）",
+          "weight": 15,
+          "law_ref": "《标准化法》第二十五条",
+          "suggestion": "核实引用标准的现行有效状态"
+        },
+        {
+          "id": "FORB-S02",
+          "pattern": "GB/T\\s*\\d{4,}\\.?\\d*-?\\d{4}|JB/T\\s*\\d{4,}|HJ\\s*\\d{4,}",
+          "message": "推荐性标准引用须确保标准号正确且现行有效",
+          "weight": 12,
+          "law_ref": "《标准化法》第二十五条",
+          "suggestion": "使用现行有效版本的标准编号"
+        }
+      ]
+    },
+    "bid_procedure": {
+      "label": "采购程序规范",
+      "description": "评分标准设计、异常低价审查等采购程序规范缺失",
+      "severity": "high",
+      "risk_level": "高",
+      "regex_list": [
+        {
+          "id": "FORB-Q01",
+          "pattern": "技术参数.*满分.*\\d+",
+          "message": "技术参数满分值应与扣分规则匹配 — 避免扣分总额远高于参数分值（如青海生态监测案参数满分45分但扣分上限377分）",
+          "weight": 15,
+          "law_ref": "《政府采购法实施条例》第三十四条",
+          "suggestion": "确保评分标准中参数分值与扣分规则匹配"
+        },
+        {
+          "id": "FORB-Q02",
+          "pattern": "核心产品[^，。]*$|唯一核心|仅.*核心产品",
+          "message": "仅设置一个核心产品可能导致品牌趋同，限制竞争",
+          "weight": 10,
+          "law_ref": "《政府采购法实施条例》第二十条",
+          "suggestion": "每包设置至少2-3个核心产品或放宽参数要求"
         }
       ]
     }
