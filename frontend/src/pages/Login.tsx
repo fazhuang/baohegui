@@ -33,6 +33,7 @@ const LoginPage: React.FC<LoginProps> = (props) => {
     setLoading(true)
     setError(null)
     setServerDown(false)
+    let ok = false
 
     try {
       const { data } = await axios.post('/api/auth/login', values)
@@ -40,11 +41,10 @@ const LoginPage: React.FC<LoginProps> = (props) => {
       localStorage.setItem('role', data.role || 'user')
       localStorage.setItem('username', data.username || '')
 
-      // 记住密码
+      // 记住密码（仅存储用户名，不存储明文密码）
       if (rememberMe) {
         localStorage.setItem('remember_me', 'true')
         localStorage.setItem('saved_username', values.username)
-        localStorage.setItem('saved_password', values.password)
       } else {
         localStorage.removeItem('remember_me')
         localStorage.removeItem('saved_username')
@@ -52,7 +52,7 @@ const LoginPage: React.FC<LoginProps> = (props) => {
       }
 
       message.success(`登录成功，欢迎 ${data.username}`)
-      props.onLogin?.(); return
+      ok = true
     } catch (err: any) {
       if (err.code === 'ERR_NETWORK' || err.code === 'ECONNREFUSED' || err.message?.includes('Network')) {
         setServerDown(true)
@@ -64,23 +64,26 @@ const LoginPage: React.FC<LoginProps> = (props) => {
       }
     }
     setLoading(false)
+    if (ok) props.onLogin?.()
   }
 
   const handleRegister = async (values: any) => {
     if (regLoading) return
     setRegLoading(true)
     setError(null)
+    let ok = false
     try {
       const data = await registerUser(values)
       localStorage.setItem('token', data.access_token)
-      localStorage.setItem('role', data.role)
+      localStorage.setItem('role', data.role || 'user')
       localStorage.setItem('username', data.username)
       message.success(`注册成功，欢迎 ${data.username}`)
-      props.onLogin?.(); return
+      ok = true
     } catch (err: any) {
       setError(err?.response?.data?.detail || err.message || '注册失败')
     }
     setRegLoading(false)
+    if (ok) props.onLogin?.()
   }
 
   // 开发模式快速进入

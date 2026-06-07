@@ -112,7 +112,7 @@ async def login(
     try:
         _ensure_default_admin(db)
     except Exception:
-        pass  # 数据库未就绪时忽略
+        db.rollback()  # 避免 PostgreSQL session 进入 aborted 状态
 
     # 查询用户
     user = db.query(User).filter(User.username == request.username).first()

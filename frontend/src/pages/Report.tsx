@@ -700,17 +700,20 @@ const ReportPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
 
   const fetchReport = useCallback(() => {
-    if (id) {
-      setLoading(true)
-      setError(null)
-      getReport(Number(id))
-        .then(setReport)
-        .catch((err: any) => {
-          const msg = err?.response?.data?.detail || err.message || '加载报告失败'
-          setError(msg)
-        })
-        .finally(() => setLoading(false))
+    if (!id) {
+      setLoading(false)
+      setError('缺少报告 ID')
+      return
     }
+    setLoading(true)
+    setError(null)
+    getReport(Number(id))
+      .then(setReport)
+      .catch((err: any) => {
+        const msg = err?.response?.data?.detail || err.message || '加载报告失败'
+        setError(msg)
+      })
+      .finally(() => setLoading(false))
   }, [id])
 
   // ── 全局筛选 ──────────────────────────────────────────
