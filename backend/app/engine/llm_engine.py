@@ -27,6 +27,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
+from app.engine.semantic_chunking import SemanticChunkingEngine
 from app.engine.shared_types import Violation  # 从共享模块导入，避免循环依赖
 from app.services.prompt_manager import PromptManager, PromptNotFoundError
 from app.services.usage_tracker import (
@@ -784,6 +785,24 @@ class LLMEngine:
         # 调用追踪
         self.usage_tracker = _global_tracker
 
+        # 语义切割引擎（延迟初始化）
+        self._semantic_chunker: Optional[SemanticChunkingEngine] = None
+        self._semantic_chunking_enabled = settings.semantic_chunking_enabled
+        self._section_affinity_path = settings.section_affinity_path
+
+
+    @property
+    def semantic_chunker(self) -> SemanticChunkingEngine:
+        """延迟初始化语义切割引擎"""
+        if self._semantic_chunker is None:
+            self._semantic_chunker = SemanticChunkingEngine(
+                affinity_path=self._section_affinity_path,
+                prompt_template=self.prompt_template,
+                token_limit=self.token_limit,
+                auto_degrade_threshold=settings.chunk_auto_degrade_threshold,
+            )
+        return self._semantic_chunker
+
     @property
     def prompt_template(self) -> str:
         """懒加载默认 Prompt 模板（compliance_check 最新版）"""
@@ -1166,14 +1185,46 @@ class LLMEngine:
             )
 
         # ── 构建 Prompt 分片 ────────────────────────────────
-        chunks, sections_skipped = _build_section_prompt(
-            sections=sections,
-            prompt_template=self.prompt_template,
-            token_limit=self.token_limit,
-            violated_sections=violated_sections,
-            sampling_rate=0.3,
-            marked_doc=marked_doc,
+        sections_skipped = 0
+        use_semantic = (
+            self._semantic_chunking_enabled
+            and not marked_doc  # 语义切割暂不支持定变分离标记
+            and not target_section_types  # 语义切割自行管理章节选择
         )
+
+        if use_semantic:
+            # 收集团维度的专有 Prompt 模板
+            dim_templates: dict[str, str] = {}
+            for dim_id in ("parameter_bias", "score_review", "qualification_review", "procedural_review"):
+                try:
+                    tmpl = self.prompt_manager.get_prompt(dim_id)
+                    dim_templates[dim_id] = tmpl.content
+                except PromptNotFoundError:
+                    pass  # 不存在则使用默认模板
+
+            section_positions: dict[str, dict] | None = None
+            if marked_doc and hasattr(marked_doc, "get_position_info"):
+                section_positions = marked_doc.get_position_info()
+
+            chunks = self.semantic_chunker.chunk(
+                sections=sections,
+                violated_sections=violated_sections or None,
+                sampling_rate=0.3,
+                dimension_templates=dim_templates or None,
+                section_positions=section_positions,
+            )
+            # 计算被抽样跳过的章节数
+            sampled_in = {s for c in chunks for s in c.get("original_sections", [])}
+            sections_skipped = len(sections) - len(sampled_in)
+        else:
+            chunks, sections_skipped = _build_section_prompt(
+                sections=sections,
+                prompt_template=self.prompt_template,
+                token_limit=self.token_limit,
+                violated_sections=violated_sections,
+                sampling_rate=0.3,
+                marked_doc=marked_doc,
+            )
         if not chunks:
             logger.info("所有章节均被抽样跳过，无需 LLM 调用")
             return LLMEngineResult(
