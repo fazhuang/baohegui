@@ -355,6 +355,7 @@ def _build_section_prompt(
     violated_sections: set[str] | None = None,
     sampling_rate: float = 0.3,
     marked_doc: Any | None = None,
+    industry_context: str = "",
 ) -> tuple[list[dict[str, str]], int]:
     """
     将文档章节智能分批，送入大模型分析。
@@ -444,7 +445,7 @@ def _build_section_prompt(
                                 c.split("\n")[0].replace("=== ", "").replace(" ===", "")
                                 for c in current_chunk
                             ),
-                            "prompt": prompt_template.replace("{text}", combined),
+                            "prompt": prompt_template.replace("{text}", combined).replace("{industry_context}", industry_context),
                         }
                     )
                     current_chunk = []
@@ -462,7 +463,7 @@ def _build_section_prompt(
                         c.split("\n")[0].replace("=== ", "").replace(" ===", "")
                         for c in current_chunk
                     ),
-                    "prompt": prompt_template.replace("{text}", combined),
+                    "prompt": prompt_template.replace("{text}", combined).replace("{industry_context}", industry_context),
                 }
             )
             current_chunk = [text_block]
@@ -479,7 +480,7 @@ def _build_section_prompt(
                 "section_name": " + ".join(
                     c.split("\n")[0].replace("=== ", "").replace(" ===", "") for c in current_chunk
                 ),
-                "prompt": prompt_template.replace("{text}", combined),
+                "prompt": prompt_template.replace("{text}", combined).replace("{industry_context}", industry_context),
             }
         )
 
@@ -1111,6 +1112,7 @@ class LLMEngine:
         user_id: Optional[int] = None,
         target_section_types: set[str] | None = None,
         marked_doc: Any | None = None,
+        industry_descriptions: str = "",
     ) -> LLMEngineResult:
         """
         对结构化文档进行语义合规审查。
@@ -1131,6 +1133,7 @@ class LLMEngine:
             user_id:         关联的用户 ID（用于用量追踪）
             target_section_types: 目标章节类型集合
             marked_doc:      定变分离标记后的文档（可选）
+            industry_descriptions: 行业描述，注入 LLM 提示词
         """
         if self.mock_mode:
             return self._mock_analyze(sections, marked_doc=marked_doc)
@@ -1173,6 +1176,7 @@ class LLMEngine:
             violated_sections=violated_sections,
             sampling_rate=0.3,
             marked_doc=marked_doc,
+            industry_context=industry_descriptions,
         )
         if not chunks:
             logger.info("所有章节均被抽样跳过，无需 LLM 调用")

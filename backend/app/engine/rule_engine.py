@@ -24,6 +24,20 @@ from pydantic import BaseModel, Field
 # 共享类型：Violation / RuleEngineResult 提取到 shared_types，消除循环导入
 from app.engine.shared_types import RuleEngineResult, Violation
 
+# 行业标识 → 规则ID前缀 映射表（确保3字母无碰撞）
+_INDUSTRY_PREFIX_MAP: dict[str, str] = {
+    "gov": "GOV", "construction": "CON", "municipal": "MUN",
+    "highway": "HWY", "railway": "RLY", "water": "WAT",
+    "electric_power": "ELE", "communication": "COM",
+    "petrochemical": "PET", "port_waterway": "PWA",
+    "mine": "MIN", "env_protection": "ENV",
+    "landscaping": "LAN", "agriculture": "AGR",
+    "medical_health": "MED", "education_culture": "EDU",
+    # 向后兼容别名
+    "healthcare": "MED", "medical": "MED", "it": "IT",
+}
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -323,6 +337,24 @@ class RuleEngine:
         manifest = self.load_manifest(self.rules_dir)
         return sorted(manifest.get("industries", {}).keys())
 
+    def get_industry_descriptions(self, industries: list[str]) -> str:
+        """返回行业的人类可读名称，用于 LLM 提示词注入"""
+        names: list[str] = []
+        for ind in industries:
+            if not ind:
+                continue
+            path = self.rules_dir / "industry" / f"{ind}.json"
+            if path.exists():
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        data = json.load(f)
+                    names.append(data.get("industry", ind))
+                except Exception:
+                    names.append(ind)
+            else:
+                names.append(ind)
+        return "、".join(names) if names else ""
+
     # ── 热加载 ──────────────────────────────────────────
 
     def reload(self) -> None:
@@ -352,8 +384,9 @@ class RuleEngine:
         if not self.rules:
             self._load_rules()
 
-        # 检查是否已加载
-        prefix = f"IND-{industry.upper()[:2]}-"
+        # 检查是否已加载 — 使用映射表解决前缀碰撞
+        ind_code = _INDUSTRY_PREFIX_MAP.get(industry, industry.upper()[:3])
+        prefix = f"IND-{ind_code}-"
         already_loaded = any(r.id.startswith(prefix) for r in self.rules)
         if already_loaded:
             logger.debug("行业 %s 规则已加载，跳过", industry)

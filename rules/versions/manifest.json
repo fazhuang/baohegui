@@ -3957,9 +3957,7 @@
     },
     {
       "version": "3.0.0",
-      "date": "2026-06-06",
       "description": "规则库大幅扩展：35→82条。新增hlgs通报资产规则12条、行业专项规则25条、条件变体规则10条。同步扩展禁用词库(+3维度)和参数倾向性规则库(+6模式)。",
-      "rules_count": 82,
       "categories": {
         "A": 25,
         "B": 25,
@@ -3975,7 +3973,9 @@
         "Batch 3: 条件变体规则10条 (R114_C-R123_D)",
         "禁用词库新增3个维度: construction_bias, it_spec_lock, service_restrict",
         "参数倾向性规则库新增6种检测模式"
-      ]
+      ],
+      "timestamp": "2026-06-06",
+      "rule_count": 82
     }
   ]
 }
