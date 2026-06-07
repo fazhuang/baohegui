@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 import httpx
 import pytest
@@ -212,6 +213,10 @@ def engine_with_mock_http(monkeypatch) -> LLMEngine:
     return LLMEngine()
 
 
+@pytest.mark.skipif(
+    os.environ.get("BHG_LLM_MOCK_MODE", "").lower() == "true",
+    reason="CI 环境使用 LLM mock mode，跳过真实 HTTP 集成测试",
+)
 class TestLLMEngineIntegration:
     """End-to-end tests for analyze() with mock HTTP transport"""
 
