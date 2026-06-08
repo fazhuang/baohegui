@@ -1,0 +1,9 @@
+# Cloudflare Pages 路由配置
+#
+# 前端部署后，/api/ 请求会被代理到后端（Railway）
+# 部署后替换 <railway-url> 为实际 Railway 域名
+# /api/*  https://<railway-url>.railway.app/api/:splat  200
+
+# 所有其他路由返回 index.html（SPA 路由）
+/api/*  https://backend-production.up.railway.app/api/:splat  200
+/*  /index.html  200
