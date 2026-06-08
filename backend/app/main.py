@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import admin, announcements, auth, categories, check, knowledge_graph, member, report, rules, stats, upload
+from app.api import admin, announcements, auth, categories, check, crawler, knowledge_graph, member, report, rules, stats, upload
 from app.core.config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -149,6 +149,7 @@ app.include_router(member.router)
 app.include_router(announcements.router)
 app.include_router(categories.router)
 app.include_router(knowledge_graph.router)
+app.include_router(crawler.router)
 
 
 # ═══════════════════════════════════════════════════════════════

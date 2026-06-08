@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     audit_log_enabled: bool = True
     minio_connect_timeout: int = 5  # MinIO 超时（秒）
 
+    # 案例采集
+    case_scrape_enabled: bool = True
+    case_scrape_interval_hours: int = 168  # 每周一次
+    ccgp_base_url: str = "https://www.ccgp.gov.cn"
+
     # 日志
     log_level: str = "info"
 

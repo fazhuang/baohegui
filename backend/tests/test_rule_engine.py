@@ -573,9 +573,12 @@ class TestBatch1HlgsAutoRules:
             assert "rule_id" in rule
             assert "rule_name" in rule
             assert "rule_type" in rule
-            assert "forbidden_pattern" in rule
             assert "risk_level" in rule
             assert "regulation_basis" in rule
+            # R311 是 pattern_required 类型，无 forbidden_pattern
+            if rid != "R311":
+                assert "forbidden_pattern" in rule or "pattern" in rule, \
+                    f"{rid} 应包含 forbidden_pattern 或 pattern"
 
     def test_total_rules_after_batch1(self):
         """Batch 1 后规则总数 >= 47 (Batch 2 adds 25 more to 72)"""
@@ -675,14 +678,14 @@ class TestBatch2IndustryRules:
                     f"{rid} 缺少 condition"
 
     def test_total_rules_after_batch2(self):
-        """Batch 2 + Batch 3 后规则总数为 82"""
+        """Batch 2 + Batch 3 + case study 后规则总数为 88"""
         import json, os
         rules_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
         )
         with open(rules_path) as f:
             data = json.load(f)
-        assert len(data["rules"]) == 82, f"Expected 82 rules, got {len(data['rules'])}"
+        assert len(data["rules"]) == 88, f"Expected 88 rules, got {len(data['rules'])}"
 
 
 class TestBatch3ConditionVariants:
@@ -745,14 +748,14 @@ class TestBatch3ConditionVariants:
             assert "rule_type" in rule
 
     def test_total_rules_after_batch3(self):
-        """Batch 3 后规则总数为 82"""
+        """Batch 3 + case study 后规则总数为 88"""
         import json, os
         rules_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "rules", "compliance_rules.json"
         )
         with open(rules_path) as f:
             data = json.load(f)
-        assert len(data["rules"]) == 82, f"Expected 82 rules, got {len(data['rules'])}"
+        assert len(data["rules"]) == 88, f"Expected 88 rules, got {len(data['rules'])}"
 
     def test_condition_rules_count(self):
         """条件规则数量从 8 增加到 18+"""

@@ -23,9 +23,13 @@ dependencies = [
     "httpx>=0.28",
     "jinja2>=3.1",
     "alembic>=1.14",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
     "opentelemetry-api>=1.30",
     "opentelemetry-sdk>=1.30",
     "minio>=7.2",
+    "cloudscraper>=1.2.71",
+    "playwright>=1.60.0",
 ]
 
 [project.optional-dependencies]
