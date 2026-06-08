@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     llm_deepseek_api_key: str = ""
     llm_qwen_api_key: str = ""
 
+    # 语义切割（Semantic Chunking）
+    semantic_chunking_enabled: bool = True  # 是否启用语义切割
+    section_affinity_path: str = "rules/section_affinity.json"  # 章节关联矩阵路径
+    chunk_overlap_ratio: float = 0.15  # chunk 间重叠比例（0=无重叠）
+    chunk_overlap_min_tokens: int = 200  # 最小重叠 Token 数
+    chunk_overlap_max_tokens: int = 800  # 最大重叠 Token 数
+    chunk_auto_degrade_threshold: int = 5  # 章节数 ≤ 此值时回退到顺序拼接
+
     # 文件上传限制
     max_file_size_mb: int = 50
     allowed_extensions: list[str] = ["pdf", "docx"]
