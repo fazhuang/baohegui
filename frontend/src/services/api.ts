@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { CheckResult, ComplianceReport, ReportListItem, UploadResult } from '../types'
+import type { CheckResult, ComplianceReport, ReportListItem, UploadResult, CategoriesData } from '../types'
 // 开发模式：token 为 dev-token 时使用模拟数据
 function isDevMode(): boolean {
   return localStorage.getItem('token') === 'dev-token'
@@ -189,6 +189,12 @@ export type { DashboardStats }
 
 export async function getDashboardStats(): Promise<DashboardStats> {
   const { data } = await api.get('/stats/dashboard')
+  return data
+}
+
+/** 获取项目分类层级 */
+export async function getCategories(): Promise<CategoriesData> {
+  const { data } = await api.get('/categories/')
   return data
 }
 

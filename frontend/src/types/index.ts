@@ -100,6 +100,34 @@ export interface ReportListItem {
   created_at: string
 }
 
+/** ── 项目分类 ──────────────────────────────────── */
+
+/** 行业大类 */
+export interface CategoryGroup {
+  id: string
+  name: string
+  icon: string
+  order: number
+}
+
+/** 子类 */
+export interface CategoryItem {
+  id: string
+  name: string
+  icon: string
+  parent: string
+  recommended: boolean
+}
+
+/** 分类完整响应 */
+export interface CategoriesData {
+  version: string
+  category_groups: CategoryGroup[]
+  categories: CategoryItem[]
+  procurement_methods: Array<{ value: string; label: string }>
+  evaluation_methods: Array<{ value: string; label: string }>
+}
+
 /** ── 管理员后台 ─────────────────────────────────── */
 
 /** 平台规则 */

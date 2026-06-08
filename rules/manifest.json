@@ -1,7 +1,7 @@
 {
-  "version": "3.0.0",
-  "last_updated": "2026-06-04",
-  "total_rules": 153,
+  "version": "3.2.0",
+  "last_updated": "2026-06-07",
+  "total_rules": 370,
   "description": "规则清单 — 包含从 hlgs（华招国际）导入的结构化合规规则、参数倾向性检测规则和禁用词库",
   "sources": {
     "compliance_rules": {
@@ -37,15 +37,30 @@
     },
     "project_categories": {
       "file": "project_categories.json",
-      "origin": "hlgs config/project_categories.json + field_definitions.json",
-      "format": "6大类别×21子类+10字段→规则映射"
+      "count": 69,
+      "origin": "hlgs → GB/T 50841-2013 + 政府采购品目分类标准",
+      "format": "16大类别×69子类 + 10字段→规则映射（含框架协议采购方式、9种评标方法）"
     }
   },
   "industries": {
     "construction": "industry/construction.json",
-    "healthcare": "industry/healthcare.json",
+    "gov": "industry/gov.json",
+    "municipal": "industry/municipal.json",
+    "highway": "industry/highway.json",
+    "railway": "industry/railway.json",
+    "water": "industry/water.json",
+    "electric_power": "industry/electric_power.json",
+    "communication": "industry/communication.json",
+    "petrochemical": "industry/petrochemical.json",
+    "port_waterway": "industry/port_waterway.json",
+    "mine": "industry/mine.json",
+    "env_protection": "industry/env_protection.json",
+    "landscaping": "industry/landscaping.json",
+    "agriculture": "industry/agriculture.json",
+    "medical_health": "industry/medical_health.json",
+    "education_culture": "industry/education_culture.json",
     "it": "industry/it.json",
-    "medical": "industry/medical.json"
+    "healthcare": "industry/healthcare.json"
   },
   "prompts": {
     "compliance_check": "prompts/compliance_check.txt",

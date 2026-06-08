@@ -94,9 +94,12 @@ async def run_compliance_check(
 
     # 如果指定了行业，激活对应的行业规则
     industry_list: list[str] = []
+    industry_descriptions = ""
+    industry_load_warnings: list[str] = []
     if industries:
         industry_list = [ind.strip() for ind in industries.split(",") if ind.strip()]
         rule_engine.set_active_industries(industry_list)
+        industry_descriptions = rule_engine.get_industry_descriptions(industry_list)
 
     # ── 性能计时 ──────────────────────────────────────────────
     t_check_start = time.monotonic()
@@ -161,6 +164,7 @@ async def run_compliance_check(
             user_id=int(user["sub"]),
             target_section_types=target_sections,
             marked_doc=marked_doc,
+            industry_descriptions=industry_descriptions,
         )
     t_llm = time.monotonic() - t0
 
@@ -311,6 +315,7 @@ async def run_compliance_check(
         "llm_cost_yuan": report.llm_cost_yuan,
         "llm_error": report.llm_error,
         "industries": industry_list or None,
+        "industry_descriptions": industry_descriptions or None,
         "template_stats": template_stats,
         "traffic_light": routing_result.traffic_light.value,
         "routing_reasoning": routing_result.reasoning,

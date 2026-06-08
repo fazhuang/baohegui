@@ -12,8 +12,8 @@ import {
   FileOutlined, LoadingOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { uploadFile, runCheck, getDashboardStats, listReports } from '../services/api'
-import type { ReportListItem } from '../types'
+import { uploadFile, runCheck, getCategories, listReports } from '../services/api'
+import type { ReportListItem, CategoriesData } from '../types'
 
 const { Title, Text } = Typography
 
@@ -126,19 +126,13 @@ const ProcessNode: React.FC<{
   )
 }
 
-// ── 行业 Chip 选项（去掉 emoji）────────────────────────────
+// ── 行业大类选项（从后端动态获取）────────────────────────────
 
-interface IndustryOption {
-  value: string
-  label: string
-  desc: string
+// ── 选中子类 id → 对应的大类行业标识映射（用于传给后端）─────────────────
+// 子类 id 格式: "{group_id}_{subtype}", 从中提取 group_id 作为行业标识
+function groupIdFromCategory(catId: string): string {
+  return catId.split('_')[0]
 }
-
-const INDUSTRY_OPTIONS: IndustryOption[] = [
-  { value: 'construction', label: '工程建设', desc: '建筑工程、市政工程等施工类招标' },
-  { value: 'it', label: '信息技术', desc: '软件开发、系统集成、信息化项目' },
-  { value: 'healthcare', label: '医疗采购', desc: '医疗器械、药品、医疗服务' },
-]
 
 // ── 最近检查概览 ────────────────────────────────────────────
 
@@ -237,9 +231,10 @@ const UploadPage: React.FC = () => {
   const filesRef = useRef<FileItemData[]>([])
   const processingRef = useRef(false)
 
-  // 行业选择
-  const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
-  const [availableIndustries, setAvailableIndustries] = useState<string[]>([])
+  // 行业选择（从后端加载分类层级）
+  const [categoriesData, setCategoriesData] = useState<CategoriesData | null>(null)
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([])
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
   const [showIndustrySelect, setShowIndustrySelect] = useState(false)
 
   // 拖拽状态
@@ -249,12 +244,13 @@ const UploadPage: React.FC = () => {
   const fileRef = useRef<File | null>(null)
   const uploadResultRef = useRef<{ db_id: number } | null>(null)
 
-  // 加载可用行业列表
+  // 加载分类层级
   useEffect(() => {
-    getDashboardStats().then(stats => {
-      setAvailableIndustries(stats.industries || [])
+    getCategories().then(data => {
+      setCategoriesData(data)
     }).catch(() => {
-      setAvailableIndustries(['construction', 'it', 'healthcare'])
+      // 后端未就绪时使用空数据
+      setCategoriesData(null)
     })
   }, [])
 
@@ -292,7 +288,9 @@ const UploadPage: React.FC = () => {
   // ── 处理单个文件 ──
   const processSingleFile = useCallback(async (item: FileItemData): Promise<void> => {
     const { file } = item
-    const indStr = selectedIndustries.length > 0 ? selectedIndustries.join(',') : undefined
+    const indStr = selectedCategories.length > 0
+      ? [...new Set(selectedCategories.map(id => groupIdFromCategory(id)))].join(',')
+      : undefined
 
     fileRef.current = file
     uploadResultRef.current = null
@@ -363,7 +361,7 @@ const UploadPage: React.FC = () => {
       setError({ step: currentStep, message: msg })
       setProgress(0)
     }
-  }, [selectedIndustries, animateProgress, updateFiles, currentStep])
+  }, [selectedCategories, animateProgress, updateFiles, currentStep])
 
   // ── 处理后队列 ──
   const processQueue = useCallback(async () => {
@@ -453,11 +451,16 @@ const UploadPage: React.FC = () => {
     }
   }, [files, handleRetryAll])
 
-  // 行业 Chip 切换
-  const toggleIndustry = useCallback((value: string) => {
-    setSelectedIndustries(prev =>
-      prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]
+  // 子类选择：切换选中状态
+  const toggleCategory = useCallback((catId: string) => {
+    setSelectedCategories(prev =>
+      prev.includes(catId) ? prev.filter(v => v !== catId) : [...prev, catId]
     )
+  }, [])
+
+  // 展开/收起行业大类
+  const handleGroupToggle = useCallback((groupId: string) => {
+    setExpandedGroup(prev => prev === groupId ? null : groupId)
   }, [])
 
   // Tour
@@ -597,7 +600,7 @@ const UploadPage: React.FC = () => {
               <ProfileOutlined style={{ color: 'var(--color-action)', fontSize: 16 }} />
               <Text strong style={{ fontSize: 14 }}>行业类型</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                {selectedIndustries.length === 0 ? '（不选则仅使用通用规则）' : `已选 ${selectedIndustries.length} 项`}
+                {selectedCategories.length === 0 ? '（不选则仅使用通用规则）' : `已选 ${selectedCategories.length} 项`}
               </Text>
             </Space>
             <Button
@@ -605,28 +608,93 @@ const UploadPage: React.FC = () => {
               size="small"
               onClick={() => setShowIndustrySelect(!showIndustrySelect)}
             >
-              {showIndustrySelect ? '收起' : '选择行业'}
+              {showIndustrySelect ? '收起' : '选择行业大类'}
             </Button>
           </div>
           {showIndustrySelect && (
             <div style={{ marginTop: 12 }}>
-              <Space wrap size={[8, 8]}>
-                {INDUSTRY_OPTIONS.filter(o => availableIndustries.length === 0 || availableIndustries.includes(o.value)).map(opt => (
-                  <Tag.CheckableTag
-                    key={opt.value}
-                    checked={selectedIndustries.includes(opt.value)}
-                    onChange={() => toggleIndustry(opt.value)}
-                    style={{
-                      padding: '4px 14px',
-                      borderRadius: 6,
-                      fontSize: 13,
-                      border: `1px solid ${selectedIndustries.includes(opt.value) ? 'var(--color-action)' : 'var(--color-border)'}`,
-                    }}
-                  >
-                    {opt.label}
-                  </Tag.CheckableTag>
-                ))}
-              </Space>
+              {/* 大类层级列表 */}
+              {categoriesData?.category_groups?.length ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {categoriesData.category_groups.map(group => {
+                    const children = categoriesData.categories.filter(c => c.parent === group.id)
+                    const isExpanded = expandedGroup === group.id
+                    const groupSelectedCount = selectedCategories.filter(id =>
+                      groupIdFromCategory(id) === group.id
+                    ).length
+
+                    return (
+                      <div key={group.id} style={{
+                        border: '1px solid var(--color-border)',
+                        borderRadius: 8,
+                        overflow: 'hidden',
+                      }}>
+                        {/* 大类头 — 点击展开/收起 */}
+                        <div
+                          onClick={() => handleGroupToggle(group.id)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            padding: '8px 12px',
+                            cursor: 'pointer',
+                            background: isExpanded ? 'var(--color-brand-light)' : 'transparent',
+                            transition: 'background 0.15s',
+                          }}
+                        >
+                          <ProfileOutlined style={{ color: 'var(--color-action)', fontSize: 14 }} />
+                          <Text strong style={{ fontSize: 13, flex: 1 }}>{group.name}</Text>
+                          {groupSelectedCount > 0 && (
+                            <Tag color="blue" style={{ fontSize: 10, lineHeight: '18px', padding: '0 8px' }}>
+                              已选 {groupSelectedCount}
+                            </Tag>
+                          )}
+                          <Text type="secondary" style={{ fontSize: 11 }}>
+                            {children.length} 个子类
+                          </Text>
+                        </div>
+
+                        {/* 展开的子类 Chip */}
+                        {isExpanded && (
+                          <div style={{ padding: '8px 12px 10px', borderTop: '1px solid var(--color-border)' }}>
+                            <Space wrap size={[6, 6]}>
+                              {children.map(cat => (
+                                <Tag.CheckableTag
+                                  key={cat.id}
+                                  checked={selectedCategories.includes(cat.id)}
+                                  onChange={() => toggleCategory(cat.id)}
+                                  style={{
+                                    padding: '3px 12px',
+                                    borderRadius: 5,
+                                    fontSize: 12,
+                                    border: `1px solid ${selectedCategories.includes(cat.id) ? 'var(--color-action)' : 'var(--color-border)'}`,
+                                    background: selectedCategories.includes(cat.id) ? 'var(--color-brand-light)' : 'transparent',
+                                  }}
+                                >
+                                  {cat.name}
+                                </Tag.CheckableTag>
+                              ))}
+                            </Space>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <Space wrap size={[8, 8]}>
+                  {selectedCategories.map(catId => (
+                    <Tag
+                      key={catId}
+                      closable
+                      onClose={() => toggleCategory(catId)}
+                      style={{ fontSize: 12, borderRadius: 5 }}
+                    >
+                      {catId}
+                    </Tag>
+                  ))}
+                </Space>
+              )}
               <Alert
                 message="选择行业后，系统将加载该行业的专属审查规则，提高审查精准度"
                 type="info"
@@ -819,7 +887,7 @@ const UploadPage: React.FC = () => {
                   step={s}
                   status={getStepStatus(s.key)}
                   errorMsg={error?.step === s.key ? error.message : undefined}
-                  onRetry={error?.step === s.key ? (s.key === 'uploading' ? handleRetry : () => startUpload(fileRef.current!, selectedIndustries)) : undefined}
+                  onRetry={error?.step === s.key ? (s.key === 'uploading' ? handleRetry : () => startUpload(fileRef.current!, selectedCategories)) : undefined}
                   progressPct={getStepStatus(s.key) === 'active' ? Math.min(progress, 95) : getStepStatus(s.key) === 'done' ? 100 : 0}
                 />
                 {i < STEPS.length - 1 && (
