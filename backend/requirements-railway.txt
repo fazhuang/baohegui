@@ -1,0 +1,17 @@
+# 包合规 - Railway/Docker 部署用依赖（不含 spaCy/WeasyPrint/playwright 等重型依赖）
+fastapi>=0.115
+sqlalchemy>=2.0
+python-multipart>=0.0.20
+pydantic>=2.0
+pydantic-settings>=2.0
+python-jose[cryptography]>=3.3
+passlib[bcrypt]>=1.7
+bcrypt>=4.0,<4.2
+python-dotenv>=1.0
+httpx>=0.28
+jinja2>=3.1
+minio>=7.2
+# 轻量版 PyMuPDF（不含重型字体包）
+pymupdf-light>=1.25
+lxml>=5.0
+beautifulsoup4>=4.12

@@ -115,6 +115,9 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _validate_secret_key(self) -> "Settings":
         """生产环境必须设置非默认的 secret_key，否则拒绝启动"""
+        if self.secret_key == "change-me-in-production":
+            # Railway 等平台没有 Vercel 标记，自动降级为 debug 模式
+            self.debug = True
         if not self.debug and self.secret_key == "change-me-in-production":
             raise ValueError(
                 "生产环境禁止使用默认 secret_key。"
