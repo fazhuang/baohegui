@@ -274,19 +274,7 @@ services:
       dockerfile: backend/Dockerfile
     profiles:
       - crawler
-    command: >
-      sh -c "python -c '
-import time, logging
-logging.basicConfig(level=logging.INFO)
-from app.db.database import init_db
-from app.services.sync_scheduler import sync_scheduler
-import asyncio
-async def run():
-    init_db()
-    await sync_scheduler.scrape_cases()
-    print(\"采集完成\")
-asyncio.run(run())
-'"
+    command: "sh -c \"python -c '\nimport time, logging\nlogging.basicConfig(level=logging.INFO)\nfrom app.db.database import init_db\nfrom app.services.sync_scheduler import sync_scheduler\nimport asyncio\nasync def run():\n    init_db()\n    await sync_scheduler.scrape_cases()\n    print(\"采集完成\")\nasyncio.run(run())\n'\""
     environment:
       - BHG_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - BHG_SECRET_KEY=${BHG_SECRET_KEY}
