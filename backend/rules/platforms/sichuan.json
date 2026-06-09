@@ -1,0 +1,42 @@
+{
+  "platform": "sichuan",
+  "name": "四川省公共资源交易平台",
+  "version": "1.0.0",
+  "description": "四川省招标投标规则差异",
+  "threshold_overrides": {
+    "routing_green_budget_max": 500000,
+    "routing_yellow_budget_max": 2500000
+  },
+  "additional_rules": [
+    {
+      "rule_id": "SC-001",
+      "rule_name": "电子交易服务标准",
+      "category": "D",
+      "rule_type": "required",
+      "description": "四川省要求使用统一的公共资源交易电子服务标准，投标文件须符合《四川省公共资源电子化交易数据规范》",
+      "risk_level": "medium",
+      "suggestion": "确认投标文件格式符合四川省公共资源电子化交易数据规范",
+      "regulation_basis": [{"title": "四川省公共资源交易平台管理实施细则", "article": "第六条"}]
+    },
+    {
+      "rule_id": "SC-002",
+      "rule_name": "招标文件公示要求",
+      "category": "D",
+      "rule_type": "date_interval",
+      "description": "四川省要求招标文件预先公示不少于3个工作日",
+      "risk_level": "medium",
+      "suggestion": "确保招标文件在正式发布前已预先公示不少于3个工作日",
+      "regulation_basis": [{"title": "四川省招标投标条例", "article": "第十五条"}]
+    },
+    {
+      "rule_id": "SC-003",
+      "rule_name": "评审专家抽取规则",
+      "category": "D",
+      "rule_type": "required",
+      "description": "四川省要求评审专家必须从统一的综合评标专家库中随机抽取",
+      "risk_level": "high",
+      "suggestion": "确认评审专家从四川省综合评标专家库随机抽取",
+      "regulation_basis": [{"title": "四川省综合评标专家库管理办法", "article": "第九条"}]
+    }
+  ]
+}

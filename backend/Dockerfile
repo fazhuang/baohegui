@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制依赖描述文件（用精简版 requirements）
-COPY backend/requirements-railway.txt .
+# 复制依赖描述文件
+COPY requirements-railway.txt .
 RUN pip install --no-cache-dir -r requirements-railway.txt
 
 # ═══════════════════════════════════════════════════════════════
@@ -38,8 +38,8 @@ COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # 复制代码
-COPY backend/app ./app
-COPY backend/api ./api
+COPY app ./app
+COPY api ./api
 
 # 复制规则文件
 COPY rules ./rules

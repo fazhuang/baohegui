@@ -7,9 +7,15 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
 
-_RULES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "rules"
+_RULES_DIR = Path(settings.rules_dir)
+if not _RULES_DIR.is_absolute():
+    _cwd_rules_dir = Path.cwd() / _RULES_DIR
+    _source_rules_dir = Path(__file__).resolve().parent.parent.parent.parent / _RULES_DIR
+    _RULES_DIR = _cwd_rules_dir if _cwd_rules_dir.exists() else _source_rules_dir
 _PLATFORMS_DIR = _RULES_DIR / "platforms"
 
 

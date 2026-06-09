@@ -1,0 +1,46 @@
+{
+  "version": "1.0.0",
+  "description": "Multi-model routing configuration — maps review dimensions to optimal models",
+  "default_model": "deepseek-chat",
+  "dimension_routing": {
+    "AI-BRAND": "deepseek-chat",
+    "AI-AUTH": "deepseek-chat",
+    "AI-LAB": "deepseek-chat",
+    "AI-PATENT": "deepseek-chat",
+    "AI-COMBINE": "deepseek-chat",
+    "AI-STD": "qwen-plus",
+    "AI-SCORE-VAGUE": "deepseek-chat",
+    "AI-PRICE-WEIGHT": "deepseek-chat",
+    "AI-SCORE-SUBJ": "qwen-plus",
+    "AI-QUAL-LEVEL": "qwen-plus",
+    "AI-QUAL-RESTRICT": "deepseek-chat",
+    "AI-QUAL-CERT": "deepseek-chat",
+    "AI-REJECT": "qwen-plus",
+    "AI-COMPLAINT": "qwen-plus",
+    "AI-SME": "qwen-plus",
+    "AI-CREDIT": "qwen-plus",
+    "AI-GREEN": "qwen-plus"
+  },
+  "model_configs": {
+    "deepseek-chat": {
+      "provider": "openai_compatible",
+      "api_base": "https://api.deepseek.com/v1",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "model": "deepseek-chat",
+      "max_tokens": 4096,
+      "temperature": 0.1,
+      "cost_per_1k_input": 0.001,
+      "cost_per_1k_output": 0.002
+    },
+    "qwen-plus": {
+      "provider": "openai_compatible",
+      "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key_env": "QWEN_API_KEY",
+      "model": "qwen-plus",
+      "max_tokens": 4096,
+      "temperature": 0.1,
+      "cost_per_1k_input": 0.0008,
+      "cost_per_1k_output": 0.002
+    }
+  }
+}

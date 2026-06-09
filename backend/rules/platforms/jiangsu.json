@@ -1,0 +1,42 @@
+{
+  "platform": "jiangsu",
+  "name": "江苏省公共资源交易平台",
+  "version": "1.0.0",
+  "description": "江苏省招标投标规则差异",
+  "threshold_overrides": {
+    "routing_green_budget_max": 800000,
+    "routing_yellow_budget_max": 4000000
+  },
+  "additional_rules": [
+    {
+      "rule_id": "JS-001",
+      "rule_name": "远程异地评标要求",
+      "category": "D",
+      "rule_type": "required",
+      "description": "江苏省预算500万元以上项目须采用远程异地评标方式",
+      "risk_level": "high",
+      "suggestion": "确认大额项目已安排远程异地评标",
+      "regulation_basis": [{"title": "江苏省公共资源交易远程异地评标操作规程", "article": "第三条"}]
+    },
+    {
+      "rule_id": "JS-002",
+      "rule_name": "不见面开标要求",
+      "category": "D",
+      "rule_type": "required",
+      "description": "江苏省工程建设类项目推广'不见面'开标模式",
+      "risk_level": "low",
+      "suggestion": "确认项目采用不见面开标模式",
+      "regulation_basis": [{"title": "江苏省公共资源交易不见面开标管理办法", "article": "第五条"}]
+    },
+    {
+      "rule_id": "JS-003",
+      "rule_name": "中小企业价格扣除",
+      "category": "E",
+      "rule_type": "numeric_range",
+      "description": "江苏省对小微企业投标报价给予6%-10%的价格扣除",
+      "risk_level": "medium",
+      "suggestion": "评审办法中应明确小微企业的价格扣除比例",
+      "regulation_basis": [{"title": "江苏省财政厅关于进一步加大政府采购支持中小企业力度的通知", "article": "第二条"}]
+    }
+  ]
+}

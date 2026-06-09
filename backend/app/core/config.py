@@ -6,6 +6,12 @@ from pathlib import Path
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
+# Railway PostgreSQL 插件默认注入 DATABASE_URL；本项目配置使用 BHG_ 前缀。
+if os.environ.get("DATABASE_URL") and not (
+    os.environ.get("BHG_DATABASE_URL") or os.environ.get("BHG_database_url")
+):
+    os.environ["BHG_database_url"] = os.environ["DATABASE_URL"]
+
 # ── Vercel 环境检测 ────────────────────────────────
 # 在 Vercel 上自动使用 SQLite，避免 PostgreSQL + psycopg2 依赖
 if os.environ.get("VERCEL") or os.path.exists("/vercel"):

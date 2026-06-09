@@ -1,6 +1,8 @@
-# 包合规 - Railway/Docker 部署用依赖（不含 spaCy/WeasyPrint/playwright 等重型依赖）
+# 包合规 - Railway/Docker 部署用依赖
 fastapi>=0.115
+uvicorn[standard]>=0.34
 sqlalchemy>=2.0
+psycopg2-binary>=2.9
 python-multipart>=0.0.20
 pydantic>=2.0
 pydantic-settings>=2.0
@@ -12,5 +14,7 @@ httpx>=0.28
 jinja2>=3.1
 minio>=7.2
 PyMuPDF>=1.25
+python-docx>=1.1
+WeasyPrint>=63
 lxml>=5.0
 beautifulsoup4>=4.12
