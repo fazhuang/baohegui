@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖描述文件
-COPY requirements-railway.txt .
+COPY backend/requirements-railway.txt .
 RUN pip install --no-cache-dir -r requirements-railway.txt
 
 # ═══════════════════════════════════════════════════════════════
@@ -38,8 +38,8 @@ COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # 复制代码
-COPY app ./app
-COPY api ./api
+COPY backend/app ./app
+COPY backend/api ./api
 
 # 复制规则文件
 COPY rules ./rules
