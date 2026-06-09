@@ -34,6 +34,13 @@ if os.environ.get("VERCEL") or os.path.exists("/vercel"):
     os.environ.setdefault("BHG_rules_dir", "/tmp/rules")
 
 
+# ── Railway 环境检测 ────────────────────────────────
+# Railway 上没有 MinIO 服务，使用本地文件存储
+if os.environ.get("RAILWAY_SERVICE_ID") or os.environ.get("RAILWAY_ENVIRONMENT"):
+    os.environ.setdefault("BHG_minio_endpoint", "")
+    os.environ.setdefault("BHG_storage_dir", "/tmp/baohegui_uploads")
+
+
 class Settings(BaseSettings):
     # 应用
     app_name: str = "包合规"
@@ -48,6 +55,9 @@ class Settings(BaseSettings):
     minio_access_key: str = "baohegui"
     minio_secret_key: str = "baohegui"
     minio_bucket: str = "baohegui-files"
+
+    # 本地文件存储（MinIO 不可用时的回退路径）
+    storage_dir: str = "/tmp/baohegui_uploads"
 
     # JWT
     secret_key: str = "change-me-in-production"
