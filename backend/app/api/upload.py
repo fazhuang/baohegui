@@ -84,7 +84,7 @@ async def upload_file(
     # 计算文件哈希
     file_hash = hashlib.sha256(content).hexdigest()
 
-    # 上传到 MinIO
+    # 上传到 MinIO（或本地回退存储）
     file_id = str(uuid.uuid4())
     storage_key = _object_key(file_id, file.filename)
 
@@ -94,7 +94,7 @@ async def upload_file(
         else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
     try:
-        minio_service.upload(storage_key, content, content_type=content_type)
+        storage_path = minio_service.upload(storage_key, content, content_type=content_type)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -102,14 +102,14 @@ async def upload_file(
         )
 
     # 通过 local_path 获取本地文件用于解析
-    with minio_service.local_path(storage_key) as local_path:
+    with minio_service.local_path(storage_path) as local_path:
         try:
             parsed = parser.parse(local_path)
             page_count = parsed.page_count
         except Exception as e:
-            # 解析失败时删除 MinIO 对象
+            # 解析失败时删除已存储的文件
             try:
-                minio_service.delete(storage_key)
+                minio_service.delete(storage_path)
             except Exception:
                 pass
             raise HTTPException(
@@ -122,14 +122,14 @@ async def upload_file(
     if industry:
         industries = [ind.strip() for ind in industry.split(",") if ind.strip()]
 
-    # 写入数据库 — storage_path 现在存储的是 MinIO 对象键
+    # 写入数据库
     db_file = UploadedFile(
         user_id=int(user["sub"]),
         filename=file.filename,
         file_size=len(content),
         file_hash=file_hash,
         page_count=page_count,
-        storage_path=storage_key,
+        storage_path=storage_path,
         status="parsing",
     )
     db.add(db_file)
