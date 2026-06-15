@@ -124,14 +124,15 @@ async def run_compliance_check(
             with minio_service.local_path(db_file.storage_path) as local_path:
                 parsed = parser.parse(local_path)
         except Exception as e:
-            logger.error("文件解析失败 file_id=%d: %s", file_id, e)
+            logger.exception("文件解析失败 file_id=%d: %s", file_id, e)
+            sanitized = "文件解析失败，请稍后重试"
             db_file.status = "failed"
-            db_file.error_message = f"文件解析失败: {str(e)}"
+            db_file.error_message = sanitized
             db_file.failed_at = datetime.now(timezone.utc)
             db.commit()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"文件解析失败: {str(e)}",
+                detail=sanitized,
             )
 
         # 如果指定了行业，激活对应的行业规则
@@ -464,14 +465,15 @@ async def run_compliance_check(
         raise
     except Exception as e:
         logger.exception("合规检查未捕获异常 file_id=%d: %s", file_id, e)
-        _set_check_progress(file_id, stage="error", error=str(e))
+        sanitized = "内部处理错误，请稍后重试"
+        _set_check_progress(file_id, stage="error", error=sanitized)
         db_file.status = "failed"
-        db_file.error_message = f"检查失败: {str(e)}"
+        db_file.error_message = sanitized
         db_file.failed_at = datetime.now(timezone.utc)
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"合规检查失败: {str(e)}",
+            detail=sanitized,
         )
 
 

@@ -69,24 +69,50 @@ def _check_rate_limit(path: str) -> tuple[bool, int]:
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """为所有响应添加安全头"""
+    """为所有响应添加安全头
+
+    CSP 说明:
+    - 'unsafe-inline' / 'unsafe-eval' 是妥协：Vite/React/Ant Design 在生产构建中仍需
+      style-src 'unsafe-inline'（Ant Design 动态注入样式），且 Webpack/Vite HMR 需
+      script-src 'unsafe-eval'（仅 dev）。生产环境建议启用 nonce 或 hash-based CSP。
+    - 当前 CSP 作为第一道防线已覆盖 XSS 主攻击面（object-src 'none', base-uri 'self',
+      frame-ancestors 'none' 均已严格设置）。
+    - TODO: 为非 dev 构建启用 nonce-based script-src + style-src。
+    """
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: blob:; "
-            "connect-src 'self' https:; "
-            "font-src 'self'; "
-            "object-src 'none'; "
-            "base-uri 'self'; "
-            "form-action 'self'; "
-            "frame-ancestors 'none';"
-        )
+
+        # debug 模式下放宽 CSP 以支持 Vite HMR；生产环境收紧
+        if settings.debug:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob:; "
+                "connect-src 'self' https: ws:; "
+                "font-src 'self'; "
+                "object-src 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self'; "
+                "frame-ancestors 'none';"
+            )
+        else:
+            # 生产 CSP：仅保留 style-src 'unsafe-inline' (Ant Design 静态提取路径最小化需求)
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob:; "
+                "connect-src 'self' https:; "
+                "font-src 'self'; "
+                "object-src 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self'; "
+                "frame-ancestors 'none';"
+            )
         # HSTS: 仅 HTTPS / 生产环境启用
         if not settings.debug:
             response.headers["Strict-Transport-Security"] = (
