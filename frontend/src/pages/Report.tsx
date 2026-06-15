@@ -3,6 +3,7 @@
  *
  * 编排层：组合 features/report 中的组件。
  * 数据加载、状态管理和页面布局集中在此。
+ * useMobile hook 已拆分到 hooks/useBreakpoint。
  */
 
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
@@ -18,37 +19,20 @@ import { useParams } from 'react-router-dom';
 import { getReport, getReportExcelUrl, getReportPdfUrl } from '../services/api';
 import type { ComplianceReport, RuleViolation, LLMViolation } from '../types';
 import { getErrorMessage } from '../utils/error';
-import {
-  getRiskTag, extractSectionName,
-  type PipelineSummaryData,
-} from '../features/report/utils';
+import { getRiskTag, extractSectionName, type PipelineSummaryData } from '../features/report/utils';
 import {
   ScoreRing, ScoreBar, RadarChart,
   RuleDetailRow as RuleDetail, LlmDetailRow as LlmDetail,
   PriorityCard, RiskHeatmap, PipelineSummary,
   MobileRuleCard, MobileLlmCard,
 } from '../features/report/components';
+import { useBreakpoint } from '../features/report/hooks/useBreakpoint';
 
 const { Title, Text } = Typography;
 
-// ── 移动端检测 ──────────────────────────────────────────────
-function useMobile(): boolean {
-  const [mobile, setMobile] = useState(window.innerWidth < 768);
-  useEffect(() => {
-    const onResize = () => setMobile(window.innerWidth < 768);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
-  return mobile;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 主页面组件
-// ═══════════════════════════════════════════════════════════════
-
 const ReportPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const isMobile = useMobile();
+  const isMobile = useBreakpoint();
   const [report, setReport] = useState<ComplianceReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,18 +44,13 @@ const ReportPage: React.FC = () => {
     if (!id) return;
     setLoading(true);
     setError(null);
-    try {
-      setReport(await getReport(Number(id)));
-    } catch (e: unknown) {
-      setError(getErrorMessage(e, '报告加载失败'));
-    } finally {
-      setLoading(false);
-    }
+    try { setReport(await getReport(Number(id))); }
+    catch (e: unknown) { setError(getErrorMessage(e, '报告加载失败')); }
+    finally { setLoading(false); }
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
 
-  // ── 派生数据 ──────────────────────────────────────────────
   const sectionNames = useMemo(() => {
     const names = new Set<string>();
     (report?.rule_violations || []).forEach((v: RuleViolation) => names.add(extractSectionName(v.location || '')));
@@ -79,22 +58,13 @@ const ReportPage: React.FC = () => {
   }, [report]);
 
   const sectionOptions = sectionNames.map(s => ({ value: s, label: s }));
-  const riskOptions = [
-    { value: 'high', label: '高风险' },
-    { value: 'medium', label: '中风险' },
-    { value: 'low', label: '低风险' },
-  ];
-  const sourceOptions = [
-    { value: 'rule', label: '规则引擎' },
-    { value: 'llm', label: 'AI语义' },
-  ];
+  const riskOptions = [{ value: 'high', label: '高风险' }, { value: 'medium', label: '中风险' }, { value: 'low', label: '低风险' }];
+  const sourceOptions = [{ value: 'rule', label: '规则引擎' }, { value: 'llm', label: 'AI语义' }];
 
-  // ── 加载态 ────────────────────────────────────────────────
   if (loading) {
     return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" tip="加载报告中..." /></div>;
   }
 
-  // ── 错误态 ────────────────────────────────────────────────
   if (error || !report) {
     return (
       <Alert type="error" message="报告加载失败" description={error || '报告不存在'}
@@ -129,7 +99,7 @@ const ReportPage: React.FC = () => {
     { title: '章节', key: 'section', width: 100, render: (_: unknown, r: LLMViolation) => extractSectionName(r.section || '') },
   ];
 
-  // ── 桌面版 ────────────────────────────────────────────────
+  // ── 桌面版 ──
   if (!isMobile) {
     return (
       <div>
@@ -140,8 +110,6 @@ const ReportPage: React.FC = () => {
             <Button icon={<FileExcelOutlined />} onClick={() => { getReportExcelUrl(Number(id)).then(url => window.open(url)); }}>导出Excel</Button>
           </Space>
         </div>
-
-        {/* 评审概览 */}
         <Row gutter={[16, 16]}>
           <Col flex="240px"><ScoreRing score={report.total_score} /></Col>
           <Col flex="auto">
@@ -161,8 +129,6 @@ const ReportPage: React.FC = () => {
             ]} size={220} />
           </Col>
         </Row>
-
-        {/* LLM 用量 + 去重统计 */}
         <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
           <Col span={12}>
             <Card size="small" title={<Text strong>LLM 模型与消耗</Text>} style={{ borderRadius: 12 }}>
@@ -185,17 +151,9 @@ const ReportPage: React.FC = () => {
             </Card>
           </Col>
         </Row>
-
-        {/* 管线摘要 */}
-        <div style={{ marginTop: 16 }}>
-          <PipelineSummary data={pipelineData} isMobile={isMobile} />
-        </div>
-
-        {/* 优先级 + 热力图 */}
+        <div style={{ marginTop: 16 }}><PipelineSummary data={pipelineData} isMobile={isMobile} /></div>
         <PriorityCard violations={rule_violations} llmViolations={llm_violations} />
         <RiskHeatmap violations={rule_violations} llmViolations={llm_violations} />
-
-        {/* 筛选栏 */}
         <Card size="small" style={{ marginBottom: 16 }}>
           <Space wrap>
             <Select placeholder="章节筛选" allowClear style={{ width: 150 }} options={sectionOptions}
@@ -207,8 +165,6 @@ const ReportPage: React.FC = () => {
             <Text type="secondary">共 {total} 项 · 高风险 {report.high_risk_count} · 中风险 {report.medium_risk_count} · 低风险 {report.low_risk_count}</Text>
           </Space>
         </Card>
-
-        {/* 违规表格 */}
         {sourceFilter !== 'llm' && (
           <Card title={<Space><WarningOutlined /><span>规则引擎违规</span></Space>} style={{ borderRadius: 12, marginBottom: 16 }}>
             <Table dataSource={rule_violations} rowKey="rule_id" size="small" pagination={{ pageSize: 10 }}
@@ -225,7 +181,7 @@ const ReportPage: React.FC = () => {
     );
   }
 
-  // ── 移动版 ────────────────────────────────────────────────
+  // ── 移动版 ──
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -235,9 +191,7 @@ const ReportPage: React.FC = () => {
           <Button size="small" icon={<FileExcelOutlined />} onClick={() => { getReportExcelUrl(Number(id)).then(url => window.open(url)); }}>Excel</Button>
         </Space>
       </div>
-
       <ScoreRing score={report.total_score} size={100} />
-
       <Card size="small" style={{ marginTop: 12, borderRadius: 12 }}>
         <ScoreBar label="章节" value={report.section_score} icon={<ExperimentOutlined />} />
         <ScoreBar label="关键字" value={report.keyword_score} icon={<ExperimentOutlined />} />
@@ -247,15 +201,10 @@ const ReportPage: React.FC = () => {
           <Text type="secondary" style={{ fontSize: 11 }}>模型: {report.llm_model_used || '—'} · Token: {report.llm_tokens_used || '—'} · ¥{Number(report.llm_cost_yuan || 0).toFixed(4)}</Text>
         </div>
       </Card>
-
-      <div style={{ marginTop: 12 }}>
-        <PipelineSummary data={pipelineData} isMobile={isMobile} />
-      </div>
-
+      <div style={{ marginTop: 12 }}><PipelineSummary data={pipelineData} isMobile={isMobile} /></div>
       <Card size="small" title={`规则引擎违规 (${rule_violations.length})`} style={{ borderRadius: 12, marginTop: 12 }}>
         {rule_violations.length === 0 ? <Empty description="无规则违规" /> : rule_violations.map((v, i) => <MobileRuleCard key={i} v={v} />)}
       </Card>
-
       <Card size="small" title={`AI 语义审查 (${llm_violations.length})`} style={{ borderRadius: 12, marginTop: 12 }}>
         {llm_violations.length === 0 ? <Empty description="无AI检测风险" /> : llm_violations.map((v, i) => <MobileLlmCard key={i} v={v} />)}
       </Card>

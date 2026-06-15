@@ -3,7 +3,6 @@
  *
  * 菜单数据源：routeConfig (通过 extractMenuItems 派生，再注入 menuStore)
  * 权限控制：useAuthStore.isAdmin / isSuperAdmin
- * 不再依赖 config/menu.tsx。
  */
 
 import React, { useMemo } from 'react';

@@ -1,10 +1,3 @@
-/**
- * 审查历史 — 报告列表 / 筛选 / 趋势图 / 对比
- *
- * 编排层：使用 features/history/hooks 的状态管理。
- * TrendChart 作为纯视图组件保留。
- */
-
 import React, { useState, useMemo } from 'react'
 import {
   Button, Card, Checkbox, Col, DatePicker, Empty, Input, Row, Select, Slider,
@@ -16,53 +9,9 @@ import { ReloadOutlined, SearchOutlined, SwapOutlined, WarningOutlined } from '@
 import dayjs from 'dayjs'
 import type { ReportListItem } from '../types'
 import { useReportHistory, SORT_OPTIONS, DEFAULT_PAGE_SIZE } from '../features/history/hooks/useReportHistory'
+import TrendChart from '../features/history/components/TrendChart'
 
 const { Title, Text } = Typography
-type SortValue = `${string}:${'asc' | 'desc'}`
-
-// ═══════════════════════════════════════════════════════════════
-// SVG 趋势图 (纯视图组件)
-// ═══════════════════════════════════════════════════════════════
-
-const TrendChart: React.FC<{ reports: ReportListItem[] }> = ({ reports }) => {
-  const w = 640; const h = 180; const px = 44; const py = 24; const maxScore = 100
-  const xStep = (w - px - 24) / Math.max(reports.length - 1, 1)
-  const pts = reports.map((r, i) => ({
-    x: px + i * xStep, y: h - py - (r.total_score / maxScore) * (h - 2 * py),
-    score: r.total_score, label: `#${r.id}`,
-  }))
-  const line = pts.map((p) => `${p.x},${p.y}`).join(' ')
-  const areaPath = `${pts[0].x},${h - py} ${line} ${pts[pts.length - 1].x},${h - py}`
-
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', maxHeight: h, marginTop: 8 }}>
-      {[0, 25, 50, 75, 100].map((value) => {
-        const y = h - py - (value / maxScore) * (h - 2 * py)
-        return (
-          <g key={value}>
-            <line x1={px} y1={y} x2={w - 12} y2={y} stroke="var(--color-border)" strokeWidth={1} />
-            <text x={px - 8} y={y + 4} textAnchor="end" fontSize={10} fill="var(--color-text-tertiary)">{value}</text>
-          </g>
-        )
-      })}
-      <polygon points={areaPath} fill="rgba(37,99,235,0.08)" />
-      <polyline points={line} fill="none" stroke="var(--color-action)" strokeWidth={2} strokeLinejoin="round" />
-      {pts.map((point, index) => (
-        <g key={index}>
-          <circle cx={point.x} cy={point.y} r={4} fill="var(--color-action)" stroke="#fff" strokeWidth={2} />
-          <text x={point.x} y={point.y - 10} textAnchor="middle" fontSize={10} fill="var(--color-text-secondary)">{point.score}</text>
-        </g>
-      ))}
-      {pts.map((point, idx) => (
-        <text key={idx} x={point.x} y={h - 4} textAnchor="middle" fontSize={9} fill="var(--color-text-tertiary)">{point.label}</text>
-      ))}
-    </svg>
-  )
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 主页面
-// ═══════════════════════════════════════════════════════════════
 
 const HistoryPage: React.FC = () => {
   const navigate = useNavigate()
@@ -164,11 +113,11 @@ const HistoryPage: React.FC = () => {
             <Space align="center" style={{ width: '100%' }}>
               <Text style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>评分区间</Text>
               <Slider range min={0} max={100} value={[scoreMin, scoreMax]}
-                onAfterChange={(value) => applyScoreRange(value as number[])} style={{ flex: 1, margin: 0 }} />
+                onAfterChange={(v) => applyScoreRange(v as [number, number])} style={{ flex: 1, margin: 0 }} />
             </Space>
           </Col>
           <Col xs={24} sm={12} md={4} lg={4}>
-            <Select style={{ width: '100%' }} value={`${sortBy}:${sortOrder}` as SortValue}
+            <Select style={{ width: '100%' }} value={`${sortBy}:${sortOrder}`}
               options={SORT_OPTIONS} onChange={applySort} />
           </Col>
           <Col xs={24} sm={24} md={2} lg={2}>
