@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     rules_dir: str = "rules"
 
     # 多模型路由
-    llm_multi_model_enabled: bool = False  # 是否启用多模型路由
+    llm_multi_model_enabled: bool = True  # 是否启用多模型路由
     llm_multi_model_config: str = "rules/prompts/model_routing.json"
     # 各模型API密钥
     llm_deepseek_api_key: str = ""
@@ -130,14 +130,39 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_secret_key(self) -> "Settings":
-        """生产环境必须设置非默认的 secret_key，否则拒绝启动"""
-        if self.secret_key == "change-me-in-production":
-            # Railway 等平台没有 Vercel 标记，自动降级为 debug 模式
-            self.debug = True
-        if not self.debug and self.secret_key == "change-me-in-production":
+        """安全基线：强失败 SECRET_KEY 校验
+
+        拒绝启动条件（按优先级）：
+        1. SECRET_KEY 为空
+        2. SECRET_KEY 为已知默认值（change-me-in-production 或类似）
+        3. SECRET_KEY 长度不足（< 32 字符）
+        4. 生产环境且 SECRET_KEY 短于 32 字符时同样拒绝
+        """
+        # 检查默认值
+        known_defaults = {
+            "change-me-in-production",
+            "change-me-in-production-please",
+            "change_me",
+            "changeme",
+            "secret",
+            "my-secret-key",
+        }
+        if not self.secret_key:
             raise ValueError(
-                "生产环境禁止使用默认 secret_key。"
-                "请设置环境变量 BHG_SECRET_KEY 为一个随机字符串。"
+                "BHG_SECRET_KEY 不得为空。"
+                "请设置环境变量 BHG_SECRET_KEY 为一个安全的随机字符串。"
+                "示例: python -c 'import secrets; print(secrets.token_urlsafe(64))'"
+            )
+        if self.secret_key.lower() in known_defaults:
+            raise ValueError(
+                f"禁止使用默认 SECRET_KEY ('{self.secret_key}')。"
+                "请设置环境变量 BHG_SECRET_KEY 为一个安全的随机字符串。"
+                "示例: python -c 'import secrets; print(secrets.token_urlsafe(64))'"
+            )
+        if len(self.secret_key) < 32:
+            raise ValueError(
+                f"SECRET_KEY 长度不足 ({len(self.secret_key)} 字符，要求 ≥ 32)。"
+                "请设置环境变量 BHG_SECRET_KEY 为至少 32 字符的随机字符串。"
                 "示例: python -c 'import secrets; print(secrets.token_urlsafe(64))'"
             )
         return self

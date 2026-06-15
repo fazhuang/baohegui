@@ -37,3 +37,8 @@ nginx/ssl/*.key
 nginx/ssl/*.p12
 nginx/ssl/*.pfx
 !nginx/ssl/.gitkeep
+
+# 测试运行时残留（空文件标记、临时数据库）
+200
+completed
+backend/.test_tmp/

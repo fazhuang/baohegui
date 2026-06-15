@@ -43,9 +43,10 @@ class AuditService:
         resource_id: Optional[str] = None,
         detail: Optional[dict] = None,
         ip_address: Optional[str] = None,
-    ) -> None:
+    ) -> Optional[int]:
+        """写入一条审计日志，返回条目 id 或 None"""
         if not self.enabled:
-            return
+            return None
         try:
             with Session(self.engine) as session:
                 entry = AuditLog(
@@ -58,8 +59,10 @@ class AuditService:
                 )
                 session.add(entry)
                 session.commit()
+                return entry.id
         except Exception as e:
             logger.error(f"审计日志写入失败: {e}")
+            return None
 
     def query(self, user_id: Optional[int] = None, limit: int = 100) -> list[dict]:
         if not self.enabled:

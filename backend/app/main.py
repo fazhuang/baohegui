@@ -5,13 +5,21 @@ import time
 import traceback
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api import admin, announcements, auth, categories, check, crawler, knowledge_graph, member, report, rules, stats, upload
 from app.core.config import settings
+from app.core.metrics import (
+    http_request_duration_seconds,
+    http_requests_total,
+    get_metrics_response,
+    rules_loaded_gauge,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,6 +61,110 @@ def _check_rate_limit(path: str) -> tuple[bool, int]:
 
     _rate_limits[path].append(now)
     return True, limit - len(_rate_limits[path])
+
+
+# ═══════════════════════════════════════════════════════════════
+# 安全中间件
+# ═══════════════════════════════════════════════════════════════
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """为所有响应添加安全头"""
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; "
+            "connect-src 'self' https:; "
+            "font-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none';"
+        )
+        # HSTS: 仅 HTTPS / 生产环境启用
+        if not settings.debug:
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains; preload"
+            )
+        return response
+
+
+class TrustedHostMiddleware(BaseHTTPMiddleware):
+    """校验 Host 请求头，拒绝未知主机以防止 DNS rebinding。
+
+    信任主机列表：
+    - CORS origins 中的域名
+    - localhost / 127.0.0.1
+    - Railway / Vercel 部署域名
+    - 环境变量 BHG_TRUSTED_HOSTS 中指定的域名（逗号分隔）
+
+    debug 模式下此中间件跳过校验。
+    """
+
+    _trusted_hosts: set[str] | None = None
+
+    def _get_trusted_hosts(self) -> set[str]:
+        if self._trusted_hosts is not None:
+            return self._trusted_hosts
+        hosts: set[str] = {"localhost", "127.0.0.1"}
+        # 从 CORS origins 提取域名
+        for origin in settings.get_cors_origins():
+            if origin == "*":
+                continue
+            try:
+                parsed = urlparse(origin if "://" in origin else f"https://{origin}")
+                if parsed.hostname:
+                    hosts.add(parsed.hostname)
+            except Exception:
+                pass
+        # 从环境变量读取
+        import os
+        env_hosts = os.environ.get("BHG_TRUSTED_HOSTS", "")
+        if env_hosts:
+            for h in env_hosts.split(","):
+                h = h.strip()
+                if h:
+                    hosts.add(h)
+        # Railway/Vercel 域名段
+        hosts.update({
+            ".railway.app", ".railway.internal", ".up.railway.app",
+            ".vercel.app", ".now.sh",
+        })
+        self._trusted_hosts = hosts
+        return hosts
+
+    def _host_allowed(self, host: str) -> bool:
+        """检查 Host 头是否被信任"""
+        if not host:
+            return False
+        host = host.split(":")[0].lower()  # remove port
+        trusted = self._get_trusted_hosts()
+        if host in trusted:
+            return True
+        # 通配符匹配 (.railway.app 匹配 anything.railway.app)
+        for t in trusted:
+            if t.startswith(".") and host.endswith(t):
+                return True
+        return False
+
+    async def dispatch(self, request: Request, call_next):
+        # debug 模式跳过
+        if settings.debug:
+            return await call_next(request)
+        host = request.headers.get("host", "")
+        if not self._host_allowed(host):
+            logger.warning("TrustedHostMiddleware: 拒绝未知 Host: %s", host)
+            return JSONResponse(
+                status_code=421,
+                content={"detail": "无效的请求主机"},
+            )
+        return await call_next(request)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -101,11 +213,16 @@ async def lifespan(app: FastAPI):
     logger.info("应用关闭")
 
 
+# 生产环境关闭 API 文档
+_docs_enabled = settings.debug
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="招标文件发布前合规自检系统",
+    description="招标文件发布前合规自检系统" if _docs_enabled else None,
     lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 # CORS 配置
@@ -117,6 +234,10 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
+
+# 安全中间件
+app.add_middleware(TrustedHostMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 # ── 频率限制中间件 ────────────────────────────────────────
@@ -135,6 +256,40 @@ async def rate_limit_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     return response
+
+
+# ── Prometheus HTTP 指标中间件 ─────────────────────────────
+
+
+@app.middleware("http")
+async def prometheus_metrics_middleware(request: Request, call_next):
+    """记录每个 HTTP 请求的计数与耗时"""
+    start = time.monotonic()
+    response = await call_next(request)
+    duration = time.monotonic() - start
+    # 简化 endpoint 标签：取路径前缀（避免高基数）
+    path = request.url.path
+    endpoint = _simplify_path(path)
+    http_requests_total.labels(
+        method=request.method,
+        endpoint=endpoint,
+        status_code=str(response.status_code),
+    ).inc()
+    http_request_duration_seconds.labels(
+        method=request.method,
+        endpoint=endpoint,
+    ).observe(duration)
+    return response
+
+
+def _simplify_path(path: str) -> str:
+    """将带 ID 的路径简化为模式（如 /api/report/42 → /api/report/{id}）"""
+    import re
+    # 替换数字段
+    path = re.sub(r"/\d+", "/{id}", path)
+    # 替换 UUID 段
+    path = re.sub(r"/[0-9a-fA-F-]{36}", "/{uuid}", path)
+    return path
 
 
 # 注册路由
@@ -207,4 +362,13 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 @app.get("/health")
 async def health():
+    # 刷新规则引擎指标
+    from app.engine.rule_engine import rule_engine
+    rules_loaded_gauge.set(len(rule_engine.rules))
     return {"status": "ok", "version": settings.app_version}
+
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    """Prometheus 指标导出端点"""
+    return PlainTextResponse(content=get_metrics_response(), media_type="text/plain; version=0.0.4")
