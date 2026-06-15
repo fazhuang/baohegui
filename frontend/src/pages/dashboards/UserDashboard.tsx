@@ -17,6 +17,7 @@ import {
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { getMemberDashboard, listAnnouncements } from '../../services/api'
+import type { MemberDashboardResponse } from '../../types'
 import EmptyState from '../../components/EmptyState'
 
 const { Title, Text, Paragraph } = Typography
@@ -52,6 +53,10 @@ interface DashboardData {
 
 const RISK_COLORS: Record<string, string> = {
   critical: '#dc2626', high: '#ea580c', medium: '#eab308', low: '#16a34a', pass: '#2563eb',
+}
+
+const RISK_LABELS: Record<string, string> = {
+  critical: '严重', high: '高风险', medium: '中风险', low: '低风险', pass: '通过',
 }
 
 const SEVERITY_COLORS: Record<string, { border: string; bg: string; text: string; label: string }> = {
@@ -156,15 +161,39 @@ const UserDashboard: React.FC = () => {
         const token = localStorage.getItem('token')
         if (!token) return
         const [dashResp, annResp] = await Promise.all([
-          getMemberDashboard().catch(() => null),
-          listAnnouncements({ limit: 5 }).catch(() => null),
+          getMemberDashboard().catch(() => ({ compliance: {} }) as MemberDashboardResponse),
+          listAnnouncements({ limit: 5 }).catch(() => []),
         ])
-        const dash = dashResp?.compliance; const ann = annResp
+        const comp = dashResp.compliance ?? {}
+        const summaryData = {
+          total_reports: comp.total_reports ?? 0,
+          reports_this_month: comp.reports_this_month ?? 0,
+          passed_count: comp.passed_count ?? 0,
+          failed_count: comp.failed_count ?? 0,
+          pass_rate: comp.pass_rate ?? 0,
+          risk_level_distribution: {
+            critical: comp.risk_level_distribution?.critical ?? 0,
+            high: comp.risk_level_distribution?.high ?? 0,
+            medium: comp.risk_level_distribution?.medium ?? 0,
+            low: comp.risk_level_distribution?.low ?? 0,
+          },
+        }
         setData({
-          summary: dash?.data?.compliance || dash?.compliance || { total_reports: 0, reports_this_month: 0, passed_count: 0, failed_count: 0, pass_rate: 0, risk_level_distribution: { critical: 0, high: 0, medium: 0, low: 0 } },
-          recent_reports: dash?.compliance?.recent || [],
-          announcements: ann?.data?.announcements || ann?.announcements || [],
-          monthly_trend: dash?.compliance?.monthly_trend || [],
+          summary: summaryData,
+          recent_reports: (comp.recent || []).map((r) => ({
+            ...r,
+            risk_level_cn: (() => { const rl = r.risk_level; return RISK_LABELS[rl] || rl; })(),
+          })),
+          announcements: (annResp || []).slice(0, 5).map((a: Record<string, unknown>) => ({
+            id: a.id as number,
+            title: a.title as string,
+            severity: a.severity as string,
+            category: a.category as string,
+            case_date: a.case_date as string,
+            summary: a.summary as string,
+            source: a.source as string,
+          })),
+          monthly_trend: comp.monthly_trend || [],
         })
       } catch {
         message.error('数据加载失败')

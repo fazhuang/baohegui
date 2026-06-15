@@ -4,8 +4,9 @@
  * 核心原则:
  * 1. /auth/me 失败 → 清空 token → 跳转 login → 不渲染任何受保护页面
  * 2. 权限来源只有一个: 服务端返回的 permissions 数组
- * 3. localStorage 只存 token 和 remember_me，不存 role/username
- * 4. role 仅用于展示目的，不作为权限判断依据
+ * 3. localStorage 只存 token，不存 role/username（仅 saved_username 用于登录页回显）
+ * 4. role 来自服务端真实字段 (admin / user)
+ * 5. isSuperAdmin 必须来自服务端显式字段，禁止从 permissions 推导
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
@@ -21,11 +22,11 @@ interface PermissionContextValue {
   loading: boolean;
   /** 检查当前用户是否拥有某权限 (基于服务端 permissions) */
   hasPerm: (perm: PermissionKey) => boolean;
-  /** 是否为管理员 (从 permissions 推导) */
+  /** 是否为管理员 (来自服务端 role 字段) */
   isAdmin: boolean;
-  /** 是否为超级管理员 (从 permissions 推导) */
+  /** 是否为超级管理员 (来自服务端 is_super_admin 字段) */
   isSuperAdmin: boolean;
-  /** 当前角色 (仅展示用) */
+  /** 当前角色 (来自服务端) */
   role: UserRole | null;
   /** 退出登录 */
   logout: () => void;
@@ -38,6 +39,8 @@ export interface CurrentUser {
   company: string;
   email: string;
   permissions: string[];
+  /** 后端 is_super_admin 字段 (暂未落地，默认 false) */
+  isSuperAdmin: boolean;
 }
 
 const PermissionContext = createContext<PermissionContextValue>({
@@ -64,21 +67,22 @@ export function PermissionProvider({ children }: { children: React.ReactNode }) 
 
     try {
       const data = await getCurrentUser();
-      const perms = data.permissions || [];
+      const perms: string[] = data.permissions || [];
+      const serverRole = mapServerRole(data.role);
+      // 后端当前无 is_super_admin 字段，默认 false
+      const superAdmin: boolean = data.is_super_admin === true;
       setUser({
         userId: data.user_id,
         username: data.username,
-        role: mapServerRole(data.role),
+        role: serverRole,
         company: data.company || '',
         email: data.email || '',
         permissions: perms,
+        isSuperAdmin: superAdmin,
       });
-      // 仅保存展示所需的 username (不做权限依据)
-      localStorage.setItem('saved_username', data.username);
     } catch {
       // token 无效/过期 — 清空所有本地状态
       localStorage.removeItem('token');
-      localStorage.removeItem('saved_username');
       navigate('/login', { replace: true });
     } finally {
       setLoading(false);
@@ -91,20 +95,20 @@ export function PermissionProvider({ children }: { children: React.ReactNode }) 
 
   const logout = useCallback(() => {
     localStorage.removeItem('token');
-    localStorage.removeItem('saved_username');
     setUser(null);
     navigate('/login', { replace: true });
   }, [navigate]);
 
   const perms = user?.permissions ?? [];
+  const currentRole = user?.role ?? null;
 
   const value: PermissionContextValue = {
     user,
     loading,
     hasPerm: (perm: PermissionKey) => hasPermission(perms, perm),
-    isAdmin: isAdminLike(perms),
-    isSuperAdmin: isSuperAdminLike(perms),
-    role: user?.role ?? null,
+    isAdmin: isAdminLike(perms, currentRole),
+    isSuperAdmin: isSuperAdminLike(perms, currentRole),
+    role: currentRole,
     logout,
   };
 

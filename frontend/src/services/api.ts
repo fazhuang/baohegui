@@ -10,6 +10,7 @@ import type {
   ReportListResponse,
   PlatformRule, RuleListResponse, SyncResultData, SyncHistoryItem,
   SyncStatus, DashboardStats, EngineStatus, BillingStatus,
+  ComplianceReport, MemberDashboardResponse,
 } from '../types';
 import type { UserInfo, AuditLogEntry, CompareResult } from '../types/admin-types';
 
@@ -38,6 +39,8 @@ export interface CurrentUserResponse {
   company: string;
   email: string;
   permissions: string[];
+  /** 后端暂未落地，预留 */
+  is_super_admin?: boolean;
 }
 
 export async function loginUser(params: LoginParams): Promise<LoginResult> {
@@ -118,7 +121,7 @@ export async function getCheckStatus(fileId: number): Promise<{
 // Report
 // ═══════════════════════════════════════════════════════════════
 
-export async function getReport(reportId: number): Promise<any> {
+export async function getReport(reportId: number): Promise<ComplianceReport> {
   const { data } = await http.get(`/report/${reportId}`);
   return data;
 }
@@ -304,7 +307,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
 // Member
 // ═══════════════════════════════════════════════════════════════
 
-export async function getMemberDashboard(): Promise<any> {
+export async function getMemberDashboard(): Promise<MemberDashboardResponse> {
   const { data } = await http.get('/member/dashboard');
   return data;
 }
@@ -313,7 +316,7 @@ export async function getMemberDashboard(): Promise<any> {
 // Announcements
 // ═══════════════════════════════════════════════════════════════
 
-export async function listAnnouncements(params?: { limit?: number }): Promise<any> {
+export async function listAnnouncements(params?: { limit?: number }): Promise<Array<Record<string, unknown>>> {
   const { data } = await http.get('/announcements', { params });
   return data;
 }

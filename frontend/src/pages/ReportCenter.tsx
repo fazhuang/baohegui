@@ -16,8 +16,8 @@ import PageHeader from '../components/PageHeader';
 const ReportCenter: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { isAdmin, role } = usePermission();
-  const canReview = isAdmin || role === 'reviewer';
+  const { isAdmin } = usePermission();
+  const canReview = isAdmin;
 
   const items = [
     { key: '/reports', label: '报告列表', icon: <FileTextOutlined /> },

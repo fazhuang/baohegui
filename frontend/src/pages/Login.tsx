@@ -51,11 +51,11 @@ const LoginPage: React.FC<LoginProps> = (props) => {
       message.success(`登录成功，欢迎 ${data.username}`)
       ok = true
     } catch (err: unknown) {
-      const anyErr = err as any
-      if (anyErr?.code === 'ERR_NETWORK' || anyErr?.code === 'ECONNREFUSED' || String(anyErr?.message || '').includes('Network')) {
+      const axiosErr = err as { code?: string; message?: string; response?: { status?: number; data?: { detail?: string } } }
+      if (axiosErr?.code === 'ERR_NETWORK' || axiosErr?.code === 'ECONNREFUSED' || String(axiosErr?.message || '').includes('Network')) {
         setServerDown(true)
         setError('无法连接到服务器，请检查服务是否已启动')
-      } else if (anyErr?.response?.status === 401) {
+      } else if (axiosErr?.response?.status === 401) {
         setError('用户名或密码错误')
       } else {
         setError(getErrorMessage(err, '登录失败'))

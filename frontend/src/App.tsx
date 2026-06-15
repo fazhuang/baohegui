@@ -7,6 +7,7 @@ import ShellLayout from './layouts/ShellLayout'
 import RouteGuard from './routes/RouteGuard'
 import NotFoundPage from './routes/NotFoundPage'
 import ComingSoonPage from './components/common/ComingSoonPage'
+import ErrorBoundary from './components/ErrorBoundary'
 
 // ── 懒加载页面 ──────────────────────────────────────────────
 const LoginPage = lazy(() => import('./pages/Login'))
@@ -18,8 +19,6 @@ const ReportPage = lazy(() => import('./pages/Report'))
 const HistoryPage = lazy(() => import('./pages/History'))
 const AdminRulesPage = lazy(() => import('./pages/AdminRules'))
 const AdminPanel = lazy(() => import('./pages/AdminPanel'))
-
-// ── P4 容器页面 ────────────────────────────────────────────
 const ReviewCenter = lazy(() => import('./pages/ReviewCenter'))
 const RulesCenter = lazy(() => import('./pages/RulesCenter'))
 const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
@@ -27,10 +26,17 @@ const ReportCenter = lazy(() => import('./pages/ReportCenter'))
 const Announcements = lazy(() => import('./pages/Announcements'))
 const UserCenter = lazy(() => import('./pages/UserCenter'))
 const SystemManage = lazy(() => import('./pages/SystemManage'))
-const OpsCenter = lazy(() => import('./pages/OpsCenter'))
 
 const FB = <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}><Spin size="large" /></div>
-function L({ children }: { children: React.ReactNode }) { return <Suspense fallback={FB}>{children}</Suspense> }
+
+/** ErrorBoundary 包裹的懒加载组件 */
+function EL({ children }: { children: React.ReactNode }) {
+  return (
+    <ErrorBoundary>
+      <Suspense fallback={FB}>{children}</Suspense>
+    </ErrorBoundary>
+  )
+}
 
 function ProtectedShell() {
   const { user, loading } = usePermission()
@@ -69,95 +75,66 @@ function App() {
         <BrowserRouter>
           <Routes>
             {/* ── 公开路由 ────────────────────────────────── */}
-            <Route path="/login" element={<L><LoginPage onLogin={() => window.location.href = '/'} /></L>} />
-            <Route path="/forgot-password" element={<L><ForgotPassword /></L>} />
-            <Route path="/reset-password" element={<L><ResetPassword /></L>} />
+            <Route path="/login" element={<EL><LoginPage onLogin={() => window.location.href = '/'} /></EL>} />
+            <Route path="/forgot-password" element={<EL><ForgotPassword /></EL>} />
+            <Route path="/reset-password" element={<EL><ResetPassword /></EL>} />
 
             {/* ── 受保护路由 ──────────────────────────────── */}
             <Route element={<PermissionProvider><ProtectedShell /></PermissionProvider>}>
               {/* 工作台 */}
-              <Route index element={<L><DashboardPage /></L>} />
-              <Route path="report/:id" element={<L><ReportPage /></L>} />
+              <Route index element={<EL><DashboardPage /></EL>} />
+              <Route path="report/:id" element={<EL><ReportPage /></EL>} />
 
               {/* ── 审查中心 ──────────────────────────────── */}
-              <Route path="review" element={<L><ReviewCenter /></L>}>
-                <Route index element={<L><UploadPage /></L>} />
-                <Route path="history" element={<L><HistoryPage /></L>} />
+              <Route path="review" element={<EL><ReviewCenter /></EL>}>
+                <Route index element={<EL><UploadPage /></EL>} />
+                <Route path="history" element={<EL><HistoryPage /></EL>} />
               </Route>
 
               {/* ── 报告中心 ──────────────────────────────── */}
-              <Route path="reports" element={<L><ReportCenter /></L>}>
-                <Route index element={<L><HistoryPage /></L>} />
+              <Route path="reports" element={<EL><ReportCenter /></EL>}>
+                <Route index element={<EL><HistoryPage /></EL>} />
                 <Route path="feedback" element={
-                  <RouteGuard roles={['super_admin', 'admin', 'reviewer']}>
-                    <ComingSoonPage title="反馈管理" />
-                  </RouteGuard>
+                  <RouteGuard roles={['admin']}><ComingSoonPage title="反馈管理" /></RouteGuard>
                 } />
               </Route>
 
               {/* ── 知识库 ────────────────────────────────── */}
-              <Route path="kg" element={<L><KnowledgeBase /></L>}>
+              <Route path="kg" element={<EL><KnowledgeBase /></EL>}>
                 <Route index element={<ComingSoonPage title="知识图谱" />} />
                 <Route path="cases" element={<ComingSoonPage title="案例库" />} />
                 <Route path="legal" element={<ComingSoonPage title="法规库" />} />
               </Route>
 
               {/* ── 警示公告 ──────────────────────────────── */}
-              <Route path="announcements" element={<L><Announcements /></L>}>
+              <Route path="announcements" element={<EL><Announcements /></EL>}>
                 <Route index element={<ComingSoonPage title="警示公告" />} />
                 <Route path="manage" element={
-                  <RouteGuard roles={['super_admin', 'admin']}>
-                    <ComingSoonPage title="公告管理" />
-                  </RouteGuard>
+                  <RouteGuard roles={['admin']}><ComingSoonPage title="公告管理" /></RouteGuard>
                 } />
               </Route>
 
               {/* ── 用户中心 ──────────────────────────────── */}
-              <Route path="account" element={<L><UserCenter /></L>}>
+              <Route path="account" element={<EL><UserCenter /></EL>}>
                 <Route index element={<ComingSoonPage title="我的账户" />} />
                 <Route path="subscription" element={<ComingSoonPage title="订阅管理" />} />
               </Route>
 
-              {/* ── 规则中心 (admin+) ─────────────────────── */}
-              <Route element={<RouteGuard roles={['super_admin', 'admin']} />}>
-                <Route path="rules" element={<L><RulesCenter /></L>}>
-                  <Route index element={<L><AdminRulesPage /></L>} />
-                  <Route path="editor" element={<L><AdminRulesPage /></L>} />
-                  <Route path="versions" element={<L><AdminRulesPage /></L>} />
-                  <Route path="sync" element={<L><AdminRulesPage /></L>} />
+              {/* ── 规则中心 (admin) ──────────────────────── */}
+              <Route element={<RouteGuard roles={['admin']} />}>
+                <Route path="rules" element={<EL><RulesCenter /></EL>}>
+                  <Route index element={<EL><AdminRulesPage /></EL>} />
+                  <Route path="editor" element={<EL><AdminRulesPage /></EL>} />
+                  <Route path="versions" element={<EL><AdminRulesPage /></EL>} />
+                  <Route path="sync" element={<EL><AdminRulesPage /></EL>} />
                   <Route path="industry" element={<ComingSoonPage title="行业配置" />} />
                 </Route>
 
-                {/* ── 系统管理 (admin+) ─────────────────── */}
-                <Route path="manage" element={<L><SystemManage /></L>}>
-                  <Route index element={<L><AdminPanel /></L>} />
-                  <Route path="audit" element={<L><AdminPanel /></L>} />
-                  <Route path="quota" element={<L><AdminPanel /></L>} />
-                </Route>
-              </Route>
-
-              {/* ── 超级管理员专有 ────────────────────────── */}
-              <Route element={<RouteGuard roles={['super_admin']} />}>
-                <Route path="manage/roles" element={<L><SystemManage /></L>}>
-                  <Route index element={<L><AdminPanel /></L>} />
-                </Route>
-                <Route path="manage/config" element={<L><SystemManage /></L>}>
-                  <Route index element={<L><AdminPanel /></L>} />
-                </Route>
-                <Route path="manage/model" element={<L><SystemManage /></L>}>
-                  <Route index element={<L><AdminPanel /></L>} />
-                </Route>
-                <Route path="manage/security" element={<L><SystemManage /></L>}>
-                  <Route index element={<L><AdminPanel /></L>} />
-                </Route>
-
-                {/* ── 运维中心 ─────────────────────────── */}
-                <Route path="ops" element={<L><OpsCenter /></L>}>
-                  <Route index element={<ComingSoonPage title="运维概览" />} />
-                  <Route path="scheduler" element={<ComingSoonPage title="规则同步调度" />} />
-                  <Route path="crawler" element={<ComingSoonPage title="案例采集引擎" />} />
-                  <Route path="kg-seed" element={<ComingSoonPage title="知识图谱播种" />} />
-                  <Route path="health" element={<ComingSoonPage title="系统健康" />} />
+                {/* ── 系统管理 (admin) ─────────────────── */}
+                <Route path="manage" element={<EL><SystemManage /></EL>}>
+                  <Route index element={<EL><AdminPanel /></EL>} />
+                  <Route path="audit" element={<EL><AdminPanel /></EL>} />
+                  <Route path="quota" element={<EL><AdminPanel /></EL>} />
                 </Route>
               </Route>
 

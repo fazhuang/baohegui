@@ -17,7 +17,7 @@ import {
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { getMemberDashboard, getDashboardStats } from '../../services/api'
-import type { DashboardStats } from '../../types'
+import type { DashboardStats, MemberDashboardResponse } from '../../types'
 import KpiCard from '../../components/dashboard/KpiCard'
 import RiskDistribution from '../../components/dashboard/RiskDistribution'
 import TrendChart from '../../components/dashboard/TrendChart'
@@ -60,15 +60,16 @@ const SuperAdminDashboard: React.FC = () => {
     const fetchData = async () => {
       try {
         const [dashResp, statsResp] = await Promise.all([
-          getMemberDashboard().catch(() => null),
+          getMemberDashboard().catch(() => ({ compliance: {} }) as MemberDashboardResponse),
           getDashboardStats().catch(() => null),
         ])
-        const dash = dashResp?.compliance || {}
+        const dash: MemberDashboardResponse = dashResp;
+        const comp = dash.compliance ?? {};
         const stats: DashboardStats | null = statsResp || null
 
         setData({
           summary: {
-            today_reviews: dash.reports_this_month || 0,
+            today_reviews: comp.reports_this_month ?? 0,
             active_users: 0,
             token_used_today: stats?.llm?.total_tokens || 0,
             token_cost_today: stats?.llm?.total_cost || 0,
@@ -77,12 +78,12 @@ const SuperAdminDashboard: React.FC = () => {
             health_status: 'ok',
             health_latency: 45,
           },
-          review_trend: (dash.monthly_trend || []).map((d: any) => ({ label: d.month?.slice(5) || d.month, count: d.count })),
-          model_calls_trend: (stats?.llm?.recent_calls || []).slice(-7).map((c: any) => ({ label: c.timestamp?.slice(5, 10) || '', count: c.tokens || 0 })),
+          review_trend: (comp.monthly_trend || []).map((d) => ({ label: d.month?.slice(5) || d.month, count: d.count })),
+          model_calls_trend: (stats?.llm?.recent_calls || []).slice(-7).map((c) => ({ label: (c.timestamp ?? '').slice(5, 10) || '', count: c.tokens || 0 })),
           risk_distribution: {
-            high: dash.risk_level_distribution?.high || 0,
-            medium: dash.risk_level_distribution?.medium || 0,
-            low: dash.risk_level_distribution?.low || 0,
+            high: comp.risk_level_distribution?.high || 0,
+            medium: comp.risk_level_distribution?.medium || 0,
+            low: comp.risk_level_distribution?.low || 0,
           },
           alerts: [
             { label: '配额超限用户', severity: 'error', count: 0 },
@@ -90,11 +91,11 @@ const SuperAdminDashboard: React.FC = () => {
             { label: '规则同步待更新', severity: 'warning', count: 0 },
           ],
           pending_tasks: [
-            { label: '复核待审', count: (dash.risk_level_distribution?.high || 0) + (dash.risk_level_distribution?.critical || 0), path: '/reports' },
+            { label: '复核待审', count: (comp.risk_level_distribution?.high || 0) + (comp.risk_level_distribution?.critical || 0), path: '/reports' },
             { label: 'KG 节点审核', count: 0, path: '/ops/kg-seed' },
             { label: '规则同步待更新', count: 0, path: '/ops/scheduler' },
           ],
-          recent_reports: (dash.recent || []).slice(0, 5).map((r: any) => ({
+          recent_reports: (comp.recent || []).slice(0, 5).map((r) => ({
             ...r,
             title: r.source_file || `审查报告 #${r.id}`,
             time: r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : '',
@@ -227,10 +228,10 @@ const SuperAdminDashboard: React.FC = () => {
         <Col xs={24} lg={16}>
           <RecentActivity
             title="最近审查活动"
-            items={(data?.recent_reports || []).slice(0, 8).map((r: any) => ({
+            items={(data?.recent_reports || []).slice(0, 8).map((r) => ({
               id: r.id,
               title: `${r.user_name ? r.user_name + ' · ' : ''}${r.source_file || `审查报告 #${r.id}`}`,
-              time: r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : r.time || '',
+              time: r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : '',
               riskLevel: r.risk_level,
               status: r.status,
             }))}

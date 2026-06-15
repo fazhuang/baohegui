@@ -4,21 +4,20 @@
 // 角色体系
 // ═══════════════════════════════════════════════════════════════
 
-/** 用户角色 — 5 角色体系 */
-export type UserRole = 'super_admin' | 'admin' | 'reviewer' | 'agent' | 'enterprise';
+/** 用户角色 — 后端真实角色模型 (user / admin)
 
-/** 向后兼容：后端暂未迁移到 5 角色时，将旧 role 映射为新角色 */
+  后端当前仅支持 admin/user 双角色。
+  前端不凭空声明后端不存在的角色。
+
+  历史 5 角色映射仅供展示层参考（向后兼容）。
+  权限判断只以 /api/auth/me 返回的 permissions 数组为准。
+*/
+export type UserRole = 'admin' | 'user';
+
+/** 向后兼容：后端 role 字段值与前端对齐 */
 export function normalizeRole(legacy: string): UserRole {
-  switch (legacy) {
-    case 'super_admin': return 'super_admin';
-    case 'admin': return 'admin';
-    case 'reviewer': return 'reviewer';
-    case 'agent': return 'agent';
-    case 'enterprise': return 'enterprise';
-    // 向后兼容映射
-    case 'user': return 'agent';
-    default: return 'agent';
-  }
+  if (legacy === 'admin') return 'admin';
+  return 'user';
 }
 
 /** 当前登录用户 */
@@ -363,4 +362,37 @@ export interface DashboardStats {
     low: number
   }
   industries: string[]
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Member Dashboard
+// ═══════════════════════════════════════════════════════════════
+
+/** 会员 Dashboard API 响应 */
+export interface MemberDashboardResponse {
+  compliance?: {
+    reports_this_month?: number;
+    total_reports?: number;
+    passed_count?: number;
+    failed_count?: number;
+    pass_rate?: number;
+    risk_level_distribution?: {
+      high?: number;
+      medium?: number;
+      low?: number;
+      critical?: number;
+    };
+    monthly_trend?: Array<{ month: string; count: number }>;
+    recent?: Array<{
+      id: number;
+      source_file: string;
+      user_name: string;
+      risk_level: string;
+      status: string;
+      created_at: string;
+    }>;
+  };
+  data?: {
+    announcements?: Array<Record<string, unknown>>;
+  };
 }

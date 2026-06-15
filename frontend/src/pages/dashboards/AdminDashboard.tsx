@@ -16,6 +16,7 @@ import {
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { getMemberDashboard } from '../../services/api'
+import type { MemberDashboardResponse } from '../../types'
 import KpiCard from '../../components/dashboard/KpiCard'
 import RiskDistribution from '../../components/dashboard/RiskDistribution'
 import RecentActivity from '../../components/dashboard/RecentActivity'
@@ -52,30 +53,31 @@ const AdminDashboard: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const dashResp = await getMemberDashboard().catch(() => null)
-        const dash = dashResp?.compliance || {}
+        const dashResp = await getMemberDashboard().catch(() => null);
+        const dash: MemberDashboardResponse = dashResp ?? {};
+        const comp = dash.compliance ?? {};
         setData({
           summary: {
-            pending_count: dash.reports_this_month || 0,
-            today_count: dash.reports_this_month || 0,
-            pass_rate: dash.pass_rate || 0,
-            needs_review: (dash.risk_level_distribution?.high || 0) + (dash.risk_level_distribution?.critical || 0),
-            total_reports: dash.total_reports || 0,
-            passed_count: dash.passed_count || 0,
-            failed_count: dash.failed_count || 0,
+            pending_count: comp.reports_this_month || 0,
+            today_count: comp.reports_this_month || 0,
+            pass_rate: comp.pass_rate || 0,
+            needs_review: (comp.risk_level_distribution?.high || 0) + (comp.risk_level_distribution?.critical || 0),
+            total_reports: comp.total_reports || 0,
+            passed_count: comp.passed_count || 0,
+            failed_count: comp.failed_count || 0,
           },
           risk_distribution: {
-            high: dash.risk_level_distribution?.high || 0,
-            medium: dash.risk_level_distribution?.medium || 0,
-            low: dash.risk_level_distribution?.low || 0,
+            high: comp.risk_level_distribution?.high || 0,
+            medium: comp.risk_level_distribution?.medium || 0,
+            low: comp.risk_level_distribution?.low || 0,
           },
-          recent_reports: (dash.recent || []).map((r: any) => ({
+          recent_reports: (comp.recent || []).map((r) => ({
             ...r,
             title: r.source_file || `审查报告 #${r.id}`,
             time: r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : '',
           })),
           pending_tasks: [
-            { label: '待复核报告', count: (dash.risk_level_distribution?.high || 0) + (dash.risk_level_distribution?.critical || 0), path: '/reports' },
+            { label: '待复核报告', count: (comp.risk_level_distribution?.high || 0) + (comp.risk_level_distribution?.critical || 0), path: '/reports' },
             { label: '反馈待处理', count: 0, path: '/reports/feedback' },
           ],
         })
@@ -149,10 +151,10 @@ const AdminDashboard: React.FC = () => {
         <Col span={24}>
           <RecentActivity
             title="最近审查活动"
-            items={(data?.recent_reports || []).slice(0, 10).map((r: any) => ({
+            items={(data?.recent_reports || []).slice(0, 10).map((r) => ({
               id: r.id,
-              title: r.source_file || r.title || `审查报告 #${r.id}`,
-              time: r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : r.time || '',
+              title: r.source_file || `审查报告 #${r.id}`,
+              time: r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : '',
               riskLevel: r.risk_level,
               status: r.status,
             }))}

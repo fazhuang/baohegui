@@ -1,4 +1,9 @@
-const isDev = typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV
+/** 轻量日志工具 — 仅 dev 模式输出 */
+
+/* eslint-disable @typescript-eslint/no-explicit-any — import.meta.env 在 Vite 中无类型声明 */
+const _meta = import.meta as unknown as Record<string, unknown> | undefined;
+const isDev = !!(typeof _meta !== 'undefined' && _meta && (_meta as { env?: Record<string, unknown> }).env?.DEV);
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 const _console = {
   info: (...args: unknown[]) => { if (isDev) console.info('[baohegui]', ...args) },
@@ -8,13 +13,15 @@ const _console = {
 
 export const logger = _console
 
+/** 安全错误消息提取 — 不泄漏内部堆栈 */
 export function safeErrorMessage(err: unknown, fallback = '操作失败'): string {
   if (!err) return fallback
   if (typeof err === 'string') return err
   if (err instanceof Error) {
-    const anyErr = err as any
-    if (anyErr.response?.status) {
-      const s = anyErr.response.status
+    // 类型安全的 axios 错误检查
+    const axiosErr = err as { response?: { status?: number } }
+    if (axiosErr.response?.status) {
+      const s = axiosErr.response.status
       if (s === 401) return '登录已过期，请重新登录'
       if (s === 403) return '无权访问'
       if (s === 404) return '资源不存在'

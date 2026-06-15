@@ -36,7 +36,7 @@ export interface BatchAction<T = Record<string, unknown>> {
   danger?: boolean;
 }
 
-interface DataTableProps<T extends Record<string, any>> {
+interface DataTableProps<T extends Record<string, unknown>> {
   columns: ColumnsType<T>;
   dataSource: T[];
   loading: boolean;
@@ -56,7 +56,7 @@ interface DataTableProps<T extends Record<string, any>> {
   emptyText?: string;
 }
 
-function DataTable<T extends Record<string, any>>({
+function DataTable<T extends Record<string, unknown>>({
   columns,
   dataSource,
   loading,
@@ -169,7 +169,7 @@ function DataTable<T extends Record<string, any>>({
                 onClick={() => {
                   const selectedRows = dataSource.filter(r => {
                     const key = typeof rowKey === 'function' ? rowKey(r) : r[rowKey];
-                    return selectedRowKeys.includes(key);
+                    return selectedRowKeys.includes(String(key));
                   });
                   action.onClick(selectedRowKeys, selectedRows);
                   setSelectedRowKeys([]);
