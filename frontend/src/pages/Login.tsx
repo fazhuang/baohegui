@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { Card, Form, Input, Button, Typography, message, Alert, Spin, Tabs, Checkbox } from 'antd'
 import { UserOutlined, LockOutlined, ReloadOutlined, TeamOutlined, MailOutlined, ProfileOutlined } from '@ant-design/icons'
-import axios from 'axios'
-import { useNavigate } from 'react-router-dom'
-import { registerUser } from '../services/api'
+import { loginUser, registerUser } from '../services/api'
 import { getErrorMessage } from '../utils/error'
+import { useNavigate } from 'react-router-dom'
 
 interface LoginProps { onLogin?: () => void }
 
@@ -36,10 +35,9 @@ const LoginPage: React.FC<LoginProps> = (props) => {
     let ok = false
 
     try {
-      const { data } = await axios.post('/api/auth/login', values)
+      const data = await loginUser(values)
       localStorage.setItem('token', data.access_token)
-      localStorage.setItem('role', data.role || 'user')
-      localStorage.setItem('username', data.username || '')
+      localStorage.setItem('saved_username', data.username || '')
 
       // 记住账号（不存储明文密码）
       if (rememberMe) {
@@ -53,10 +51,11 @@ const LoginPage: React.FC<LoginProps> = (props) => {
       message.success(`登录成功，欢迎 ${data.username}`)
       ok = true
     } catch (err: unknown) {
-      if (axios.isAxiosError(err) && (err.code === 'ERR_NETWORK' || err.code === 'ECONNREFUSED' || err.message?.includes('Network'))) {
+      const anyErr = err as any
+      if (anyErr?.code === 'ERR_NETWORK' || anyErr?.code === 'ECONNREFUSED' || String(anyErr?.message || '').includes('Network')) {
         setServerDown(true)
         setError('无法连接到服务器，请检查服务是否已启动')
-      } else if (axios.isAxiosError(err) && err.response?.status === 401) {
+      } else if (anyErr?.response?.status === 401) {
         setError('用户名或密码错误')
       } else {
         setError(getErrorMessage(err, '登录失败'))
@@ -74,8 +73,7 @@ const LoginPage: React.FC<LoginProps> = (props) => {
     try {
       const data = await registerUser(values)
       localStorage.setItem('token', data.access_token)
-      localStorage.setItem('role', data.role || 'user')
-      localStorage.setItem('username', data.username)
+      localStorage.setItem('saved_username', data.username || '')
       message.success(`注册成功，欢迎 ${data.username}`)
       ok = true
     } catch (err: unknown) {

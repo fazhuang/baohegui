@@ -21,7 +21,7 @@ import {
   listAuditLogs, compareFiles, listReports,
   getBillingThreshold, setBillingThreshold, getBillingStatus,
 } from '../services/api'
-import type { CompareResult, UserInfo, AuditLogEntry } from '../services/api'
+import type { CompareResult, UserInfo, AuditLogEntry } from '../types/admin-types'
 import type { BillingStatus, UpdateUserRequest, CreateUserRequest } from '../types'
 import { getErrorMessage } from '../utils/error'
 

@@ -65,17 +65,9 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
       .then((user) => {
         setUsername(user.username)
         setPermissions(user.permissions || [])
-        localStorage.setItem('role', user.role)
-        localStorage.setItem('username', user.username)
       })
       .catch(() => {
-        const localRole = localStorage.getItem('role')
-        const localUsername = localStorage.getItem('username')
-        if (localRole) {
-          setUsername(localUsername || '')
-        } else {
-          navigate('/login')
-        }
+        navigate('/login')
       })
       .finally(() => setLoading(false))
   }, [navigate])
@@ -85,8 +77,6 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
       onLogout()
     } else {
       localStorage.removeItem('token')
-      localStorage.removeItem('role')
-      localStorage.removeItem('username')
       navigate('/login')
     }
   }
