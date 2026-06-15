@@ -16,7 +16,8 @@ import {
   SettingOutlined, GlobalOutlined, NodeIndexOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import axios from 'axios'
+import { getMemberDashboard, getDashboardStats } from '../../services/api'
+import type { DashboardStats } from '../../types'
 import KpiCard from '../../components/dashboard/KpiCard'
 import RiskDistribution from '../../components/dashboard/RiskDistribution'
 import TrendChart from '../../components/dashboard/TrendChart'
@@ -58,28 +59,26 @@ const SuperAdminDashboard: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const token = localStorage.getItem('token')
-        if (!token) return
         const [dashResp, statsResp] = await Promise.all([
-          axios.get('/api/member/dashboard', { headers: { Authorization: `Bearer ${token}` } }).catch(() => null),
-          axios.get('/api/stats/dashboard', { headers: { Authorization: `Bearer ${token}` } }).catch(() => null),
+          getMemberDashboard().catch(() => null),
+          getDashboardStats().catch(() => null),
         ])
-        const dash = dashResp?.data?.compliance || {}
-        const stats = statsResp?.data || {}
+        const dash = dashResp?.compliance || {}
+        const stats: DashboardStats | null = statsResp || null
 
         setData({
           summary: {
             today_reviews: dash.reports_this_month || 0,
             active_users: 0,
-            token_used_today: stats.llm?.total_tokens || 0,
-            token_cost_today: stats.llm?.total_cost || 0,
-            total_tokens: stats.llm?.total_tokens || 0,
-            total_cost: stats.llm?.total_cost || 0,
+            token_used_today: stats?.llm?.total_tokens || 0,
+            token_cost_today: stats?.llm?.total_cost || 0,
+            total_tokens: stats?.llm?.total_tokens || 0,
+            total_cost: stats?.llm?.total_cost || 0,
             health_status: 'ok',
             health_latency: 45,
           },
           review_trend: (dash.monthly_trend || []).map((d: any) => ({ label: d.month?.slice(5) || d.month, count: d.count })),
-          model_calls_trend: (stats.llm?.recent_calls || []).slice(-7).map((c: any) => ({ label: c.timestamp?.slice(5, 10) || '', count: c.tokens || 0 })),
+          model_calls_trend: (stats?.llm?.recent_calls || []).slice(-7).map((c: any) => ({ label: c.timestamp?.slice(5, 10) || '', count: c.tokens || 0 })),
           risk_distribution: {
             high: dash.risk_level_distribution?.high || 0,
             medium: dash.risk_level_distribution?.medium || 0,

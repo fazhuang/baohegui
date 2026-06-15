@@ -9,10 +9,23 @@ import {
 import {
   getRulesStats, getRuleEffectiveness,
 } from '../../services/api'
+import type { EngineStatus, PlatformRule } from '../../types'
 
-// Local type adapters for the old rules-admin-api contract
-interface RulesStats { total_rules: number; by_type: Record<string, number>; by_category: Record<string, number>; by_risk: Record<string, number>; last_reload: string | null }
-interface RuleStat { rule_id: string; hit_count: number; total_reports: number; hit_rate: number; description: string }
+/** Extended engine stats — API may return extra fields beyond EngineStatus */
+interface ExtendedEngineStats extends EngineStatus {
+  total_rules?: number;
+  by_category?: Record<string, number>;
+  by_risk?: Record<string, number>;
+  last_reload?: string | null;
+}
+
+/** Effectiveness entry — API returns PlatformRule + hit metrics */
+interface RuleEffectivenessEntry extends PlatformRule {
+  hit_count: number;
+  total_reports: number;
+  hit_rate: number;
+}
+
 import { getErrorMessage } from '../../utils/error'
 
 const { Title, Text } = Typography
@@ -135,8 +148,8 @@ const BreakdownTags: React.FC<{
 // ── Main page ────────────────────────────────────────────────
 
 const RulesDashboard: React.FC = () => {
-  const [stats, setStats] = useState<RulesStats | null>(null)
-  const [effectiveness, setEffectiveness] = useState<RuleStat[]>([])
+  const [stats, setStats] = useState<ExtendedEngineStats | null>(null)
+  const [effectiveness, setEffectiveness] = useState<RuleEffectivenessEntry[]>([])
   const [totalReports, setTotalReports] = useState(0)
   const [statsLoading, setStatsLoading] = useState(true)
   const [effLoading, setEffLoading] = useState(true)
@@ -160,7 +173,7 @@ const RulesDashboard: React.FC = () => {
     setEffLoading(true)
     try {
       const data = await getRuleEffectiveness()
-      setEffectiveness(data.rules)
+      setEffectiveness(data.rules as RuleEffectivenessEntry[])
       setTotalReports(data.total_reports)
     } catch (e: unknown) {
       message.error('加载效力数据失败')

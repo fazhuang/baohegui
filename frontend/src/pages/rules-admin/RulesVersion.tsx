@@ -10,7 +10,16 @@ import {
   getRuleVersions, rollbackVersion,
 } from '../../services/api'
 
-interface RuleVersion { version: string; description: string; rule_count: number; created_at: string; filename: string }
+/** Version entry — API contract */
+interface RuleVersion {
+  filename: string;
+  timestamp: string;
+  rule_count: number;
+  version?: string;
+  description?: string;
+  created_at?: string;
+}
+
 import { getErrorMessage } from '../../utils/error'
 
 const { Title, Text, Paragraph } = Typography
@@ -54,7 +63,7 @@ const RulesVersion: React.FC = () => {
             描述: {record.description || '无描述'}
           </Paragraph>
           <Paragraph type="secondary" style={{ fontSize: 13 }}>
-            规则数量: {record.rule_count} · 创建时间: {new Date(record.created_at).toLocaleString('zh-CN')}
+            规则数量: {record.rule_count} · 创建时间: {record.created_at ? new Date(record.created_at).toLocaleString('zh-CN') : '未知'}
           </Paragraph>
           <Paragraph style={{ color: '#dc2626', fontSize: 13, marginTop: 8 }}>
             注意：回滚操作会替换当前所有规则，请确认后再操作。
@@ -181,7 +190,7 @@ const RulesVersion: React.FC = () => {
               dataIndex: 'created_at',
               key: 'created_at',
               width: 180,
-              sorter: (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+              sorter: (a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime(),
               defaultSortOrder: 'descend',
               render: (v: string) =>
                 v ? new Date(v).toLocaleString('zh-CN') : '-',

@@ -6,6 +6,12 @@
  */
 
 import http, { downloadBlob } from './http';
+import type {
+  ReportListResponse,
+  PlatformRule, RuleListResponse, SyncResultData, SyncHistoryItem,
+  SyncStatus, DashboardStats, EngineStatus, BillingStatus,
+} from '../types';
+import type { UserInfo, AuditLogEntry, CompareResult } from '../types/admin-types';
 
 // ═══════════════════════════════════════════════════════════════
 // Auth
@@ -129,14 +135,14 @@ export async function listReports(params?: {
   search?: string; date_from?: string; date_to?: string;
   score_min?: number; score_max?: number; sort_by?: string;
   sort_order?: string; page?: number; page_size?: number;
-}): Promise<{ items: any[]; total: number; page: number; page_size: number; pages: number }> {
+}): Promise<ReportListResponse> {
   const { data } = await http.get('/report/list/', { params });
   return data;
 }
 
 export async function submitFeedback(params: {
   report_id: number; rule_id: string; content: string;
-}): Promise<any> {
+}): Promise<{ message: string }> {
   const { data } = await http.post('/report/feedback', params);
   return data;
 }
@@ -152,22 +158,22 @@ export async function getEngineStatus(): Promise<{ total: number; by_type: Recor
 
 export async function listPlatformRules(params?: {
   search?: string; platform?: string; enabled_only?: boolean;
-}): Promise<{ total: number; rules: any[]; platforms: string[] }> {
+}): Promise<RuleListResponse> {
   const { data } = await http.get('/rules/platform/list', { params });
   return data;
 }
 
-export async function getPlatformRule(ruleId: string): Promise<any> {
+export async function getPlatformRule(ruleId: string): Promise<PlatformRule> {
   const { data } = await http.get(`/rules/platform/${ruleId}`);
   return data;
 }
 
-export async function createPlatformRule(rule: any): Promise<any> {
+export async function createPlatformRule(rule: Partial<PlatformRule>): Promise<PlatformRule> {
   const { data } = await http.post('/rules/platform', rule);
   return data.rule;
 }
 
-export async function updatePlatformRule(ruleId: string, updates: any): Promise<any> {
+export async function updatePlatformRule(ruleId: string, updates: Partial<PlatformRule>): Promise<PlatformRule> {
   const { data } = await http.put(`/rules/platform/${ruleId}`, updates);
   return data.rule;
 }
@@ -186,37 +192,37 @@ export async function reloadRules(): Promise<{ rule_count: number }> {
   return data;
 }
 
-export async function importRules(rules: any[]): Promise<any> {
+export async function importRules(rules: PlatformRule[]): Promise<{ status: string; imported: number }> {
   const { data } = await http.post('/rules/import', { rules });
   return data;
 }
 
-export async function getSyncStatus(): Promise<any> {
+export async function getSyncStatus(): Promise<SyncStatus> {
   const { data } = await http.get('/rules/sync/status');
   return data;
 }
 
-export async function runSync(platform: string): Promise<any> {
+export async function runSync(platform: string): Promise<SyncResultData> {
   const { data } = await http.post('/rules/sync/run', null, { params: { platform } });
   return data;
 }
 
-export async function getSyncHistory(): Promise<any[]> {
+export async function getSyncHistory(): Promise<SyncHistoryItem[]> {
   const { data } = await http.get('/rules/sync/history');
   return data;
 }
 
-export async function getRulesStats(): Promise<any> {
+export async function getRulesStats(): Promise<EngineStatus> {
   const { data } = await http.get('/rules/stats');
   return data;
 }
 
-export async function getRuleEffectiveness(): Promise<{ rules: any[]; total_reports: number }> {
+export async function getRuleEffectiveness(): Promise<{ rules: PlatformRule[]; total_reports: number }> {
   const { data } = await http.get('/rules/effectiveness');
   return data;
 }
 
-export async function getRuleVersions(): Promise<{ versions: any[] }> {
+export async function getRuleVersions(): Promise<{ versions: { filename: string; timestamp: string; rule_count: number }[] }> {
   const { data } = await http.get('/rules/versions');
   return data;
 }
@@ -231,7 +237,7 @@ export async function batchToggleRules(ruleIds: string[], enabled: boolean): Pro
   return data;
 }
 
-export async function fetchAllRules(search?: string): Promise<{ total: number; rules: any[] }> {
+export async function fetchAllRules(search?: string): Promise<{ total: number; rules: PlatformRule[] }> {
   const { data } = await http.get('/rules/platform/list', { params: search ? { search } : {} });
   return data;
 }
@@ -240,7 +246,7 @@ export async function fetchAllRules(search?: string): Promise<{ total: number; r
 // Admin
 // ═══════════════════════════════════════════════════════════════
 
-export async function listUsers(): Promise<any[]> {
+export async function listUsers(): Promise<UserInfo[]> {
   const { data } = await http.get('/admin/users');
   return data;
 }
@@ -260,17 +266,17 @@ export async function deleteUser(userId: number): Promise<{ message: string }> {
   return data;
 }
 
-export async function listAuditLogs(params?: { user_id?: number; limit?: number }): Promise<{ total: number; logs: any[] }> {
+export async function listAuditLogs(params?: { user_id?: number; limit?: number }): Promise<{ total: number; logs: AuditLogEntry[] }> {
   const { data } = await http.get('/admin/audit', { params });
   return data;
 }
 
-export async function compareFiles(fileA: number, fileB: number): Promise<any> {
+export async function compareFiles(fileA: number, fileB: number): Promise<CompareResult> {
   const { data } = await http.get('/admin/compare', { params: { file_a: fileA, file_b: fileB } });
   return data;
 }
 
-export async function getBillingThreshold(): Promise<any> {
+export async function getBillingThreshold(): Promise<{ max_monthly_tokens: number; max_monthly_cost_yuan: number; alert_threshold_pct: number }> {
   const { data } = await http.get('/admin/billing/threshold');
   return data;
 }
@@ -280,7 +286,7 @@ export async function setBillingThreshold(req: { max_monthly_tokens: number; max
   return data;
 }
 
-export async function getBillingStatus(): Promise<any> {
+export async function getBillingStatus(): Promise<BillingStatus> {
   const { data } = await http.get('/admin/billing/status');
   return data;
 }
@@ -289,7 +295,7 @@ export async function getBillingStatus(): Promise<any> {
 // Stats
 // ═══════════════════════════════════════════════════════════════
 
-export async function getDashboardStats(): Promise<any> {
+export async function getDashboardStats(): Promise<DashboardStats> {
   const { data } = await http.get('/stats/dashboard');
   return data;
 }
