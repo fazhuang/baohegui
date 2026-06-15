@@ -7,9 +7,10 @@ import {
   ReloadOutlined, HistoryOutlined,
 } from '@ant-design/icons'
 import {
-  fetchVersions, rollbackVersion,
-  type RuleVersion,
-} from '../../services/rules-admin-api'
+  getRuleVersions, rollbackVersion,
+} from '../../services/api'
+
+interface RuleVersion { version: string; description: string; rule_count: number; created_at: string; filename: string }
 import { getErrorMessage } from '../../utils/error'
 
 const { Title, Text, Paragraph } = Typography
@@ -25,7 +26,7 @@ const RulesVersion: React.FC = () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await fetchVersions()
+      const data = await getRuleVersions()
       setVersions(data.versions || [])
     } catch (e: unknown) {
       message.error('加载版本历史失败')

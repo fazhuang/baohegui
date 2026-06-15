@@ -7,9 +7,12 @@ import {
   ThunderboltOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import {
-  fetchRulesStats, fetchEffectiveness,
-  type RulesStats, type RuleStat,
-} from '../../services/rules-admin-api'
+  getRulesStats, getRuleEffectiveness,
+} from '../../services/api'
+
+// Local type adapters for the old rules-admin-api contract
+interface RulesStats { total_rules: number; by_type: Record<string, number>; by_category: Record<string, number>; by_risk: Record<string, number>; last_reload: string | null }
+interface RuleStat { rule_id: string; hit_count: number; total_reports: number; hit_rate: number; description: string }
 import { getErrorMessage } from '../../utils/error'
 
 const { Title, Text } = Typography
@@ -143,7 +146,7 @@ const RulesDashboard: React.FC = () => {
     setStatsLoading(true)
     setError(null)
     try {
-      const data = await fetchRulesStats()
+      const data = await getRulesStats()
       setStats(data)
     } catch (e: unknown) {
       message.error('加载统计数据失败')
@@ -156,7 +159,7 @@ const RulesDashboard: React.FC = () => {
   const loadEffectiveness = useCallback(async () => {
     setEffLoading(true)
     try {
-      const data = await fetchEffectiveness()
+      const data = await getRuleEffectiveness()
       setEffectiveness(data.rules)
       setTotalReports(data.total_reports)
     } catch (e: unknown) {

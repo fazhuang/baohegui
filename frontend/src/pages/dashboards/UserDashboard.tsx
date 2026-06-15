@@ -16,7 +16,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import axios from 'axios'
+import { getMemberDashboard, listAnnouncements } from '../../services/api'
 import EmptyState from '../../components/EmptyState'
 
 const { Title, Text, Paragraph } = Typography
@@ -156,14 +156,14 @@ const UserDashboard: React.FC = () => {
         const token = localStorage.getItem('token')
         if (!token) return
         const [dashResp, annResp] = await Promise.all([
-          axios.get('/api/member/dashboard', { headers: { Authorization: `Bearer ${token}` } }).catch(() => null),
-          axios.get('/api/announcements', { params: { limit: 5 }, headers: { Authorization: `Bearer ${token}` } }).catch(() => null),
+          getMemberDashboard().catch(() => null),
+          listAnnouncements({ limit: 5 }).catch(() => null),
         ])
-        const dash = dashResp?.data; const ann = annResp?.data
+        const dash = dashResp?.compliance; const ann = annResp
         setData({
-          summary: dash?.compliance || { total_reports: 0, reports_this_month: 0, passed_count: 0, failed_count: 0, pass_rate: 0, risk_level_distribution: { critical: 0, high: 0, medium: 0, low: 0 } },
+          summary: dash?.data?.compliance || dash?.compliance || { total_reports: 0, reports_this_month: 0, passed_count: 0, failed_count: 0, pass_rate: 0, risk_level_distribution: { critical: 0, high: 0, medium: 0, low: 0 } },
           recent_reports: dash?.compliance?.recent || [],
-          announcements: ann?.announcements || [],
+          announcements: ann?.data?.announcements || ann?.announcements || [],
           monthly_trend: dash?.compliance?.monthly_trend || [],
         })
       } catch {

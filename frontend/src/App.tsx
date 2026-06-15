@@ -1,190 +1,65 @@
-import { useState, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
-import { ConfigProvider, App as AntApp } from 'antd'
+import React, { lazy, Suspense } from 'react'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { ConfigProvider, App as AntApp, Spin } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-
-// Layout
+import { PermissionProvider, usePermission } from './contexts/PermissionContext'
 import ShellLayout from './layouts/ShellLayout'
+import RouteGuard from './routes/RouteGuard'
+import NotFoundPage from './routes/NotFoundPage'
+import ComingSoonPage from './components/common/ComingSoonPage'
 
-// Context
-import { PermissionProvider } from './contexts/PermissionContext'
+// ── 懒加载页面 ──────────────────────────────────────────────
+const LoginPage = lazy(() => import('./pages/Login'))
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'))
+const ResetPassword = lazy(() => import('./pages/ResetPassword'))
+const DashboardPage = lazy(() => import('./pages/Dashboard'))
+const UploadPage = lazy(() => import('./pages/Upload'))
+const ReportPage = lazy(() => import('./pages/Report'))
+const HistoryPage = lazy(() => import('./pages/History'))
+const AdminRulesPage = lazy(() => import('./pages/AdminRules'))
+const AdminPanel = lazy(() => import('./pages/AdminPanel'))
 
-// Auth guard
-import RequireRole from './components/RequireRole'
+// ── P4 容器页面 ────────────────────────────────────────────
+const ReviewCenter = lazy(() => import('./pages/ReviewCenter'))
+const RulesCenter = lazy(() => import('./pages/RulesCenter'))
+const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
+const ReportCenter = lazy(() => import('./pages/ReportCenter'))
+const Announcements = lazy(() => import('./pages/Announcements'))
+const UserCenter = lazy(() => import('./pages/UserCenter'))
+const SystemManage = lazy(() => import('./pages/SystemManage'))
+const OpsCenter = lazy(() => import('./pages/OpsCenter'))
 
-// Pages
-import LoginPage from './pages/Login'
-import ForgotPassword from './pages/ForgotPassword'
-import ResetPassword from './pages/ResetPassword'
-import DashboardPage from './pages/Dashboard'
-import UploadPage from './pages/Upload'
-import ReportPage from './pages/Report'
-import HistoryPage from './pages/History'
-import AdminRulesPage from './pages/AdminRules'
-import AdminPanel from './pages/AdminPanel'
+const FB = <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}><Spin size="large" /></div>
+function L({ children }: { children: React.ReactNode }) { return <Suspense fallback={FB}>{children}</Suspense> }
+
+function ProtectedShell() {
+  const { user, loading } = usePermission()
+  const token = localStorage.getItem('token')
+  if (loading) return FB
+  if (!token || !user) return <Navigate to="/login" replace />
+  return <ShellLayout />
+}
 
 const theme = {
   token: {
-    colorPrimary: '#2563eb',
-    colorInfo: '#2563eb',
-    colorSuccess: '#16a34a',
-    colorWarning: '#eab308',
-    colorError: '#dc2626',
-    colorTextBase: '#334155',
-    colorText: '#334155',
-    colorTextSecondary: '#64748b',
-    colorTextTertiary: '#94a3b8',
-    colorBgBase: '#ffffff',
-    colorBgContainer: '#ffffff',
-    colorBgLayout: '#f1f5f9',
-    colorBorder: '#e2e8f0',
-    colorBorderSecondary: '#f1f5f9',
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
-    fontWeightStrong: 600,
-    fontSize: 14,
-    fontSizeLG: 16,
-    fontSizeXL: 20,
-    fontSizeHeading1: 24,
-    fontSizeHeading2: 20,
-    fontSizeHeading3: 16,
-    lineHeight: 1.5715,
-    borderRadius: 6,
-    borderRadiusLG: 8,
-    borderRadiusOuter: 12,
-    motionDurationSlow: '0.3s',
-    motionDurationMid: '0.2s',
-    motionDurationFast: '0.1s',
+    colorPrimary: '#2563eb', colorInfo: '#2563eb', colorSuccess: '#16a34a',
+    colorWarning: '#eab308', colorError: '#dc2626', colorTextBase: '#334155',
+    colorText: '#334155', colorTextSecondary: '#64748b', colorTextTertiary: '#94a3b8',
+    colorBgBase: '#ffffff', colorBgContainer: '#ffffff', colorBgLayout: '#f1f5f9',
+    colorBorder: '#e2e8f0', colorBorderSecondary: '#f1f5f9',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+    fontWeightStrong: 600, fontSize: 14, fontSizeLG: 16, fontSizeXL: 20,
+    fontSizeHeading1: 24, fontSizeHeading2: 20, fontSizeHeading3: 16, lineHeight: 1.5715,
+    borderRadius: 6, borderRadiusLG: 8, borderRadiusOuter: 12,
+    motionDurationSlow: '0.3s', motionDurationMid: '0.2s', motionDurationFast: '0.1s',
   },
   components: {
-    Layout: {
-      headerBg: '#ffffff',
-      headerColor: '#334155',
-      headerHeight: 56,
-      siderBg: '#ffffff',
-    },
-    Menu: {
-      darkItemBg: '#1e40af',
-      darkItemSelectedBg: 'rgba(255,255,255,0.12)',
-      darkItemHoverBg: 'rgba(255,255,255,0.08)',
-      darkItemColor: 'rgba(255,255,255,0.75)',
-    },
-    Card: {
-      paddingLG: 24,
-    },
-    Button: {
-      controlHeightLG: 44,
-      fontWeight: 500,
-    },
-    Table: {
-      headerBg: '#f8fafc',
-      headerColor: '#64748b',
-      cellPaddingBlock: 10,
-    },
+    Layout: { headerBg: '#ffffff', headerColor: '#334155', headerHeight: 56, siderBg: '#ffffff' },
+    Menu: { darkItemBg: '#1e40af', darkItemSelectedBg: 'rgba(255,255,255,0.12)', darkItemHoverBg: 'rgba(255,255,255,0.08)', darkItemColor: 'rgba(255,255,255,0.75)' },
+    Card: { paddingLG: 24 },
+    Button: { controlHeightLG: 44, fontWeight: 500 },
+    Table: { headerBg: '#f8fafc', headerColor: '#64748b', cellPaddingBlock: 10 },
   },
-}
-
-function AppRoutes() {
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'))
-  const navigate = useNavigate()
-
-  useEffect(() => {
-    const checkToken = () => setToken(localStorage.getItem('token'))
-    window.addEventListener('storage', checkToken)
-    return () => window.removeEventListener('storage', checkToken)
-  }, [])
-
-  const isLoggedIn = !!token
-
-  const handleLogin = () => {
-    setToken(localStorage.getItem('token'))
-    navigate('/', { replace: true })
-  }
-
-  return (
-    <Routes>
-      {/* Public */}
-      <Route path="/login" element={<LoginPage onLogin={handleLogin} />} />
-      <Route path="/forgot-password" element={<ForgotPassword />} />
-      <Route path="/reset-password" element={<ResetPassword />} />
-
-      {/* Protected */}
-      <Route
-        element={
-          isLoggedIn ? (
-            <PermissionProvider>
-              <ShellLayout />
-            </PermissionProvider>
-          ) : (
-            <Navigate to="/login" replace />
-          )
-        }
-      >
-        <Route index element={<DashboardPage />} />
-        <Route path="review" element={<UploadPage />} />
-        <Route path="review/history" element={<HistoryPage />} />
-        <Route path="report/:id" element={<ReportPage />} />
-
-        {/* Rules */}
-        <Route path="rules" element={<AdminRulesPage />} />
-        <Route path="rules/editor" element={<AdminRulesPage />} />
-        <Route path="rules/versions" element={<AdminRulesPage />} />
-        <Route path="rules/sync" element={<AdminRulesPage />} />
-        <Route path="rules/industry" element={<AdminRulesPage />} />
-
-        {/* Knowledge base — placeholder */}
-        <Route path="kg" element={<div style={{ padding: 48, textAlign: 'center' }}>知识图谱 — 即将上线</div>} />
-        <Route path="kg/cases" element={<div style={{ padding: 48, textAlign: 'center' }}>案例库 — 即将上线</div>} />
-        <Route path="kg/legal" element={<div style={{ padding: 48, textAlign: 'center' }}>法规库 — 即将上线</div>} />
-
-        {/* Reports */}
-        <Route path="reports" element={<HistoryPage />} />
-        <Route path="reports/feedback" element={<div style={{ padding: 48, textAlign: 'center' }}>反馈管理 — 即将上线</div>} />
-
-        {/* Announcements */}
-        <Route path="announcements" element={<div style={{ padding: 48, textAlign: 'center' }}>警示公告 — 即将上线</div>} />
-        <Route path="announcements/manage" element={<div style={{ padding: 48, textAlign: 'center' }}>公告管理 — 即将上线</div>} />
-
-        {/* Account */}
-        <Route path="account" element={<div style={{ padding: 48, textAlign: 'center' }}>我的账户 — 即将上线</div>} />
-        <Route path="account/subscription" element={<div style={{ padding: 48, textAlign: 'center' }}>订阅管理 — 即将上线</div>} />
-
-        {/* System manage — admin+ */}
-        <Route element={<RequireRole roles={['super_admin', 'admin']} />}>
-          <Route path="manage" element={<AdminPanel />} />
-          <Route path="manage/users" element={<AdminPanel />} />
-          <Route path="manage/roles" element={<AdminPanel />} />
-          <Route path="manage/audit" element={<AdminPanel />} />
-          <Route path="manage/quota" element={<AdminPanel />} />
-        </Route>
-
-        {/* System manage — super_admin only */}
-        <Route element={<RequireRole roles={['super_admin']} />}>
-          <Route path="manage/config" element={<AdminPanel />} />
-          <Route path="manage/model" element={<AdminPanel />} />
-          <Route path="manage/security" element={<AdminPanel />} />
-        </Route>
-
-        {/* Ops center — super_admin only */}
-        <Route element={<RequireRole roles={['super_admin']} />}>
-          <Route path="ops" element={<div style={{ padding: 48, textAlign: 'center' }}>运维中心 — 即将上线</div>} />
-          <Route path="ops/scheduler" element={<div style={{ padding: 48, textAlign: 'center' }}>规则同步调度 — 即将上线</div>} />
-          <Route path="ops/crawler" element={<div style={{ padding: 48, textAlign: 'center' }}>案例采集引擎 — 即将上线</div>} />
-          <Route path="ops/kg-seed" element={<div style={{ padding: 48, textAlign: 'center' }}>知识图谱播种 — 即将上线</div>} />
-          <Route path="ops/health" element={<div style={{ padding: 48, textAlign: 'center' }}>系统健康 — 即将上线</div>} />
-        </Route>
-
-        {/* Backward-compatible redirects */}
-        <Route path="upload" element={<Navigate to="/review" replace />} />
-        <Route path="history" element={<Navigate to="/review/history" replace />} />
-        <Route path="admin/rules" element={<Navigate to="/rules" replace />} />
-        <Route path="admin/panel" element={<Navigate to="/manage" replace />} />
-      </Route>
-
-      {/* 404 */}
-      <Route path="*" element={<Navigate to={isLoggedIn ? '/' : '/login'} replace />} />
-    </Routes>
-  )
 }
 
 function App() {
@@ -192,7 +67,113 @@ function App() {
     <ConfigProvider locale={zhCN} theme={theme}>
       <AntApp>
         <BrowserRouter>
-          <AppRoutes />
+          <Routes>
+            {/* ── 公开路由 ────────────────────────────────── */}
+            <Route path="/login" element={<L><LoginPage onLogin={() => window.location.href = '/'} /></L>} />
+            <Route path="/forgot-password" element={<L><ForgotPassword /></L>} />
+            <Route path="/reset-password" element={<L><ResetPassword /></L>} />
+
+            {/* ── 受保护路由 ──────────────────────────────── */}
+            <Route element={<PermissionProvider><ProtectedShell /></PermissionProvider>}>
+              {/* 工作台 */}
+              <Route index element={<L><DashboardPage /></L>} />
+              <Route path="report/:id" element={<L><ReportPage /></L>} />
+
+              {/* ── 审查中心 ──────────────────────────────── */}
+              <Route path="review" element={<L><ReviewCenter /></L>}>
+                <Route index element={<L><UploadPage /></L>} />
+                <Route path="history" element={<L><HistoryPage /></L>} />
+              </Route>
+
+              {/* ── 报告中心 ──────────────────────────────── */}
+              <Route path="reports" element={<L><ReportCenter /></L>}>
+                <Route index element={<L><HistoryPage /></L>} />
+                <Route path="feedback" element={
+                  <RouteGuard roles={['super_admin', 'admin', 'reviewer']}>
+                    <ComingSoonPage title="反馈管理" />
+                  </RouteGuard>
+                } />
+              </Route>
+
+              {/* ── 知识库 ────────────────────────────────── */}
+              <Route path="kg" element={<L><KnowledgeBase /></L>}>
+                <Route index element={<ComingSoonPage title="知识图谱" />} />
+                <Route path="cases" element={<ComingSoonPage title="案例库" />} />
+                <Route path="legal" element={<ComingSoonPage title="法规库" />} />
+              </Route>
+
+              {/* ── 警示公告 ──────────────────────────────── */}
+              <Route path="announcements" element={<L><Announcements /></L>}>
+                <Route index element={<ComingSoonPage title="警示公告" />} />
+                <Route path="manage" element={
+                  <RouteGuard roles={['super_admin', 'admin']}>
+                    <ComingSoonPage title="公告管理" />
+                  </RouteGuard>
+                } />
+              </Route>
+
+              {/* ── 用户中心 ──────────────────────────────── */}
+              <Route path="account" element={<L><UserCenter /></L>}>
+                <Route index element={<ComingSoonPage title="我的账户" />} />
+                <Route path="subscription" element={<ComingSoonPage title="订阅管理" />} />
+              </Route>
+
+              {/* ── 规则中心 (admin+) ─────────────────────── */}
+              <Route element={<RouteGuard roles={['super_admin', 'admin']} />}>
+                <Route path="rules" element={<L><RulesCenter /></L>}>
+                  <Route index element={<L><AdminRulesPage /></L>} />
+                  <Route path="editor" element={<L><AdminRulesPage /></L>} />
+                  <Route path="versions" element={<L><AdminRulesPage /></L>} />
+                  <Route path="sync" element={<L><AdminRulesPage /></L>} />
+                  <Route path="industry" element={<ComingSoonPage title="行业配置" />} />
+                </Route>
+
+                {/* ── 系统管理 (admin+) ─────────────────── */}
+                <Route path="manage" element={<L><SystemManage /></L>}>
+                  <Route index element={<L><AdminPanel /></L>} />
+                  <Route path="audit" element={<L><AdminPanel /></L>} />
+                  <Route path="quota" element={<L><AdminPanel /></L>} />
+                </Route>
+              </Route>
+
+              {/* ── 超级管理员专有 ────────────────────────── */}
+              <Route element={<RouteGuard roles={['super_admin']} />}>
+                <Route path="manage/roles" element={<L><SystemManage /></L>}>
+                  <Route index element={<L><AdminPanel /></L>} />
+                </Route>
+                <Route path="manage/config" element={<L><SystemManage /></L>}>
+                  <Route index element={<L><AdminPanel /></L>} />
+                </Route>
+                <Route path="manage/model" element={<L><SystemManage /></L>}>
+                  <Route index element={<L><AdminPanel /></L>} />
+                </Route>
+                <Route path="manage/security" element={<L><SystemManage /></L>}>
+                  <Route index element={<L><AdminPanel /></L>} />
+                </Route>
+
+                {/* ── 运维中心 ─────────────────────────── */}
+                <Route path="ops" element={<L><OpsCenter /></L>}>
+                  <Route index element={<ComingSoonPage title="运维概览" />} />
+                  <Route path="scheduler" element={<ComingSoonPage title="规则同步调度" />} />
+                  <Route path="crawler" element={<ComingSoonPage title="案例采集引擎" />} />
+                  <Route path="kg-seed" element={<ComingSoonPage title="知识图谱播种" />} />
+                  <Route path="health" element={<ComingSoonPage title="系统健康" />} />
+                </Route>
+              </Route>
+
+              {/* ── 向后兼容重定向 ────────────────────────── */}
+              <Route path="upload" element={<Navigate to="/review" replace />} />
+              <Route path="history" element={<Navigate to="/review/history" replace />} />
+              <Route path="admin/rules" element={<Navigate to="/rules" replace />} />
+              <Route path="admin/panel" element={<Navigate to="/manage" replace />} />
+
+              {/* ── 404 ───────────────────────────────────── */}
+              <Route path="*" element={<NotFoundPage />} />
+            </Route>
+
+            {/* 最外层 404 */}
+            <Route path="*" element={<NotFoundPage />} />
+          </Routes>
         </BrowserRouter>
       </AntApp>
     </ConfigProvider>

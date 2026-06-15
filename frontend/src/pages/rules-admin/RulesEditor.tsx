@@ -10,8 +10,10 @@ import {
 } from '@ant-design/icons'
 import {
   fetchAllRules, batchToggleRules,
-  type RuleRecord, type RuleListResponse,
-} from '../../services/rules-admin-api'
+} from '../../services/api'
+
+interface RuleRecord { rule_id: string; platform: string; platform_code: string; rule_type: string; target: string; mandatory: boolean; description: string; version: string; effective_date: string; enabled: boolean; category: string }
+interface RuleListResponse { total: number; rules: RuleRecord[] }
 import { getErrorMessage } from '../../utils/error'
 
 const { Title, Text } = Typography

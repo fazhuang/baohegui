@@ -38,7 +38,7 @@ function useIsMobile(): boolean {
   return m;
 }
 
-const ShellLayout: React.FC = () => {
+const ShellLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const { user, isAdmin, isSuperAdmin, logout } = usePermission();
   const { token } = antTheme.useToken();
   const isMobile = useIsMobile();
@@ -151,6 +151,7 @@ const ShellLayout: React.FC = () => {
 
         <Content style={{ padding: isMobile ? 12 : 24, minHeight: 'calc(100vh - 56px - 32px)' }}>
           <Outlet />
+          {children}
         </Content>
       </Layout>
 

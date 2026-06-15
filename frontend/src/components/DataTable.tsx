@@ -29,10 +29,10 @@ export interface FilterDef {
   onChange?: (key: string, value: string) => void;
 }
 
-export interface BatchAction {
+export interface BatchAction<T = Record<string, unknown>> {
   label: string;
   icon?: React.ReactNode;
-  onClick: (selectedKeys: React.Key[], selectedRows: any[]) => void;
+  onClick: (selectedKeys: React.Key[], selectedRows: T[]) => void;
   danger?: boolean;
 }
 
@@ -47,7 +47,7 @@ interface DataTableProps<T extends Record<string, any>> {
   filters?: FilterDef[];
   filterValues?: Record<string, string>;
   onFilterChange?: (key: string, value: string) => void;
-  batchActions?: BatchAction[];
+  batchActions?: BatchAction<T>[];
   pagination?: false | TablePaginationConfig;
   onRowClick?: (record: T) => void;
   scroll?: { x?: number | string; y?: number | string };

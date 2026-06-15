@@ -15,7 +15,7 @@ import {
   ArrowRightOutlined, SafetyOutlined, AuditOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import axios from 'axios'
+import { getMemberDashboard } from '../../services/api'
 import KpiCard from '../../components/dashboard/KpiCard'
 import RiskDistribution from '../../components/dashboard/RiskDistribution'
 import RecentActivity from '../../components/dashboard/RecentActivity'
@@ -52,12 +52,8 @@ const AdminDashboard: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const token = localStorage.getItem('token')
-        if (!token) return
-        const [dashResp] = await Promise.all([
-          axios.get('/api/member/dashboard', { headers: { Authorization: `Bearer ${token}` } }).catch(() => null),
-        ])
-        const dash = dashResp?.data?.compliance || {}
+        const dashResp = await getMemberDashboard().catch(() => null)
+        const dash = dashResp?.compliance || {}
         setData({
           summary: {
             pending_count: dash.reports_this_month || 0,
