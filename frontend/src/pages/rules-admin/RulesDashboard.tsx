@@ -10,6 +10,7 @@ import {
   fetchRulesStats, fetchEffectiveness,
   type RulesStats, type RuleStat,
 } from '../../services/rules-admin-api'
+import { getErrorMessage } from '../../utils/error'
 
 const { Title, Text } = Typography
 
@@ -144,9 +145,9 @@ const RulesDashboard: React.FC = () => {
     try {
       const data = await fetchRulesStats()
       setStats(data)
-    } catch (e: any) {
+    } catch (e: unknown) {
       message.error('加载统计数据失败')
-      setError(e.message)
+      setError(getErrorMessage(e, '加载统计数据失败'))
     } finally {
       setStatsLoading(false)
     }
@@ -158,7 +159,7 @@ const RulesDashboard: React.FC = () => {
       const data = await fetchEffectiveness()
       setEffectiveness(data.rules)
       setTotalReports(data.total_reports)
-    } catch (e: any) {
+    } catch (e: unknown) {
       message.error('加载效力数据失败')
     } finally {
       setEffLoading(false)

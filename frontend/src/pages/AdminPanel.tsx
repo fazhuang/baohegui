@@ -21,7 +21,9 @@ import {
   listAuditLogs, compareFiles, listReports,
   getBillingThreshold, setBillingThreshold, getBillingStatus,
 } from '../services/api'
-import type { UserInfo, AuditLogEntry, CompareResult } from '../services/api'
+import type { CompareResult, UserInfo, AuditLogEntry } from '../services/api'
+import type { BillingStatus, UpdateUserRequest, CreateUserRequest } from '../types'
+import { getErrorMessage } from '../utils/error'
 
 const { Title, Text } = Typography
 
@@ -55,19 +57,19 @@ const UserManageTab: React.FC = () => {
     return list
   }, [users, roleFilter, statusFilter])
 
-  const handleCreate = async (values: any) => {
+  const handleCreate = async (values: CreateUserRequest) => {
     try {
       await createUser(values)
       message.success('用户已创建')
       setModalOpen(false)
       form.resetFields()
       load()
-    } catch (e: any) { message.error(e?.response?.data?.detail || '创建失败') }
+    } catch (e: unknown) { message.error(getErrorMessage(e, '创建失败')) }
   }
 
-  const handleUpdate = async (values: any) => {
+  const handleUpdate = async (values: UpdateUserRequest & { password?: string }) => {
     if (!editingUser) return
-    const payload: Record<string, any> = {}
+    const payload: UpdateUserRequest = {}
     if (values.password) payload.password = values.password
     if (values.role) payload.role = values.role
     if (values.company !== undefined) payload.company = values.company
@@ -80,7 +82,7 @@ const UserManageTab: React.FC = () => {
       setEditingUser(null)
       form.resetFields()
       load()
-    } catch (e: any) { message.error(e?.response?.data?.detail || '更新失败') }
+    } catch (e: unknown) { message.error(getErrorMessage(e, '更新失败')) }
   }
 
   const openCreate = () => {
@@ -152,7 +154,7 @@ const UserManageTab: React.FC = () => {
           },
           {
             title: '操作', width: 120,
-            render: (_: any, r: UserInfo) => (
+            render: (_: unknown, r: UserInfo) => (
               <Space size={4}>
                 <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
                 <Popconfirm title="确定删除此用户？" onConfirm={async () => {
@@ -284,7 +286,7 @@ const CompareTab: React.FC = () => {
 
   useEffect(() => {
     listReports().then(data => {
-      setReports(data as any[])
+      setReports(data.items)
       const initialA = cmpSearchParams.get('a')
       const initialB = cmpSearchParams.get('b')
       if (initialA) setSelectedA(Number(initialA))
@@ -298,8 +300,8 @@ const CompareTab: React.FC = () => {
     try {
       const res = await compareFiles(selectedA, selectedB)
       setResult(res)
-    } catch (e: any) {
-      message.error(e?.response?.data?.detail || '对比失败')
+    } catch (e: unknown) {
+      message.error(getErrorMessage(e, '对比失败'))
     } finally { setLoading(false) }
   }
 
@@ -435,7 +437,7 @@ const CompareTab: React.FC = () => {
 // ═══════════════════════════════════════════════════════════════
 
 const BillingTab: React.FC = () => {
-  const [status, setStatus] = useState<any>(null)
+  const [status, setStatus] = useState<BillingStatus | null>(null)
   const [threshold, setThreshold] = useState({ max_monthly_tokens: 1000000, max_monthly_cost_yuan: 100, alert_threshold_pct: 80 })
   const [editingThreshold, setEditingThreshold] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -468,9 +470,9 @@ const BillingTab: React.FC = () => {
       <Title level={4}><DollarOutlined /> 计费与用量</Title>
 
       {/* 告警 */}
-      {status?.alerts?.length > 0 && (
+      {(status?.alerts?.length ?? 0) > 0 && (
         <div style={{ marginBottom: 16 }}>
-          {status.alerts.map((a: any, i: number) => (
+          {(status?.alerts ?? []).map((a, i: number) => (
             <Alert key={i} message={a.message} type={a.severity === 'critical' ? 'error' : 'warning'}
               showIcon icon={a.severity === 'critical' ? <CloseCircleOutlined /> : <WarningOutlined />}
               style={{ marginBottom: 8, borderRadius: 8, borderLeft: `4px solid ${severityColor(a.severity)}` }}

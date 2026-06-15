@@ -19,6 +19,7 @@ import {
 import type {
   PlatformRule, SyncHistoryItem, SyncStatus, DashboardStats,
 } from '../types'
+import { getErrorMessage } from '../utils/error'
 
 const { Title, Text } = Typography
 
@@ -72,7 +73,7 @@ const RuleListTab: React.FC = () => {
     fetch()
   }
 
-  const handleEdit = async (values: any) => {
+  const handleEdit = async (values: Partial<PlatformRule>) => {
     if (!editRule) return
     await updatePlatformRule(editRule.rule_id, values)
     message.success('规则已更新')
@@ -120,7 +121,7 @@ const RuleListTab: React.FC = () => {
               <Switch size="small" checked={v}
                 onChange={() => handleToggle(r.rule_id)} /> },
           { title: '操作', key: 'action', width: 120,
-            render: (_: any, r: PlatformRule) => (
+            render: (_: unknown, r: PlatformRule) => (
               <Space>
                 <Button size="small" icon={<EditOutlined />}
                   onClick={() => { setEditRule(r); setEditOpen(true) }} />
@@ -167,7 +168,7 @@ const RuleListTab: React.FC = () => {
       {/* 新建弹窗 */}
       <Modal title="新建规则" open={createOpen} onCancel={() => setCreateOpen(false)}
         footer={null} width={560}>
-        <Form layout="vertical" onFinish={async (v) => {
+        <Form layout="vertical" onFinish={async (v: Partial<PlatformRule>) => {
           await createPlatformRule(v)
           message.success('规则已创建')
           setCreateOpen(false)
@@ -226,8 +227,8 @@ const SyncTab: React.FC = () => {
       const result = await runSync(platform)
       message.success(`同步完成：新增${result.new_rules} 更新${result.updated_rules}`)
       fetch()
-    } catch (e: any) {
-      message.error(e?.response?.data?.detail || '同步失败')
+    } catch (e: unknown) {
+      message.error(getErrorMessage(e, '同步失败'))
     }
     setSyncing(false)
   }
@@ -331,7 +332,7 @@ const FeedbackTab: React.FC = () => {
             { title: '描述', dataIndex: 'description', key: 'description' },
             { title: '提交时间', dataIndex: 'effective_date', key: 'date', width: 120 },
             { title: '操作', key: 'action', width: 180,
-              render: (_: any, r: PlatformRule) => (
+              render: (_: unknown, r: PlatformRule) => (
                 <Space>
                   <Button size="small" type="primary" icon={<CheckCircleOutlined />}
                     onClick={() => handleActivate(r)}>转为规则</Button>

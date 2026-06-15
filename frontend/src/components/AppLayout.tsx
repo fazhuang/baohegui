@@ -50,10 +50,10 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
   const isMobile = useMobile()
   const isTablet = useIsTablet()
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [role, setRole] = useState<string | null>(null)
   const [username, setUsername] = useState<string>('')
+  const [permissions, setPermissions] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
-  const isAdmin = role === 'admin'
+  const hasAdminAccess = permissions.includes('admin:users') || permissions.includes('rules:write')
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -63,8 +63,8 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
     }
     getCurrentUser()
       .then((user) => {
-        setRole(user.role)
         setUsername(user.username)
+        setPermissions(user.permissions || [])
         localStorage.setItem('role', user.role)
         localStorage.setItem('username', user.username)
       })
@@ -72,7 +72,6 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
         const localRole = localStorage.getItem('role')
         const localUsername = localStorage.getItem('username')
         if (localRole) {
-          setRole(localRole)
           setUsername(localUsername || '')
         } else {
           navigate('/login')
@@ -129,7 +128,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
     { key: '/', icon: <AppstoreOutlined />, label: '工作台' },
     { key: '/upload', icon: <UploadOutlined />, label: '上传' },
     { key: '/history', icon: <HistoryOutlined />, label: '历史' },
-    ...(isAdmin
+    ...(hasAdminAccess
       ? [
           {
             key: '/admin/rules',
@@ -147,7 +146,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
 
   // ── User dropdown items ──────────────────────────────
   const userMenuItems = [
-    ...(isAdmin
+    ...(hasAdminAccess
       ? [
           {
             key: 'rules',
@@ -308,7 +307,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
                   flex: 1,
                 }}
               />
-              {isAdmin && (
+              {hasAdminAccess && (
                 <Menu
                   className="sidebar-nav"
                   mode="inline"
@@ -406,7 +405,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ onLogout }) => {
         <Menu
           mode="vertical"
           selectedKeys={[location.pathname]}
-          items={[...sidebarItems, ...(isAdmin ? adminItems : [])]}
+          items={[...sidebarItems, ...(hasAdminAccess ? adminItems : [])]}
           onClick={({ key }) => {
             navigate(key)
             setDrawerOpen(false)

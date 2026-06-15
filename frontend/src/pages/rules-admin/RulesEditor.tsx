@@ -12,6 +12,7 @@ import {
   fetchAllRules, batchToggleRules,
   type RuleRecord, type RuleListResponse,
 } from '../../services/rules-admin-api'
+import { getErrorMessage } from '../../utils/error'
 
 const { Title, Text } = Typography
 
@@ -78,9 +79,9 @@ const RulesEditor: React.FC = () => {
     try {
       const data: RuleListResponse = await fetchAllRules(search || undefined)
       setRules(data.rules || [])
-    } catch (e: any) {
+    } catch (e: unknown) {
       message.error('加载规则列表失败')
-      setError(e.message)
+      setError(getErrorMessage(e, '加载规则列表失败'))
     } finally {
       setLoading(false)
     }
@@ -107,8 +108,8 @@ const RulesEditor: React.FC = () => {
       )
       setSelectedRowKeys([])
       load()
-    } catch (e: any) {
-      message.error(`批量操作失败: ${e.message}`)
+    } catch (e: unknown) {
+      message.error(`批量操作失败: ${getErrorMessage(e, '批量操作失败')}`)
     } finally {
       setBatchLoading(false)
     }
@@ -307,7 +308,7 @@ const RulesEditor: React.FC = () => {
                 title: '操作',
                 key: 'action',
                 width: 80,
-                render: (_: any, r: RuleRecord) => (
+                render: (_: unknown, r: RuleRecord) => (
                   <Tooltip title="查看详情">
                     <Button
                       size="small"

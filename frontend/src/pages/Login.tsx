@@ -4,6 +4,7 @@ import { UserOutlined, LockOutlined, ReloadOutlined, TeamOutlined, MailOutlined,
 import axios from 'axios'
 import { useNavigate } from 'react-router-dom'
 import { registerUser } from '../services/api'
+import { getErrorMessage } from '../utils/error'
 
 interface LoginProps { onLogin?: () => void }
 
@@ -18,12 +19,11 @@ const LoginPage: React.FC<LoginProps> = (props) => {
 
   const [loginForm] = Form.useForm()
 
-  // 记住密码：自动填充
+  // 记住账号：自动填充用户名
   useEffect(() => {
     if (localStorage.getItem('remember_me') === 'true') {
       loginForm.setFieldsValue({
         username: localStorage.getItem('saved_username') || '',
-        password: localStorage.getItem('saved_password') || '',
       })
     }
   }, [loginForm])
@@ -41,33 +41,32 @@ const LoginPage: React.FC<LoginProps> = (props) => {
       localStorage.setItem('role', data.role || 'user')
       localStorage.setItem('username', data.username || '')
 
-      // 记住密码（仅存储用户名，不存储明文密码）
+      // 记住账号（不存储明文密码）
       if (rememberMe) {
         localStorage.setItem('remember_me', 'true')
         localStorage.setItem('saved_username', values.username)
       } else {
         localStorage.removeItem('remember_me')
         localStorage.removeItem('saved_username')
-        localStorage.removeItem('saved_password')
       }
 
       message.success(`登录成功，欢迎 ${data.username}`)
       ok = true
-    } catch (err: any) {
-      if (err.code === 'ERR_NETWORK' || err.code === 'ECONNREFUSED' || err.message?.includes('Network')) {
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err) && (err.code === 'ERR_NETWORK' || err.code === 'ECONNREFUSED' || err.message?.includes('Network'))) {
         setServerDown(true)
         setError('无法连接到服务器，请检查服务是否已启动')
-      } else if (err.response?.status === 401) {
+      } else if (axios.isAxiosError(err) && err.response?.status === 401) {
         setError('用户名或密码错误')
       } else {
-        setError(err?.response?.data?.detail || err.message || '登录失败')
+        setError(getErrorMessage(err, '登录失败'))
       }
     }
     setLoading(false)
     if (ok) props.onLogin?.()
   }
 
-  const handleRegister = async (values: any) => {
+  const handleRegister = async (values: { username: string; password: string; company?: string; email?: string }) => {
     if (regLoading) return
     setRegLoading(true)
     setError(null)
@@ -79,20 +78,11 @@ const LoginPage: React.FC<LoginProps> = (props) => {
       localStorage.setItem('username', data.username)
       message.success(`注册成功，欢迎 ${data.username}`)
       ok = true
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || err.message || '注册失败')
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, '注册失败'))
     }
     setRegLoading(false)
     if (ok) props.onLogin?.()
-  }
-
-  // 开发模式快速进入
-  const handleDevLogin = () => {
-    localStorage.setItem('token', 'dev-token')
-    localStorage.setItem('role', 'admin')
-    localStorage.setItem('username', 'dev')
-    message.success('开发模式 - 已自动登录（管理员权限）')
-    navigate('/')
   }
 
   const loginFormContent = loading ? (
@@ -111,7 +101,7 @@ const LoginPage: React.FC<LoginProps> = (props) => {
       <Form.Item style={{ marginBottom: 4 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Checkbox checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)}>
-            记住密码
+            记住账号
           </Checkbox>
           <Button type="link" size="small" onClick={() => navigate('/forgot-password')} style={{ padding: 0 }}>
             忘记密码?
@@ -245,18 +235,6 @@ const LoginPage: React.FC<LoginProps> = (props) => {
             >
               适用于招标代理机构和政府采购部门
             </Typography.Text>
-
-            {/* 开发模式入口 */}
-            <div style={{
-              textAlign: 'center',
-              borderTop: '1px solid var(--color-border)',
-              paddingTop: 16,
-              marginTop: 16,
-            }}>
-              <Button type="link" size="small" onClick={handleDevLogin} style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
-                开发模式 · 一键登录
-              </Button>
-            </div>
           </Card>
         </div>
     </div>

@@ -1,14 +1,15 @@
 import axios from 'axios'
-import type { CheckResult, ComplianceReport, ReportListItem, UploadResult, CategoriesData } from '../types'
-// 开发模式：token 为 dev-token 时使用模拟数据
-function isDevMode(): boolean {
-  return localStorage.getItem('token') === 'dev-token'
-}
-
-function devDelay(ms: number = 500): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
+import type {
+  BillingStatus,
+  CheckProgress,
+  CheckResult,
+  ComplianceReport,
+  CreateUserRequest,
+  ReportListResponse,
+  UpdateUserRequest,
+  UploadProgress,
+  UploadResult,
+} from '../types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -38,36 +39,28 @@ api.interceptors.response.use(
 )
 
 /** 上传文件 */
-export async function uploadFile(file: File, industry?: string): Promise<UploadResult> {
-  if (isDevMode()) {
-    await devDelay(2000)
-    return {
-      file_id: 'dev-' + Date.now(),
-      db_id: Math.floor(Math.random() * 1000),
-      filename: file.name,
-      page_count: 42,
-      sections: {
-        '招标公告': '项目概况...',
-        '投标人须知': '投标须知内容...',
-        '资格要求': '资格要求内容...',
-        '评审办法': '评审办法内容...',
-        '投标文件格式': '格式要求...',
-      },
-    }
-  }
+export async function uploadFile(file: File): Promise<UploadResult> {
   const form = new FormData()
   form.append('file', file)
-  if (industry) {
-    form.append('industry', industry)
-  }
   const { data } = await api.post('/upload/', form)
   return data
 }
 
+/** 获取上传进度 */
+export async function getUploadStatus(fileId: number): Promise<UploadProgress> {
+  const { data } = await api.get(`/upload/${fileId}/status`)
+  return data
+}
+
+/** 获取检查进度 */
+export async function getCheckStatus(fileId: number): Promise<CheckProgress> {
+  const { data } = await api.get(`/check/${fileId}/status`)
+  return data
+}
+
 /** 执行合规检查 */
-export async function runCheck(fileId: number, industries?: string): Promise<CheckResult> {
-  const params = industries ? { industries } : {}
-  const { data } = await api.post(`/check/${fileId}`, null, { params })
+export async function runCheck(fileId: number): Promise<CheckResult> {
+  const { data } = await api.post(`/check/${fileId}`)
   return data
 }
 
@@ -77,14 +70,51 @@ export async function getReport(reportId: number): Promise<ComplianceReport> {
   return data
 }
 
-/** 下载报告 PDF */
-export function getReportPdfUrl(reportId: number): string {
-  return `/api/report/${reportId}/pdf`
+/** 下载报告 PDF — 返回 blob URL 用于 <a> download */
+export async function getReportPdfUrl(reportId: number): Promise<string> {
+  const token = localStorage.getItem('token')
+  const resp = await fetch(`/api/report/${reportId}/pdf`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!resp.ok) {
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error('无权访问此报告')
+    }
+    throw new Error(`下载失败: ${resp.status}`)
+  }
+  const blob = await resp.blob()
+  return URL.createObjectURL(blob)
+}
+
+/** 导出报告 Excel — 返回 blob URL 用于 <a> download */
+export async function getReportExcelUrl(reportId: number): Promise<string> {
+  const token = localStorage.getItem('token')
+  const resp = await fetch(`/api/report/${reportId}/export`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!resp.ok) {
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error('无权访问此报告')
+    }
+    throw new Error(`下载失败: ${resp.status}`)
+  }
+  const blob = await resp.blob()
+  return URL.createObjectURL(blob)
 }
 
 /** 列出历史报告 */
-export async function listReports(): Promise<ReportListItem[]> {
-  const { data } = await api.get('/report/list/')
+export async function listReports(params?: {
+  search?: string
+  date_from?: string
+  date_to?: string
+  score_min?: number
+  score_max?: number
+  sort_by?: string
+  sort_order?: string
+  page?: number
+  page_size?: number
+}): Promise<ReportListResponse> {
+  const { data } = await api.get('/report/list/', { params })
   return data
 }
 
@@ -169,7 +199,7 @@ export async function getSyncHistory(): Promise<SyncHistoryItem[]> {
 }
 
 /** 获取当前用户信息 */
-export async function getCurrentUser(): Promise<{ user_id: number; username: string; role: string; company: string }> {
+export async function getCurrentUser(): Promise<{ user_id: number; username: string; role: string; company: string; email: string; permissions: string[] }> {
   const { data } = await api.get('/auth/me')
   return data
 }
@@ -189,12 +219,6 @@ export type { DashboardStats }
 
 export async function getDashboardStats(): Promise<DashboardStats> {
   const { data } = await api.get('/stats/dashboard')
-  return data
-}
-
-/** 获取项目分类层级 */
-export async function getCategories(): Promise<CategoriesData> {
-  const { data } = await api.get('/categories/')
   return data
 }
 
@@ -236,12 +260,12 @@ export async function listUsers(): Promise<UserInfo[]> {
   return data
 }
 
-export async function createUser(req: { username: string; password: string; role?: string; company?: string; email?: string }): Promise<{ message: string; user_id: number }> {
+export async function createUser(req: CreateUserRequest): Promise<{ message: string; user_id: number }> {
   const { data } = await api.post('/admin/users', req)
   return data
 }
 
-export async function updateUser(userId: number, updates: Record<string, any>): Promise<{ message: string }> {
+export async function updateUser(userId: number, updates: UpdateUserRequest): Promise<{ message: string }> {
   const { data } = await api.put(`/admin/users/${userId}`, updates)
   return data
 }
@@ -271,13 +295,7 @@ export async function setBillingThreshold(req: { max_monthly_tokens: number; max
   return data
 }
 
-export async function getBillingStatus(): Promise<{
-  current_period: string
-  tokens: { used: number; limit: number; pct: number }
-  cost: { used_yuan: number; limit_yuan: number; pct: number }
-  calls: { total: number; success_rate: number }
-  alerts: Array<{ type: string; message: string; severity: string }>
-}> {
+export async function getBillingStatus(): Promise<BillingStatus> {
   const { data } = await api.get('/admin/billing/status')
   return data
 }

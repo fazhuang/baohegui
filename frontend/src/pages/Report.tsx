@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import {
   Card, Descriptions, Table, Tag, Button, Space, Typography, Spin,
-  Alert, Progress, Tooltip, Row, Col, Empty, Select,
+  Alert, Progress, Tooltip, Row, Col, Empty, Select, message,
 } from 'antd'
 import {
-  DownloadOutlined, WarningFilled, InfoCircleFilled,
+  DownloadOutlined, FileExcelOutlined, WarningFilled, InfoCircleFilled,
   CheckCircleFilled, ExperimentOutlined, DollarOutlined,
   ThunderboltOutlined, MergeCellsOutlined,
   SafetyCertificateOutlined, FileSearchOutlined,
@@ -12,8 +12,9 @@ import {
   AimOutlined, FileTextOutlined, WarningOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
-import { getReport, getReportPdfUrl } from '../services/api'
+import { getReport, getReportExcelUrl, getReportPdfUrl } from '../services/api'
 import type { ComplianceReport, RuleViolation, LLMViolation } from '../types'
+import { getErrorMessage } from '../utils/error'
 
 const { Title, Text } = Typography
 
@@ -97,6 +98,15 @@ const extractSectionName = (loc: string): string => {
   if (m) return m[1] || m[0]
   const first = loc.split(/[>＞\-—\n]/)[0].trim()
   return first.length > 20 ? first.slice(0, 20) + '…' : (first || '其他')
+}
+
+/** 规则溯源元数据 */
+interface RuleProvenance {
+  source_file: string
+  source_version: string
+  source_url?: string
+  provenance: string
+  last_updated?: string
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -241,13 +251,39 @@ const QuoteBlock: React.FC<{ text: string }> = ({ text }) => (
   </div>
 )
 
-const ruleDetailRow = (record: RuleViolation) => (
+const ruleDetailRow = (record: RuleViolation, provenance?: RuleProvenance) => (
   <div style={{ padding: '12px 24px' }}>
+    {/* 规则溯源行 */}
+    {provenance && (
+      <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <Text type="secondary" style={{ fontSize: 11 }}>溯源：</Text>
+        {provenance.source_file && (
+          <Tag color="geekblue" style={{ fontSize: 10 }}>
+            📄 {provenance.source_file}
+            {provenance.source_version && ` v${provenance.source_version}`}
+          </Tag>
+        )}
+        {provenance.source_url ? (
+          <a href={provenance.source_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11 }}>
+            查看法规原文 →
+          </a>
+        ) : provenance.provenance ? (
+          <Text type="secondary" style={{ fontSize: 11, maxWidth: 300 }} ellipsis>
+            {provenance.provenance}
+          </Text>
+        ) : null}
+        {provenance.last_updated && (
+          <Text type="secondary" style={{ fontSize: 10 }}>
+            更新于 {provenance.last_updated}
+          </Text>
+        )}
+      </div>
+    )}
     {/* 原文引用 — 来自规则引擎的 evidence_text 或 text */}
-    {(record as any).evidence_text ? (
+    {record.evidence_text ? (
       <div style={{ marginBottom: 10 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>违规证据（原文高亮）：</Text>
-        <QuoteBlock text={(record as any).evidence_text} />
+        <QuoteBlock text={record.evidence_text} />
       </div>
     ) : record.text ? (
       <div style={{ marginBottom: 10 }}>
@@ -255,9 +291,9 @@ const ruleDetailRow = (record: RuleViolation) => (
         <QuoteBlock text={record.text} />
       </div>
     ) : null}
-    {((record as any).start_offset !== undefined || (record as any).end_offset !== undefined) && (
+    {(record.start_offset !== undefined || record.end_offset !== undefined) && (
       <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 6 }}>
-        📍 位置: {(record as any).start_offset ?? '开头'} - {(record as any).end_offset ?? '结尾'}
+        📍 位置: {record.start_offset ?? '开头'} - {record.end_offset ?? '结尾'}
         {record.location && <span> ({record.location})</span>}
       </Text>
     )}
@@ -287,25 +323,25 @@ const llmDetailRow = (record: LLMViolation) => (
       </div>
     )}
     {/* M2-1 三段式解释: 证据 → 法律依据 → 整改建议 */}
-    {(record as any).evidence_text && (
+    {record.evidence_text && (
       <div style={{ marginBottom: 10 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>违规证据：</Text>
-        <QuoteBlock text={(record as any).evidence_text} />
+        <QuoteBlock text={record.evidence_text} />
       </div>
     )}
     <div style={{ marginBottom: 6 }}>
       <Text type="secondary" style={{ fontSize: 12 }}>判断理由：</Text>
       <Text style={{ fontSize: 13 }}>{record.reason}</Text>
     </div>
-    {(record as any).legal_basis && (
+    {record.legal_basis && (
       <div style={{ marginBottom: 6 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>法律依据：</Text>
-        <Text style={{ fontSize: 13 }}>{(record as any).legal_basis}</Text>
+        <Text style={{ fontSize: 13 }}>{record.legal_basis}</Text>
       </div>
     )}
     <Space size={[8, 4]} wrap>
       {record.law_ref && <Tag color="blue">{record.law_ref}</Tag>}
-      <Text type="secondary" style={{ fontSize: 12 }}>建议：{(record as any).suggestion_detail || record.suggestion}</Text>
+      <Text type="secondary" style={{ fontSize: 12 }}>建议：{record.suggestion_detail || record.suggestion}</Text>
     </Space>
   </div>
 )
@@ -486,6 +522,7 @@ interface PipelineSummaryData {
   merge_high_risk_count?: number
   parse_quality?: string
   parse_quality_detail?: string
+  rule_provenance?: Record<string, RuleProvenance>
 }
 
 const PipelineSummary: React.FC<{ data: PipelineSummaryData }> = ({ data }) => {
@@ -709,11 +746,43 @@ const ReportPage: React.FC = () => {
     setError(null)
     getReport(Number(id))
       .then(setReport)
-      .catch((err: any) => {
-        const msg = err?.response?.data?.detail || err.message || '加载报告失败'
-        setError(msg)
+      .catch((err: unknown) => {
+        setError(getErrorMessage(err, '加载报告失败'))
       })
       .finally(() => setLoading(false))
+  }, [id])
+
+  // 安全下载：通过 JS 发带 auth token 的请求获取 blob，再用 <a download> 触发保存
+  const handleDownloadPdf = useCallback(async () => {
+    if (!id) return
+    try {
+      const blobUrl = await getReportPdfUrl(Number(id))
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = `baohegui_report_${id}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(blobUrl)
+    } catch (err: unknown) {
+      message.error(getErrorMessage(err, 'PDF 下载失败'))
+    }
+  }, [id])
+
+  const handleDownloadExcel = useCallback(async () => {
+    if (!id) return
+    try {
+      const blobUrl = await getReportExcelUrl(Number(id))
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = `baohegui_report_${id}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(blobUrl)
+    } catch (err: unknown) {
+      message.error(getErrorMessage(err, 'Excel 导出失败'))
+    }
   }, [id])
 
   // ── 全局筛选 ──────────────────────────────────────────
@@ -769,19 +838,39 @@ const ReportPage: React.FC = () => {
   const pipelineData = useMemo<PipelineSummaryData>(() => {
     if (!report?.report_data) return {}
     try {
-      const data = JSON.parse(report.report_data)
+      const data = JSON.parse(report.report_data) as Record<string, unknown> & {
+        merge_result?: {
+          risk_level?: string
+          review_status?: string
+          requires_human_review?: boolean
+          confirmed_count?: number
+          high_risk_count?: number
+        }
+        _rule_provenance?: Record<string, RuleProvenance>
+      }
       return {
-        traffic_light: data.traffic_light,
-        routing_reasoning: data.routing_reasoning,
-        parameter_bias_score: data.parameter_bias_score,
-        parameter_bias_findings: data.parameter_bias_findings,
-        merge_risk_level: data.merge_risk_level || data.merge_result?.risk_level,
-        merge_review_status: data.merge_review_status || data.merge_result?.review_status,
-        merge_requires_human_review: data.merge_requires_human_review ?? data.merge_result?.requires_human_review,
-        merge_confirmed_count: data.merge_confirmed_count ?? data.merge_result?.confirmed_count,
-        merge_high_risk_count: data.merge_high_risk_count ?? data.merge_result?.high_risk_count,
-        parse_quality: data.parse_quality,
-        parse_quality_detail: data.parse_quality_detail,
+        traffic_light: typeof data.traffic_light === 'string' ? data.traffic_light : undefined,
+        routing_reasoning: typeof data.routing_reasoning === 'string' ? data.routing_reasoning : undefined,
+        parameter_bias_score: typeof data.parameter_bias_score === 'number' ? data.parameter_bias_score : undefined,
+        parameter_bias_findings: typeof data.parameter_bias_findings === 'number' ? data.parameter_bias_findings : undefined,
+        merge_risk_level: typeof data.merge_risk_level === 'string'
+          ? data.merge_risk_level
+          : data.merge_result?.risk_level,
+        merge_review_status: typeof data.merge_review_status === 'string'
+          ? data.merge_review_status
+          : data.merge_result?.review_status,
+        merge_requires_human_review: typeof data.merge_requires_human_review === 'boolean'
+          ? data.merge_requires_human_review
+          : data.merge_result?.requires_human_review,
+        merge_confirmed_count: typeof data.merge_confirmed_count === 'number'
+          ? data.merge_confirmed_count
+          : data.merge_result?.confirmed_count,
+        merge_high_risk_count: typeof data.merge_high_risk_count === 'number'
+          ? data.merge_high_risk_count
+          : data.merge_result?.high_risk_count,
+        parse_quality: typeof data.parse_quality === 'string' ? data.parse_quality : undefined,
+        parse_quality_detail: typeof data.parse_quality_detail === 'string' ? data.parse_quality_detail : undefined,
+        rule_provenance: data._rule_provenance as Record<string, RuleProvenance> | undefined,
       }
     } catch { return {} }
   }, [report])
@@ -824,7 +913,7 @@ const ReportPage: React.FC = () => {
   const ruleColumns = [
     {
       title: '', key: 'icon', width: 36,
-      render: (_: any, r: RuleViolation) => getViolationIcon(r.risk_level),
+      render: (_: unknown, r: RuleViolation) => getViolationIcon(r.risk_level),
     },
     { title: '违规描述', dataIndex: 'description', key: 'description' },
     {
@@ -848,7 +937,7 @@ const ReportPage: React.FC = () => {
   const llmColumns = [
     {
       title: '', key: 'icon', width: 36,
-      render: (_: any, r: LLMViolation) => getViolationIcon(r.risk_level),
+      render: (_: unknown, r: LLMViolation) => getViolationIcon(r.risk_level),
     },
     {
       title: '类型', dataIndex: 'type', key: 'type', width: 100,
@@ -873,6 +962,7 @@ const ReportPage: React.FC = () => {
 
   const renderRuleTable = (mobile: boolean) => {
     if (mobile) return <div>{filteredRules.map(v => <MobileRuleCard key={v.rule_id} v={v} />)}</div>
+    const prov = pipelineData.rule_provenance
     return (
       <Table dataSource={filteredRules} columns={ruleColumns}
         rowKey="rule_id"
@@ -880,8 +970,8 @@ const ReportPage: React.FC = () => {
         size="small"
         onRow={(rec) => ({ style: rowStyle(rec.risk_level) })}
         expandable={{
-          expandedRowRender: ruleDetailRow,
-          rowExpandable: (r) => !!(r.text || r.law_ref),
+          expandedRowRender: (r) => ruleDetailRow(r, prov?.[r.rule_id]),
+          rowExpandable: (r) => !!(r.text || r.law_ref || prov?.[r.rule_id]),
         }}
       />
     )
@@ -1205,12 +1295,22 @@ const ReportPage: React.FC = () => {
         textAlign: 'center',
         marginBottom: 40,
       }}>
-        <Tooltip title="下载 PDF 格式的合规审查报告">
-          <Button type="primary" icon={<DownloadOutlined />} size="large"
-            href={getReportPdfUrl(Number(id))} target="_blank"
-            style={{ borderRadius: 8, paddingLeft: 32, paddingRight: 32 }}>
-            下载 PDF 报告
-          </Button>
+        <Tooltip title="下载合规审查报告">
+          <Space size={12} wrap>
+            <Button
+              icon={<FileExcelOutlined />}
+              size="large"
+              onClick={handleDownloadExcel}
+              style={{ borderRadius: 8, paddingLeft: 24, paddingRight: 24 }}
+            >
+              导出 Excel
+            </Button>
+            <Button type="primary" icon={<DownloadOutlined />} size="large"
+              onClick={handleDownloadPdf}
+              style={{ borderRadius: 8, paddingLeft: 32, paddingRight: 32 }}>
+              下载 PDF 报告
+            </Button>
+          </Space>
         </Tooltip>
       </div>
 
@@ -1227,8 +1327,7 @@ const ReportPage: React.FC = () => {
             shape="circle"
             size="large"
             icon={<DownloadOutlined style={{ fontSize: 20 }} />}
-            href={getReportPdfUrl(Number(id))}
-            target="_blank"
+            onClick={handleDownloadPdf}
             style={{
               width: 52,
               height: 52,

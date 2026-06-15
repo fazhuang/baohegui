@@ -3,6 +3,7 @@ import { Card, Form, Input, Button, Typography, message, Alert, Result } from 'a
 import { LockOutlined, ArrowLeftOutlined, ProfileOutlined } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { resetPassword } from '../services/api'
+import { getErrorMessage } from '../utils/error'
 
 const ResetPassword: React.FC = () => {
   const [searchParams] = useSearchParams()
@@ -23,8 +24,8 @@ const ResetPassword: React.FC = () => {
       await resetPassword(token, values.password)
       setDone(true)
       message.success('密码已重置，请使用新密码登录')
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || err.message || '重置失败')
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, '重置失败'))
     }
     setLoading(false)
   }

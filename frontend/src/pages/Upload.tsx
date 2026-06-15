@@ -7,13 +7,14 @@ import {
   InboxOutlined, UploadOutlined, FileSearchOutlined,
   CheckCircleOutlined, ReloadOutlined,
   ExperimentOutlined, SafetyOutlined, CloseCircleOutlined, HistoryOutlined,
-  ProfileOutlined, ArrowRightOutlined,
+  ArrowRightOutlined,
   ThunderboltOutlined, FlagOutlined, MergeCellsOutlined,
   FileOutlined, LoadingOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { uploadFile, runCheck, getCategories, listReports } from '../services/api'
-import type { ReportListItem, CategoriesData } from '../types'
+import { uploadFile, runCheck, listReports } from '../services/api'
+import type { ReportListItem } from '../types'
+import { getErrorMessage } from '../utils/error'
 
 const { Title, Text } = Typography
 
@@ -126,14 +127,6 @@ const ProcessNode: React.FC<{
   )
 }
 
-// ── 行业大类选项（从后端动态获取）────────────────────────────
-
-// ── 选中子类 id → 对应的大类行业标识映射（用于传给后端）─────────────────
-// 子类 id 格式: "{group_id}_{subtype}", 从中提取 group_id 作为行业标识
-function groupIdFromCategory(catId: string): string {
-  return catId.split('_')[0]
-}
-
 // ── 最近检查概览 ────────────────────────────────────────────
 
 const RecentCheckStrip: React.FC<{ onClick?: (id: number) => void }> = ({ onClick }) => {
@@ -142,7 +135,7 @@ const RecentCheckStrip: React.FC<{ onClick?: (id: number) => void }> = ({ onClic
 
   useEffect(() => {
     listReports()
-      .then((reports) => setItems(reports.slice(0, 5)))
+      .then((reports) => setItems(reports.items.slice(0, 5)))
       .catch(() => {})
       .finally(() => setLoaded(true))
   }, [])
@@ -231,12 +224,6 @@ const UploadPage: React.FC = () => {
   const filesRef = useRef<FileItemData[]>([])
   const processingRef = useRef(false)
 
-  // 行业选择（从后端加载分类层级）
-  const [categoriesData, setCategoriesData] = useState<CategoriesData | null>(null)
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([])
-  const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
-  const [showIndustrySelect, setShowIndustrySelect] = useState(false)
-
   // 拖拽状态
   const [dragOver, setDragOver] = useState(false)
 
@@ -244,24 +231,14 @@ const UploadPage: React.FC = () => {
   const fileRef = useRef<File | null>(null)
   const uploadResultRef = useRef<{ db_id: number } | null>(null)
 
-  // 加载分类层级
-  useEffect(() => {
-    getCategories().then(data => {
-      setCategoriesData(data)
-    }).catch(() => {
-      // 后端未就绪时使用空数据
-      setCategoriesData(null)
-    })
-  }, [])
-
   // 模拟进度动画
-  const animateProgress = useCallback(() => {
+  const animateProgress = useCallback((stopEarly = false) => {
     setProgress(10)
     const timer = setInterval(() => {
       setProgress((p) => {
-        if (p >= 95) {
+        if (p >= 95 || stopEarly) {
           clearInterval(timer)
-          return 95
+          return stopEarly ? p : 95
         }
         return p + Math.random() * 8
       })
@@ -288,9 +265,6 @@ const UploadPage: React.FC = () => {
   // ── 处理单个文件 ──
   const processSingleFile = useCallback(async (item: FileItemData): Promise<void> => {
     const { file } = item
-    const indStr = selectedCategories.length > 0
-      ? [...new Set(selectedCategories.map(id => groupIdFromCategory(id)))].join(',')
-      : undefined
 
     fileRef.current = file
     uploadResultRef.current = null
@@ -299,40 +273,46 @@ const UploadPage: React.FC = () => {
 
     try {
       setCurrentStep('uploading')
-      animateProgress()
-      const uploadResult = await uploadFile(file, indStr)
+      setProgress(0)
+      const uploadResult = await uploadFile(file)
       setProgress(100)
-      uploadResultRef.current = { db_id: uploadResult.db_id }
+
+      const dbId = uploadResult.db_id
+      uploadResultRef.current = { db_id: dbId }
 
       updateFiles(prev => prev.map(f =>
-        f.id === item.id ? { ...f, status: 'checking' as const, dbId: uploadResult.db_id } : f
+        f.id === item.id ? { ...f, status: 'checking' as const, dbId } : f
       ))
 
-      await new Promise(r => setTimeout(r, 300))
-      setCurrentStep('parsing')
-      animateProgress()
-
+      // 短暂延迟后进入下一阶段
       await new Promise(r => setTimeout(r, 200))
+
+      // ── 第0层：智能路由 ──
       setCurrentStep('routing')
       animateProgress()
+      setProgress(50)
 
-      await new Promise(r => setTimeout(r, 200))
+      // ── 第1层：规则引擎 ──
       setCurrentStep('rule_engine')
       animateProgress()
+      setProgress(60)
 
-      await new Promise(r => setTimeout(r, 200))
+      // ── 第2层：参数倾向性 ──
       setCurrentStep('parameter_bias')
       animateProgress()
+      setProgress(70)
 
-      await new Promise(r => setTimeout(r, 200))
+      // ── 第3层：AI语义审查 ──
       setCurrentStep('llm_analysis')
       animateProgress()
+      setProgress(80)
 
-      await new Promise(r => setTimeout(r, 200))
+      // ── 汇总层：风险合并 ──
       setCurrentStep('risk_merge')
       animateProgress()
+      setProgress(90)
 
-      const checkResult = await runCheck(uploadResult.db_id, indStr)
+      const checkResult = await runCheck(dbId)
       setProgress(100)
 
       // Extract pipeline data from the check result
@@ -353,15 +333,15 @@ const UploadPage: React.FC = () => {
       updateFiles(prev => prev.map(f =>
         f.id === item.id ? { ...f, status: 'done' as const, result: fileResult } : f
       ))
-    } catch (err: any) {
-      const msg = err?.response?.data?.detail || err.message || '处理失败'
+    } catch (err: unknown) {
+      const msg = getErrorMessage(err, '处理失败')
       updateFiles(prev => prev.map(f =>
         f.id === item.id ? { ...f, status: 'error' as const, errorMsg: msg } : f
       ))
       setError({ step: currentStep, message: msg })
       setProgress(0)
     }
-  }, [selectedCategories, animateProgress, updateFiles, currentStep])
+  }, [animateProgress, updateFiles, currentStep])
 
   // ── 处理后队列 ──
   const processQueue = useCallback(async () => {
@@ -420,7 +400,7 @@ const UploadPage: React.FC = () => {
   }, [files, processQueue])
 
   // ── 单文件 startUpload（向后兼容，被 handleDrop / handleFileChange 单文件路径调用）──
-  const startUpload = useCallback(async (file: File, _industries?: string[]) => {
+  const startUpload = useCallback(async (file: File) => {
     const item: FileItemData = { id: nextFileId.current++, file, status: 'pending' }
     updateFiles(prev => [...prev, item])
   }, [updateFiles])
@@ -450,18 +430,6 @@ const UploadPage: React.FC = () => {
       handleRetryAll()
     }
   }, [files, handleRetryAll])
-
-  // 子类选择：切换选中状态
-  const toggleCategory = useCallback((catId: string) => {
-    setSelectedCategories(prev =>
-      prev.includes(catId) ? prev.filter(v => v !== catId) : [...prev, catId]
-    )
-  }, [])
-
-  // 展开/收起行业大类
-  const handleGroupToggle = useCallback((groupId: string) => {
-    setExpandedGroup(prev => prev === groupId ? null : groupId)
-  }, [])
 
   // Tour
   const [tourOpen, setTourOpen] = useState(false)
@@ -582,128 +550,6 @@ const UploadPage: React.FC = () => {
       {/* ── 最近检查概览 ────────────────────────── */}
       {currentStep === 'idle' && files.length === 0 && (
         <RecentCheckStrip onClick={(id) => navigate(`/report/${id}`)} />
-      )}
-
-      {/* ── 行业选择 Chip ──────────────────────── */}
-      {currentStep === 'idle' && files.length === 0 && (
-        <Card
-          size="small"
-          style={{
-            marginBottom: 16,
-            borderRadius: 10,
-            border: '1px solid var(--color-border)',
-          }}
-          styles={{ body: { padding: '12px 16px' } }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-            <Space>
-              <ProfileOutlined style={{ color: 'var(--color-action)', fontSize: 16 }} />
-              <Text strong style={{ fontSize: 14 }}>行业类型</Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {selectedCategories.length === 0 ? '（不选则仅使用通用规则）' : `已选 ${selectedCategories.length} 项`}
-              </Text>
-            </Space>
-            <Button
-              type="link"
-              size="small"
-              onClick={() => setShowIndustrySelect(!showIndustrySelect)}
-            >
-              {showIndustrySelect ? '收起' : '选择行业大类'}
-            </Button>
-          </div>
-          {showIndustrySelect && (
-            <div style={{ marginTop: 12 }}>
-              {/* 大类层级列表 */}
-              {categoriesData?.category_groups?.length ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {categoriesData.category_groups.map(group => {
-                    const children = categoriesData.categories.filter(c => c.parent === group.id)
-                    const isExpanded = expandedGroup === group.id
-                    const groupSelectedCount = selectedCategories.filter(id =>
-                      groupIdFromCategory(id) === group.id
-                    ).length
-
-                    return (
-                      <div key={group.id} style={{
-                        border: '1px solid var(--color-border)',
-                        borderRadius: 8,
-                        overflow: 'hidden',
-                      }}>
-                        {/* 大类头 — 点击展开/收起 */}
-                        <div
-                          onClick={() => handleGroupToggle(group.id)}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 8,
-                            padding: '8px 12px',
-                            cursor: 'pointer',
-                            background: isExpanded ? 'var(--color-brand-light)' : 'transparent',
-                            transition: 'background 0.15s',
-                          }}
-                        >
-                          <ProfileOutlined style={{ color: 'var(--color-action)', fontSize: 14 }} />
-                          <Text strong style={{ fontSize: 13, flex: 1 }}>{group.name}</Text>
-                          {groupSelectedCount > 0 && (
-                            <Tag color="blue" style={{ fontSize: 10, lineHeight: '18px', padding: '0 8px' }}>
-                              已选 {groupSelectedCount}
-                            </Tag>
-                          )}
-                          <Text type="secondary" style={{ fontSize: 11 }}>
-                            {children.length} 个子类
-                          </Text>
-                        </div>
-
-                        {/* 展开的子类 Chip */}
-                        {isExpanded && (
-                          <div style={{ padding: '8px 12px 10px', borderTop: '1px solid var(--color-border)' }}>
-                            <Space wrap size={[6, 6]}>
-                              {children.map(cat => (
-                                <Tag.CheckableTag
-                                  key={cat.id}
-                                  checked={selectedCategories.includes(cat.id)}
-                                  onChange={() => toggleCategory(cat.id)}
-                                  style={{
-                                    padding: '3px 12px',
-                                    borderRadius: 5,
-                                    fontSize: 12,
-                                    border: `1px solid ${selectedCategories.includes(cat.id) ? 'var(--color-action)' : 'var(--color-border)'}`,
-                                    background: selectedCategories.includes(cat.id) ? 'var(--color-brand-light)' : 'transparent',
-                                  }}
-                                >
-                                  {cat.name}
-                                </Tag.CheckableTag>
-                              ))}
-                            </Space>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              ) : (
-                <Space wrap size={[8, 8]}>
-                  {selectedCategories.map(catId => (
-                    <Tag
-                      key={catId}
-                      closable
-                      onClose={() => toggleCategory(catId)}
-                      style={{ fontSize: 12, borderRadius: 5 }}
-                    >
-                      {catId}
-                    </Tag>
-                  ))}
-                </Space>
-              )}
-              <Alert
-                message="选择行业后，系统将加载该行业的专属审查规则，提高审查精准度"
-                type="info"
-                showIcon={false}
-                style={{ marginTop: 10, background: 'var(--color-brand-light)', border: 'none', fontSize: 12, padding: '6px 12px', borderRadius: 6 }}
-              />
-            </div>
-          )}
-        </Card>
       )}
 
       {/* ── 首次使用引导 ────────────────────────── */}
@@ -887,7 +733,7 @@ const UploadPage: React.FC = () => {
                   step={s}
                   status={getStepStatus(s.key)}
                   errorMsg={error?.step === s.key ? error.message : undefined}
-                  onRetry={error?.step === s.key ? (s.key === 'uploading' ? handleRetry : () => startUpload(fileRef.current!, selectedCategories)) : undefined}
+                  onRetry={error?.step === s.key ? (s.key === 'uploading' ? handleRetry : () => startUpload(fileRef.current!)) : undefined}
                   progressPct={getStepStatus(s.key) === 'active' ? Math.min(progress, 95) : getStepStatus(s.key) === 'done' ? 100 : 0}
                 />
                 {i < STEPS.length - 1 && (

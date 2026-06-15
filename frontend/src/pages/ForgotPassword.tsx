@@ -3,6 +3,7 @@ import { Card, Form, Input, Button, Typography, message, Alert, Result } from 'a
 import { MailOutlined, ArrowLeftOutlined, ProfileOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { forgotPassword } from '../services/api'
+import { getErrorMessage } from '../utils/error'
 
 const ForgotPassword: React.FC = () => {
   const [loading, setLoading] = useState(false)
@@ -17,8 +18,8 @@ const ForgotPassword: React.FC = () => {
       await forgotPassword(values.email)
       setSent(true)
       message.success('重置链接已发送，请检查邮箱')
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || err.message || '发送失败')
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, '发送失败'))
     }
     setLoading(false)
   }

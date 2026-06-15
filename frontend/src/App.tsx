@@ -2,40 +2,43 @@ import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { ConfigProvider, App as AntApp } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import AppLayout from './components/AppLayout'
+
+// Layout
+import ShellLayout from './layouts/ShellLayout'
+
+// Context
+import { PermissionProvider } from './contexts/PermissionContext'
+
+// Auth guard
+import RequireRole from './components/RequireRole'
+
+// Pages
+import LoginPage from './pages/Login'
+import ForgotPassword from './pages/ForgotPassword'
+import ResetPassword from './pages/ResetPassword'
+import DashboardPage from './pages/Dashboard'
 import UploadPage from './pages/Upload'
 import ReportPage from './pages/Report'
 import HistoryPage from './pages/History'
-import LoginPage from './pages/Login'
-import DashboardPage from './pages/Dashboard'
 import AdminRulesPage from './pages/AdminRules'
 import AdminPanel from './pages/AdminPanel'
-import ForgotPassword from './pages/ForgotPassword'
-import ResetPassword from './pages/ResetPassword'
 
 const theme = {
   token: {
-    // ── Brand & Action ──
     colorPrimary: '#2563eb',
     colorInfo: '#2563eb',
     colorSuccess: '#16a34a',
     colorWarning: '#eab308',
     colorError: '#dc2626',
-
-    // ── Text ──
     colorTextBase: '#334155',
     colorText: '#334155',
     colorTextSecondary: '#64748b',
     colorTextTertiary: '#94a3b8',
-
-    // ── Surfaces ──
     colorBgBase: '#ffffff',
     colorBgContainer: '#ffffff',
     colorBgLayout: '#f1f5f9',
     colorBorder: '#e2e8f0',
     colorBorderSecondary: '#f1f5f9',
-
-    // ── Typography ──
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
     fontWeightStrong: 600,
@@ -46,23 +49,19 @@ const theme = {
     fontSizeHeading2: 20,
     fontSizeHeading3: 16,
     lineHeight: 1.5715,
-
-    // ── Radius ──
     borderRadius: 6,
     borderRadiusLG: 8,
     borderRadiusOuter: 12,
-
-    // ── Motion ──
     motionDurationSlow: '0.3s',
     motionDurationMid: '0.2s',
     motionDurationFast: '0.1s',
   },
   components: {
     Layout: {
-      headerBg: '#1e40af',
-      headerColor: '#ffffff',
+      headerBg: '#ffffff',
+      headerColor: '#334155',
       headerHeight: 56,
-      siderBg: '#1e40af',
+      siderBg: '#ffffff',
     },
     Menu: {
       darkItemBg: '#1e40af',
@@ -89,7 +88,6 @@ function AppRoutes() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'))
   const navigate = useNavigate()
 
-  // 监听 localStorage 变化（跨标签页）
   useEffect(() => {
     const checkToken = () => setToken(localStorage.getItem('token'))
     window.addEventListener('storage', checkToken)
@@ -98,30 +96,93 @@ function AppRoutes() {
 
   const isLoggedIn = !!token
 
+  const handleLogin = () => {
+    setToken(localStorage.getItem('token'))
+    navigate('/', { replace: true })
+  }
+
   return (
     <Routes>
-      <Route path="/login" element={
-        <LoginPage onLogin={() => {
-          setToken(localStorage.getItem('token'))
-          navigate('/', { replace: true })
-        }} />
-      } />
+      {/* Public */}
+      <Route path="/login" element={<LoginPage onLogin={handleLogin} />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
-      <Route path="/" element={isLoggedIn ? <AppLayout onLogout={() => {
-        localStorage.removeItem('token')
-        localStorage.removeItem('role')
-        localStorage.removeItem('username')
-        setToken(null)
-        navigate('/login', { replace: true })
-      }} /> : <Navigate to="/login" replace />}>
+
+      {/* Protected */}
+      <Route
+        element={
+          isLoggedIn ? (
+            <PermissionProvider>
+              <ShellLayout />
+            </PermissionProvider>
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      >
         <Route index element={<DashboardPage />} />
-        <Route path="upload" element={<UploadPage />} />
+        <Route path="review" element={<UploadPage />} />
+        <Route path="review/history" element={<HistoryPage />} />
         <Route path="report/:id" element={<ReportPage />} />
-        <Route path="history" element={<HistoryPage />} />
-        <Route path="admin/rules" element={<AdminRulesPage />} />
-        <Route path="admin/panel" element={<AdminPanel />} />
+
+        {/* Rules */}
+        <Route path="rules" element={<AdminRulesPage />} />
+        <Route path="rules/editor" element={<AdminRulesPage />} />
+        <Route path="rules/versions" element={<AdminRulesPage />} />
+        <Route path="rules/sync" element={<AdminRulesPage />} />
+        <Route path="rules/industry" element={<AdminRulesPage />} />
+
+        {/* Knowledge base — placeholder */}
+        <Route path="kg" element={<div style={{ padding: 48, textAlign: 'center' }}>知识图谱 — 即将上线</div>} />
+        <Route path="kg/cases" element={<div style={{ padding: 48, textAlign: 'center' }}>案例库 — 即将上线</div>} />
+        <Route path="kg/legal" element={<div style={{ padding: 48, textAlign: 'center' }}>法规库 — 即将上线</div>} />
+
+        {/* Reports */}
+        <Route path="reports" element={<HistoryPage />} />
+        <Route path="reports/feedback" element={<div style={{ padding: 48, textAlign: 'center' }}>反馈管理 — 即将上线</div>} />
+
+        {/* Announcements */}
+        <Route path="announcements" element={<div style={{ padding: 48, textAlign: 'center' }}>警示公告 — 即将上线</div>} />
+        <Route path="announcements/manage" element={<div style={{ padding: 48, textAlign: 'center' }}>公告管理 — 即将上线</div>} />
+
+        {/* Account */}
+        <Route path="account" element={<div style={{ padding: 48, textAlign: 'center' }}>我的账户 — 即将上线</div>} />
+        <Route path="account/subscription" element={<div style={{ padding: 48, textAlign: 'center' }}>订阅管理 — 即将上线</div>} />
+
+        {/* System manage — admin+ */}
+        <Route element={<RequireRole roles={['super_admin', 'admin']} />}>
+          <Route path="manage" element={<AdminPanel />} />
+          <Route path="manage/users" element={<AdminPanel />} />
+          <Route path="manage/roles" element={<AdminPanel />} />
+          <Route path="manage/audit" element={<AdminPanel />} />
+          <Route path="manage/quota" element={<AdminPanel />} />
+        </Route>
+
+        {/* System manage — super_admin only */}
+        <Route element={<RequireRole roles={['super_admin']} />}>
+          <Route path="manage/config" element={<AdminPanel />} />
+          <Route path="manage/model" element={<AdminPanel />} />
+          <Route path="manage/security" element={<AdminPanel />} />
+        </Route>
+
+        {/* Ops center — super_admin only */}
+        <Route element={<RequireRole roles={['super_admin']} />}>
+          <Route path="ops" element={<div style={{ padding: 48, textAlign: 'center' }}>运维中心 — 即将上线</div>} />
+          <Route path="ops/scheduler" element={<div style={{ padding: 48, textAlign: 'center' }}>规则同步调度 — 即将上线</div>} />
+          <Route path="ops/crawler" element={<div style={{ padding: 48, textAlign: 'center' }}>案例采集引擎 — 即将上线</div>} />
+          <Route path="ops/kg-seed" element={<div style={{ padding: 48, textAlign: 'center' }}>知识图谱播种 — 即将上线</div>} />
+          <Route path="ops/health" element={<div style={{ padding: 48, textAlign: 'center' }}>系统健康 — 即将上线</div>} />
+        </Route>
+
+        {/* Backward-compatible redirects */}
+        <Route path="upload" element={<Navigate to="/review" replace />} />
+        <Route path="history" element={<Navigate to="/review/history" replace />} />
+        <Route path="admin/rules" element={<Navigate to="/rules" replace />} />
+        <Route path="admin/panel" element={<Navigate to="/manage" replace />} />
       </Route>
+
+      {/* 404 */}
+      <Route path="*" element={<Navigate to={isLoggedIn ? '/' : '/login'} replace />} />
     </Routes>
   )
 }

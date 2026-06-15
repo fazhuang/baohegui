@@ -10,6 +10,7 @@ import {
   fetchVersions, rollbackVersion,
   type RuleVersion,
 } from '../../services/rules-admin-api'
+import { getErrorMessage } from '../../utils/error'
 
 const { Title, Text, Paragraph } = Typography
 const { confirm } = Modal
@@ -26,9 +27,9 @@ const RulesVersion: React.FC = () => {
     try {
       const data = await fetchVersions()
       setVersions(data.versions || [])
-    } catch (e: any) {
+    } catch (e: unknown) {
       message.error('加载版本历史失败')
-      setError(e.message)
+      setError(getErrorMessage(e, '加载版本历史失败'))
     } finally {
       setLoading(false)
     }
@@ -68,8 +69,8 @@ const RulesVersion: React.FC = () => {
           const result = await rollbackVersion(record.filename)
           message.success(result.message || '版本回滚成功')
           load() // reload list
-        } catch (e: any) {
-          message.error(`回滚失败: ${e.message}`)
+        } catch (e: unknown) {
+          message.error(`回滚失败: ${getErrorMessage(e, '回滚失败')}`)
         } finally {
           setRollbacking(null)
         }
@@ -188,7 +189,7 @@ const RulesVersion: React.FC = () => {
               title: '操作',
               key: 'action',
               width: 120,
-              render: (_: any, record: RuleVersion) => (
+              render: (_: unknown, record: RuleVersion) => (
                 <Tooltip title={`回滚到版本 ${record.version}`}>
                   <Button
                     size="small"
