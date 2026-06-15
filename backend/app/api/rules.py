@@ -1,13 +1,15 @@
-"""规则管理 API — CRUD + 同步 + 导入"""
+"""规则管理 API — CRUD + 同步 + 导入（仅管理员可写）"""
 
+import json
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.core.config import settings
+from app.core.audit import audit_service
 from app.db.database import get_db
 from app.engine.rule_engine import rule_engine
 from app.services.rule_sync import rule_sync_service
@@ -17,8 +19,7 @@ from app.engine.platform_rules import platform_rule_engine
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
 
-# ── 请求模型 ────────────────────────────────────────────────
-
+# ── 请求模型 ──
 
 class ImportRulesRequest(BaseModel):
     rules: list[dict]
@@ -51,14 +52,19 @@ class UpdateRuleRequest(BaseModel):
     category: str | None = None
 
 
-# ── 规则引擎管理 ────────────────────────────────────────────
-
+# ── 规则引擎管理 ──
 
 @router.post("/reload")
-async def reload_rules(user: dict = Depends(get_current_user)):
-    """热加载规则文件"""
+async def reload_rules(admin: dict = Depends(require_admin)):
+    """热加载规则文件 — 仅管理员"""
     try:
         rule_engine.reload()
+        audit_service.log(
+            user_id=int(admin["sub"]),
+            action="reload_rules",
+            resource="rule_engine",
+            detail={"rule_count": len(rule_engine.rules)},
+        )
         return {
             "message": "规则已重新加载",
             "rule_count": len(rule_engine.rules),
@@ -83,13 +89,10 @@ async def get_engine_status(user: dict = Depends(get_current_user)):
     }
 
 
-# ── 平台规则差异引擎 ──────────────────────────────────────────
-
+# ── 平台规则差异引擎 ──
 
 @router.get("/platforms")
-async def list_platforms(
-    user: dict = Depends(get_current_user),
-):
+async def list_platforms(user: dict = Depends(get_current_user)):
     """列出所有支持的公共资源交易平台"""
     platforms = platform_rule_engine.list_platforms()
     return {"platforms": platforms}
@@ -107,8 +110,7 @@ async def get_platform_rules(
     return platform
 
 
-# ── 平台规则 CRUD ──────────────────────────────────────────
-
+# ── 平台规则 CRUD（仅管理员可写）─
 
 @router.get("/platform/list")
 async def list_platform_rules(
@@ -117,7 +119,7 @@ async def list_platform_rules(
     platform: str | None = Query(None),
     user: dict = Depends(get_current_user),
 ):
-    """列出平台规则（支持搜索和筛选）"""
+    """列出平台规则"""
     if search:
         rules = rule_sync_service.search_rules(search)
     elif platform:
@@ -147,12 +149,20 @@ async def get_platform_rule(
 @router.post("/platform")
 async def create_platform_rule(
     request: CreateRuleRequest,
-    user: dict = Depends(get_current_user),
+    admin: dict = Depends(require_admin),
 ):
-    """创建平台规则"""
+    """创建平台规则 — 仅管理员"""
     rule, error = rule_sync_service.add_rule(request.model_dump())
     if error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+
+    audit_service.log(
+        user_id=int(admin["sub"]),
+        action="create_platform_rule",
+        resource="rule",
+        resource_id=request.rule_id,
+        detail={"platform": request.platform, "rule_type": request.rule_type},
+    )
     return {"message": "规则已创建", "rule": rule.model_dump()}
 
 
@@ -160,57 +170,82 @@ async def create_platform_rule(
 async def update_platform_rule(
     rule_id: str,
     request: UpdateRuleRequest,
-    user: dict = Depends(get_current_user),
+    admin: dict = Depends(require_admin),
 ):
-    """更新平台规则"""
+    """更新平台规则 — 仅管理员"""
     data = {k: v for k, v in request.model_dump().items() if v is not None}
     rule, error = rule_sync_service.update_rule(rule_id, data)
     if error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+
+    audit_service.log(
+        user_id=int(admin["sub"]),
+        action="update_platform_rule",
+        resource="rule",
+        resource_id=rule_id,
+        detail=data,
+    )
     return {"message": "规则已更新", "rule": rule.model_dump()}
 
 
 @router.delete("/platform/{rule_id}")
 async def delete_platform_rule(
     rule_id: str,
-    user: dict = Depends(get_current_user),
+    admin: dict = Depends(require_admin),
 ):
-    """删除平台规则"""
+    """删除平台规则 — 仅管理员"""
     if not rule_sync_service.delete_rule(rule_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="规则不存在")
+
+    audit_service.log(
+        user_id=int(admin["sub"]),
+        action="delete_platform_rule",
+        resource="rule",
+        resource_id=rule_id,
+    )
     return {"message": "规则已删除"}
 
 
 @router.post("/platform/{rule_id}/toggle")
 async def toggle_platform_rule(
     rule_id: str,
-    user: dict = Depends(get_current_user),
+    admin: dict = Depends(require_admin),
 ):
-    """切换规则启用/停用"""
+    """切换规则启用/停用 — 仅管理员"""
     enabled = rule_sync_service.toggle_rule(rule_id)
     if enabled is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="规则不存在")
-    return {
-        "message": f"规则已{'启用' if enabled else '停用'}",
-        "enabled": enabled,
-    }
+
+    audit_service.log(
+        user_id=int(admin["sub"]),
+        action="toggle_platform_rule",
+        resource="rule",
+        resource_id=rule_id,
+        detail={"enabled": enabled},
+    )
+    return {"message": f"规则已{'启用' if enabled else '停用'}", "enabled": enabled}
 
 
-# ── 导入 ────────────────────────────────────────────────────
-
+# ── 导入 ──
 
 @router.post("/import")
 async def import_rules(
     request: ImportRulesRequest,
-    user: dict = Depends(get_current_user),
+    admin: dict = Depends(require_admin),
 ):
-    """批量导入规则"""
+    """批量导入规则 — 仅管理员"""
     result = rule_sync_service.import_rules(request.rules)
+
+    audit_service.log(
+        user_id=int(admin["sub"]),
+        action="import_rules",
+        resource="rule",
+        detail={"count": len(request.rules)},
+    )
     return result
 
 
-# ── 同步 ────────────────────────────────────────────────────
-
+# ── 同步 ──
 
 @router.get("/sync/status")
 async def get_sync_status(user: dict = Depends(get_current_user)):
@@ -229,10 +264,17 @@ async def get_sync_status(user: dict = Depends(get_current_user)):
 @router.post("/sync/run")
 async def run_sync(
     platform: str,
-    user: dict = Depends(get_current_user),
+    admin: dict = Depends(require_admin),
 ):
-    """执行平台规则同步"""
+    """执行平台规则同步 — 仅管理员"""
     record = await sync_scheduler.sync(platform)
+
+    audit_service.log(
+        user_id=int(admin["sub"]),
+        action="run_sync",
+        resource="rule_sync",
+        detail={"platform": platform},
+    )
     return {
         "status": record.status.value,
         "new_rules": record.result.new_rules if record.result else 0,
@@ -259,8 +301,7 @@ async def get_sync_diff(
     return {"platform": platform, "diffs": [d.model_dump() for d in diffs]}
 
 
-# ── 规则版本历史 ──────────────────────────────────────────────
-
+# ── 规则版本历史 ──
 
 @router.get("/versions")
 async def list_rule_versions(
@@ -299,9 +340,9 @@ async def list_rule_versions(
 async def rollback_rules(
     request: dict,
     db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    admin: dict = Depends(require_admin),
 ):
-    """回滚规则到指定版本"""
+    """回滚规则到指定版本 — 仅管理员"""
     import shutil
     import time
 
@@ -309,14 +350,13 @@ async def rollback_rules(
     if not filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少 filename 参数")
 
-    # SECURITY: Prevent path traversal
+    # Path traversal prevention
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的文件名")
 
     versions_dir = os.path.join(settings.rules_dir, "versions")
     source_path = os.path.join(versions_dir, filename)
 
-    # Resolve real paths and verify containment
     real_versions_dir = os.path.realpath(versions_dir)
     real_source = os.path.realpath(source_path)
 
@@ -328,33 +368,49 @@ async def rollback_rules(
 
     target_path = os.path.join(settings.rules_dir, "compliance_rules.json")
 
-    # 备份当前版本
+    # 读取版本文件内容用于审计
+    version_meta: dict = {}
+    try:
+        with open(real_source, "r", encoding="utf-8") as f:
+            content = json.load(f)
+            version_meta = {
+                "rule_version": content.get("version", "unknown"),
+                "rule_count": len(content.get("rules", [])),
+                "source_desc": content.get("description", ""),
+            }
+    except Exception:
+        pass
+
     backup_path = os.path.join(versions_dir, f"backup-{int(time.time())}.json")
     shutil.copy2(target_path, backup_path)
-
-    # 回滚
     shutil.copy2(real_source, target_path)
-
-    # 热重载
     rule_engine.reload()
 
+    audit_service.log(
+        user_id=int(admin["sub"]),
+        action="rollback_rules",
+        resource="rule_version",
+        resource_id=filename,
+        detail={
+            "backup": os.path.basename(backup_path),
+            "source_file": filename,
+            **version_meta,
+        },
+    )
     return {"status": "ok", "message": f"已回滚到版本: {filename}", "backup": os.path.basename(backup_path)}
 
 
-# ── 规则效能统计 ──────────────────────────────────────────────
-
+# ── 规则效能统计 ──
 
 @router.get("/effectiveness")
 async def get_rule_effectiveness(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """获取每条规则的效能统计（命中率、误报率）"""
+    """获取每条规则的效能统计"""
     import json
-
     from app.models.document import ComplianceReport
 
-    # 统计所有报告中的规则命中情况
     reports = db.query(ComplianceReport).all()
     rule_stats: dict[str, dict] = {}
 
@@ -367,9 +423,7 @@ async def get_rule_effectiveness(
                 rid = v.get("rule_id", "unknown")
                 if rid not in rule_stats:
                     rule_stats[rid] = {
-                        "rule_id": rid,
-                        "hit_count": 0,
-                        "total_reports": 0,
+                        "rule_id": rid, "hit_count": 0, "total_reports": 0,
                         "description": v.get("description", "")[:100],
                     }
                 rule_stats[rid]["hit_count"] += 1
@@ -387,16 +441,15 @@ async def get_rule_effectiveness(
     }
 
 
-# ── 批量操作 ──────────────────────────────────────────────────
-
+# ── 批量操作 ──
 
 @router.post("/batch/toggle")
 async def batch_toggle_rules(
     request: dict,
     db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    admin: dict = Depends(require_admin),
 ):
-    """批量启用/禁用规则"""
+    """批量启用/禁用规则 — 仅管理员"""
     rule_ids: list[str] = request.get("rule_ids", [])
     enabled: bool = request.get("enabled", True)
 
@@ -406,10 +459,14 @@ async def batch_toggle_rules(
     toggled = 0
     for rule in rule_engine.rules:
         if rule.id in rule_ids:
-            # Note: rule_engine rules don't have an 'enabled' field currently.
-            # This is a forward-looking endpoint. For now, log the intent.
             toggled += 1
 
+    audit_service.log(
+        user_id=int(admin["sub"]),
+        action="batch_toggle_rules",
+        resource="rule",
+        detail={"rule_ids": rule_ids, "enabled": enabled, "toggled": toggled},
+    )
     return {"status": "ok", "toggled": toggled, "enabled": enabled}
 
 

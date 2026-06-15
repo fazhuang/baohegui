@@ -1,4 +1,7 @@
-"""知识图谱数据模型"""
+"""知识图谱数据模型
+
+v2 新增 trust_level, audit_status, audited_by, audited_at 字段
+"""
 
 from datetime import datetime, timezone
 
@@ -17,6 +20,25 @@ class KGNode(Base):
     content = Column(Text, nullable=False)
     source = Column(String(256), default="")  # 来源
     tags = Column(String(512), default="")  # 逗号分隔的标签
+
+    # ── v2 可信与审计字段 ──────────────────────────────
+    trust_level = Column(
+        Float,
+        nullable=False,
+        default=0.5,
+        index=True,
+        comment="可信度评分 0.0-1.0，默认 0.5（未验证）",
+    )
+    audit_status = Column(
+        String(16),
+        nullable=False,
+        default="unreviewed",
+        index=True,
+        comment="审核状态: unreviewed / verified / flagged / rejected",
+    )
+    audited_by = Column(Integer, nullable=True, comment="审核人 user_id")
+    audited_at = Column(DateTime, nullable=True, comment="审核时间")
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 

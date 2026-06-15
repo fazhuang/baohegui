@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends
 
-from app.core.security import get_current_user
+from app.core.permissions import Permission, PermissionService
 from app.engine.rule_engine import rule_engine
 from app.services.usage_tracker import usage_tracker
 
@@ -10,8 +10,10 @@ router = APIRouter(prefix="/api/stats", tags=["stats"])
 
 
 @router.get("/dashboard")
-async def get_dashboard_stats(user: dict = Depends(get_current_user)):
-    """管理员看板 — 系统使用统计"""
+async def get_dashboard_stats(
+    user: dict = Depends(PermissionService.require_permission(Permission.STATS_DASHBOARD)),
+):
+    """管理员看板 — 系统使用统计（仅管理员可访问）"""
 
     # 规则引擎统计
     rules = rule_engine.rules

@@ -32,6 +32,7 @@ def init_db():
     from app.services.feedback_service import FeedbackRecord, RuleConfidence  # noqa: F401
     from app.models.knowledge_graph import KGNode, KGEdge  # noqa: F401
 
+    # v2: KGNode/KGEdge 属于 DocumentBase (导入自 models/document.py)
     DocumentBase.metadata.create_all(bind=engine)
     RuleBase.metadata.create_all(bind=engine)
     AuditBase.metadata.create_all(bind=engine)

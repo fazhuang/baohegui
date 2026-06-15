@@ -16,12 +16,30 @@ logger = logging.getLogger(__name__)
 class KnowledgeGraphService:
     """知识图谱服务"""
 
+    # ── 可信度阈值常量 ─────────────────────────────────
+    TRUST_MIN_ENRICHMENT = 0.3   # RAG 依据补充的最低可信度
+    TRUST_MIN_DISPLAY = 0.0      # 前端展示的最低可信度（含未验证）
+
     @staticmethod
-    def search(db: Session, query: str, node_type: Optional[str] = None, limit: int = 20) -> list[dict]:
-        """全文搜索知识图谱节点"""
+    def search(
+        db: Session,
+        query: str,
+        node_type: Optional[str] = None,
+        limit: int = 20,
+        min_trust: float = 0.0,
+        audit_status: Optional[str] = None,
+    ) -> list[dict]:
+        """全文搜索知识图谱节点（可过滤可信度与审核状态）"""
         q = db.query(KGNode)
         if node_type:
             q = q.filter(KGNode.node_type == node_type)
+        # 默认过滤掉 rejected 的节点
+        if audit_status is not None:
+            q = q.filter(KGNode.audit_status == audit_status)
+        else:
+            q = q.filter(KGNode.audit_status != "rejected")
+        if min_trust > 0:
+            q = q.filter(KGNode.trust_level >= min_trust)
         q = q.filter(
             or_(
                 KGNode.title.ilike(f"%{query}%"),
@@ -30,7 +48,9 @@ class KnowledgeGraphService:
             )
         ).limit(limit)
         return [{"id": n.id, "node_type": n.node_type, "title": n.title,
-                 "content": n.content[:300], "source": n.source, "tags": n.tags} for n in q.all()]
+                 "content": n.content[:300], "source": n.source, "tags": n.tags,
+                 "trust_level": n.trust_level, "audit_status": n.audit_status}
+                for n in q.all()]
 
     @staticmethod
     def get_related(db: Session, node_id: int, relation: Optional[str] = None) -> list[dict]:
@@ -42,12 +62,14 @@ class KnowledgeGraphService:
         result = []
         for e in edges.all():
             target = db.query(KGNode).filter(KGNode.id == e.target_id).first()
-            if target:
+            if target and target.audit_status != "rejected":
                 result.append({
                     "relation": e.relation,
                     "weight": e.weight,
                     "node": {"id": target.id, "node_type": target.node_type,
-                            "title": target.title, "content": target.content[:200]},
+                            "title": target.title, "content": target.content[:200],
+                            "trust_level": target.trust_level,
+                            "audit_status": target.audit_status},
                 })
         return result
 
@@ -96,8 +118,11 @@ class KnowledgeGraphService:
         ]
 
         for r in regulations:
-            n = KGNode(node_type=r["type"], title=r["title"], content=r["content"],
-                      source=r["source"], tags=r["tags"])
+            n = KGNode(
+                node_type=r["type"], title=r["title"], content=r["content"],
+                source=r["source"], tags=r["tags"],
+                trust_level=0.8, audit_status="verified",
+            )
             db.add(n)
             count += 1
 
@@ -110,8 +135,11 @@ class KnowledgeGraphService:
         ]
 
         for c in cases:
-            n = KGNode(node_type=c["type"], title=c["title"], content=c["content"],
-                      source=c["source"], tags=c["tags"])
+            n = KGNode(
+                node_type=c["type"], title=c["title"], content=c["content"],
+                source=c["source"], tags=c["tags"],
+                trust_level=0.6, audit_status="verified",
+            )
             db.add(n)
             count += 1
 
@@ -123,8 +151,11 @@ class KnowledgeGraphService:
         ]
 
         for rd in rules_data:
-            n = KGNode(node_type="rule", title=rd["title"], content=rd["desc"],
-                      source="包合规系统", tags=f"规则,{rd['id']}")
+            n = KGNode(
+                node_type="rule", title=rd["title"], content=rd["desc"],
+                source="包合规系统", tags=f"规则,{rd['id']}",
+                trust_level=0.7, audit_status="verified",
+            )
             db.add(n)
             count += 1
 

@@ -90,7 +90,9 @@ class MinioService:
             raise
 
     def upload(self, object_key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
-        """上传文件
+        """上传文件（接受 bytes 数据）
+
+        **已弃用**：请使用 upload_from_path 以避免全量内存读入。
 
         Args:
             object_key: 对象键（如 uploads/abc.pdf）
@@ -115,6 +117,50 @@ class MinioService:
         except S3Error as e:
             logger.error("MinIO 上传失败 %s: %s", object_key, e)
             raise
+
+    def upload_from_path(self, object_key: str, file_path: str, content_type: str = "application/octet-stream") -> str:
+        """从文件路径上传（流式，零全量内存拼接）。
+
+        使用 MinIO SDK 的 fput_object（文件流上传），不将文件读入内存。
+        本地回退模式使用 shut… 拷贝，同样零 Python 内存读入。
+
+        Args:
+            object_key: 对象键（如 uploads/abc.pdf）
+            file_path: 本地文件的绝对路径
+            content_type: MIME 类型
+
+        Returns:
+            存储路径（MinIO 模式返回 object_key，本地模式返回本地文件系统路径）
+        """
+        file_size = os.path.getsize(file_path)
+        if self._use_local:
+            return self._upload_local_from_path(object_key, file_path)
+        try:
+            self.client.fput_object(
+                settings.minio_bucket,
+                object_key,
+                file_path,
+                content_type=content_type,
+            )
+            logger.info("MinIO 流上传成功: %s (%d bytes)", object_key, file_size)
+            return object_key
+        except S3Error as e:
+            logger.error("MinIO 流上传失败 %s: %s", object_key, e)
+            raise
+
+    def _upload_local_from_path(self, key: str, src_path: str) -> str:
+        """本地文件系统拷贝（零 Python 内存读入）
+
+        Returns:
+            本地文件的绝对路径
+        """
+        filename = os.path.basename(key)
+        local_path = os.path.join(settings.storage_dir, filename)
+        os.makedirs(settings.storage_dir, exist_ok=True)
+        shutil.copy2(src_path, local_path)
+        file_size = os.path.getsize(local_path)
+        logger.info("本地存储成功: %s (%d bytes)", local_path, file_size)
+        return local_path
 
     def _upload_local(self, key: str, data: bytes) -> str:
         """本地文件系统上传（MinIO 不可用时的回退）

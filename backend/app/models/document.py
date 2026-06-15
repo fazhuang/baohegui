@@ -20,9 +20,11 @@ class UploadedFile(Base):
     page_count = Column(Integer, nullable=True)
     storage_path = Column(String(512), nullable=False)
     status = Column(
-        Enum("uploaded", "parsing", "checking", "completed", "failed", name="file_status"),
+        Enum("uploaded", "parsing", "queued", "checking", "completed", "failed", name="file_status"),
         default="uploaded",
     )
+    error_message = Column(Text, nullable=True)
+    failed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
