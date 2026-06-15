@@ -175,6 +175,11 @@ class ParsedDocument:
     raw_sections: list[SectionInfo] = field(default_factory=list)
     headings: list[str] = field(default_factory=list)  # 全文标题列表
 
+    # ── 解析质量评估字段（v2 新增） ─────────────────────
+    parse_quality: str = "ok"  # ok / text_layer / ocr / partial / failed
+    parse_quality_detail: str = ""  # 人类可读的解释
+    token_count_estimate: int = 0  # 预估 token 数（用于 LLM 上下文规划）
+
     def to_dict(self) -> dict:
         return {
             "filename": self.filename,
@@ -185,6 +190,9 @@ class ParsedDocument:
             },
             "raw_sections": [s.to_dict() for s in self.raw_sections],
             "headings": self.headings[:50],
+            "parse_quality": self.parse_quality,
+            "parse_quality_detail": self.parse_quality_detail,
+            "token_count_estimate": self.token_count_estimate,
         }
 
     def get_section_count(self) -> int:
@@ -465,6 +473,116 @@ def _docx_heading_level(style_name: str) -> int:
     if match:
         return int(match.group(1))
     return 1
+
+
+# ═══════════════════════════════════════════════════════════════
+# 解析质量评估（v2 新增）
+# ═══════════════════════════════════════════════════════════════
+
+def _assess_parse_quality(
+    sections: dict[str, str],
+    raw_sections: list,
+    full_text: str,
+    page_count: int,
+    is_ocr: bool = False,
+) -> tuple[str, str]:
+    """评估文档解析的可信度。
+
+    启发式规则（按优先级）：
+    1. 零章节 → failed
+    2. OCR 模式 → ocr
+    3. 章节数 ≤ 2 或 full_text 极短 → partial
+    4. 包含 PDF 文本层缺陷标记 → text_layer
+    5. 正常解析 → ok
+
+    Returns:
+        (parse_quality, detail_string)
+    """
+    if is_ocr:
+        return ("ocr", "文档经 OCR 识别，可能存在字符错误或格式丢失")
+
+    section_count = len(sections)
+    text_len = len(full_text) if full_text else 0
+
+    if section_count == 0 or text_len == 0:
+        return ("failed", "未识别到任何章节或文本内容为空，解析失败")
+
+    if text_len < 200:
+        return ("failed", f"文档文本过短（{text_len} 字符），可能为图片扫描件或空文档")
+
+    if section_count <= 2:
+        if text_len < 1000:
+            return ("partial", f"仅识别到 {section_count} 个章节且文本量不足（{text_len} 字符）")
+        return ("partial", f"仅识别到 {section_count} 个章节，解析不完整")
+
+    # 检测 PDF 文本层缺陷特征
+    defect_indicators = [
+        "□", "■", "�",  # 替换字符/缺字
+        "\x00",          # null 字节
+    ]
+    defect_count = sum(full_text.count(d) for d in defect_indicators)
+    if defect_count > 5:
+        return ("text_layer", f"检测到 {defect_count} 个文本层缺陷字符，PDF 内嵌字体映射可能不完整")
+
+    return ("ok", f"正常解析：{section_count} 个章节，{text_len} 字符")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Token 清洗器（v2 新增）
+# ═══════════════════════════════════════════════════════════════
+
+def sanitize_tokens(text: str, max_tokens: int | None = None) -> str:
+    """Token 清洗器统一入口：规范化文本以降低 LLM Token 消耗。
+
+    清洗步骤：
+    1. 折叠连续空行（最多保留 1 个）
+    2. 去除行首尾空白
+    3. 去除全角/半角噪声字符
+    4. 统一标点符号（全角 → 半角）
+    5. 如果指定 max_tokens，估算并截断
+
+    Args:
+        text: 原始文本
+        max_tokens: 最大 token 数（可选，中文约 1.5 字符/token）
+
+    Returns:
+        清洗后的文本
+    """
+    if not text:
+        return ""
+
+    # 1. 折叠连续空行
+    t = re.sub(r"\n{3,}", "\n\n", text)
+
+    # 2. 去除行首尾空白
+    t = "\n".join(line.strip() for line in t.split("\n"))
+
+    # 3. 去除控制字符（保留常见空白）
+    t = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", t)
+
+    # 4. 统一全角标点
+    replacements = {
+        "　": " ",
+        "（": "(", "）": ")",
+        "【": "[", "】": "]",
+        "《": "<", "》": ">",
+        "“": '"', "”": '"',
+        "‘": "'", "’": "'",
+        "！": "!", "？": "?",
+        "，": ",", "、": ",",
+        "；": ";", "：": ":",
+        "。": ".",
+    }
+    for full, half in replacements.items():
+        t = t.replace(full, half)
+
+    # 5. Token 截断（中文约 1.5 字符/token）
+    if max_tokens is not None and max_tokens > 0:
+        char_limit = max_tokens * 3 // 2  # 保守估计
+        if len(t) > char_limit:
+            t = t[:char_limit] + "\n\n[文本已截断以控制 token 消耗]"
+
+    return t.strip()
 
 
 class DocumentParser:
@@ -802,6 +920,11 @@ class DocumentParser:
         page_count = len(doc)
         full_text = "\n".join(pl.text for pl in page_lines)
 
+        # ── 解析质量评估 ────────────────────────────────
+        quality, quality_detail = _assess_parse_quality(
+            sections, raw_sections, full_text, page_count, is_ocr=False,
+        )
+
         return ParsedDocument(
             filename=Path(filepath).name,
             page_count=page_count,
@@ -809,6 +932,9 @@ class DocumentParser:
             sections=sections,
             raw_sections=raw_sections,
             headings=headings,
+            parse_quality=quality,
+            parse_quality_detail=quality_detail,
+            token_count_estimate=len(full_text) * 2 // 3,  # 中文约 1.5 字符/token
         )
 
     def parse_pdf(self, filepath: str) -> ParsedDocument:
@@ -861,45 +987,91 @@ class DocumentParser:
 
         创建 Heading 样式的层级树，将非 Heading 段落归入最近标题下。
         表格内容提取为 [TABLE: ...] 文本块。
+
+        改进 v4: 通过遍历 doc.element.body 子元素（<w:p> 和 <w:tbl> 交错出现），
+        将表格实时追加到当前章节内容中，而非事后统一追加到最后一个章节。
         """
         sections: dict[str, str] = {}
         all_headings: list[str] = []
         raw_sections: list[SectionInfo] = []
         current: Optional[SectionInfo] = None
-        total_paras = 0
+        table_counter = 0
+        # 用于 page_start/page_end 估算的段落计数
+        para_counter = 0
 
-        for para in doc.paragraphs:
-            text = para.text.strip()
-            total_paras += 1
-            style_name = (para.style.name or "").lower() if para.style else ""
-            is_style_heading = "heading" in style_name
+        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 
-            if is_style_heading and text:
-                level = _docx_heading_level(para.style.name)
-                sec_type = self._detect_section_type(text) or text
-                all_headings.append(text)
+        for child in doc.element.body:
+            tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
 
-                if current and current.content.strip():
-                    final_content = current.content.rstrip()
-                    if current.section_type in sections:
-                        sections[current.section_type] += "\n\n" + final_content
-                    else:
-                        sections[current.section_type] = final_content
-                    if current not in raw_sections:
-                        raw_sections.append(current)
+            if tag == 'p':
+                para_counter += 1
+                # 取 para.r 下的所有 w:t 文本
+                texts = child.findall('.//w:t', ns)
+                text = ''.join(t.text or '' for t in texts).strip()
+                if not text:
+                    continue
 
-                current = SectionInfo(
-                    title=text,
-                    section_type=sec_type,
-                    content="",
-                    level=level,
-                    page_start=total_paras,
-                    page_end=total_paras,
-                )
-            elif current and text:
-                current.add_content(text + "\n")
-                current.page_end = total_paras
+                # 检测是否为 Heading 样式
+                pPr = child.find('w:pPr', ns)
+                style_name = ''
+                if pPr is not None:
+                    style_el = pPr.find('w:pStyle', ns)
+                    if style_el is not None:
+                        style_val = style_el.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val', '')
+                        style_name = style_val or ''
 
+                is_style_heading = 'heading' in style_name.lower()
+
+                if is_style_heading:
+                    level = _docx_heading_level(style_name)
+                    sec_type = self._detect_section_type(text) or text
+                    all_headings.append(text)
+
+                    if current and current.content.strip():
+                        final_content = current.content.rstrip()
+                        if current.section_type in sections:
+                            sections[current.section_type] += "\n\n" + final_content
+                        else:
+                            sections[current.section_type] = final_content
+                        if current not in raw_sections:
+                            raw_sections.append(current)
+
+                    current = SectionInfo(
+                        title=text,
+                        section_type=sec_type,
+                        content="",
+                        level=level,
+                        page_start=para_counter,
+                        page_end=para_counter,
+                    )
+                elif current and text:
+                    current.add_content(text + "\n")
+                    current.page_end = para_counter
+
+            elif tag == 'tbl':
+                # ── 提取表格内容，追加到当前章节 ──
+                table_counter += 1
+                row_texts: list[str] = []
+                for row in child.findall('.//w:tr', ns):
+                    cells = row.findall('.//w:tc', ns)
+                    cell_texts: list[str] = []
+                    for tc in cells:
+                        t_ps = tc.findall('.//w:p', ns)
+                        t_lines: list[str] = []
+                        for tp in t_ps:
+                            t_ts = tp.findall('.//w:t', ns)
+                            t_line = ''.join(t.text or '' for t in t_ts).strip()
+                            if t_line:
+                                t_lines.append(t_line)
+                        cell_texts.append(' '.join(t_lines))
+                    row_texts.append(' | '.join(cell_texts))
+                table_block = f"[TABLE {table_counter}]\n" + "\n".join(row_texts)
+
+                if current:
+                    current.add_content("\n" + table_block + "\n")
+
+        # ── 收尾最后一个章节 ──
         if current and current.content.strip():
             final_content = current.content.rstrip()
             if current.section_type in sections:
@@ -909,29 +1081,33 @@ class DocumentParser:
             if current not in raw_sections:
                 raw_sections.append(current)
 
-        # 提取表格并归属到最近章节（而非全部追加到每个章节）
+        # ── full_text 构建（段落 + 表格全部拼接） ──
+        para_texts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+        full_text = "\n".join(para_texts)
         table_texts = self._extract_docx_tables(doc)
-
-        full_text = "\n".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
         if table_texts:
             full_text += "\n\n" + "\n\n".join(table_texts)
-            # 将表格追加到最后一个章节（而非全部章节）
-            if raw_sections:
-                raw_sections[-1].add_content("\n\n" + "\n\n".join(table_texts))
-            elif current and current.content.strip():
-                current.add_content("\n\n" + "\n\n".join(table_texts))
 
+        # ── sections_updated（合并 sections dict 与 raw_sections） ──
         sections_updated: dict[str, str] = {}
         for rs in raw_sections:
             sections_updated[rs.section_type] = sections.get(rs.section_type, rs.content)
 
+        quality, quality_detail = _assess_parse_quality(
+            sections_updated, raw_sections, full_text,
+            max(para_counter // 30 + 1, 1), is_ocr=False,
+        )
+
         return ParsedDocument(
             filename=Path(filepath).name,
-            page_count=max(total_paras // 30 + 1, 1),
+            page_count=max(para_counter // 30 + 1, 1),
             full_text=full_text,
             sections=sections or sections_updated,
             raw_sections=raw_sections,
             headings=all_headings,
+            parse_quality=quality,
+            parse_quality_detail=quality_detail,
+            token_count_estimate=len(full_text) * 2 // 3,
         )
 
     def _parse_docx_text_based(self, doc: docx.Document, filepath: str) -> ParsedDocument:
@@ -947,12 +1123,17 @@ class DocumentParser:
         sections, raw_sections, headings = self._extract_sections_from_lines(lines)
         page_count = max(len(doc.paragraphs) // 30 + 1, 1)
 
-        # Also extract tables — append to last section only
+        # Also extract tables (kept at the end since text-based parsing can't interleave by position)
         table_texts = DocumentParser._extract_docx_tables(doc)
         if table_texts:
             full_text += "\n\n" + "\n\n".join(table_texts)
+            # Update sections dict to include table content
+            table_block = "\n\n" + "\n\n".join(table_texts)
+            for key in sections:
+                sections[key] += table_block
             if raw_sections:
-                raw_sections[-1].add_content("\n\n" + "\n\n".join(table_texts))
+                for rs in raw_sections:
+                    rs.add_content(table_block)
 
         return ParsedDocument(
             filename=Path(filepath).name,

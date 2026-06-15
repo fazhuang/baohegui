@@ -90,6 +90,12 @@ REPORT_HTML_TEMPLATE = """<!DOCTYPE html>
   <p>原文：{{ v.text[:120] }}{% if v.text|length > 120 %}...{% endif %}</p>
   <p>建议：{{ v.suggestion }}</p>
   {% if v.law_ref %}<p>法规依据：{{ v.law_ref }}</p>{% endif %}
+  {% if v.validation_error %}
+  <p style="color: #dc2626;">⚠ 校验失败：{{ v.validation_error }}</p>
+  {% endif %}
+  {% if v.requires_human_review %}
+  <p style="color: #eab308;">🕮 需要人工复核</p>
+  {% endif %}
 </div>
 {% endfor %}
 

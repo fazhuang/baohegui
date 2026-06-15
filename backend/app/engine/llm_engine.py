@@ -49,39 +49,75 @@ LLM_OUTPUT_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["type", "text", "risk_level", "reason", "confidence"],
+                "required": ["risk_title", "is_risk_confirmed", "original_text", "location", "problem_analysis"],
                 "properties": {
+                    # ── 新格式字段（验收要求） ─────────────────
+                    "risk_id": {
+                        "type": "string",
+                        "description": "风险项唯一标识，如 R001-A1 或 AI-EXCL-001",
+                    },
+                    "is_risk_confirmed": {
+                        "type": "boolean",
+                        "description": "false = 已确认无风险（not a risk）",
+                    },
+                    "risk_title": {
+                        "type": "string",
+                        "description": "风险项标题",
+                    },
+                    "original_text": {
+                        "type": "string",
+                        "description": "原文引用",
+                    },
+                    "location": {
+                        "type": "string",
+                        "description": "所在章节/条款位置",
+                    },
+                    "problem_analysis": {
+                        "type": "string",
+                        "description": "问题分析",
+                    },
+                    "legal_basis": {
+                        "type": "string",
+                        "description": "法规依据",
+                    },
+                    "suggestion": {"type": "string"},
+                    "risk_level": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                    },
+                    # ── 旧格式字段（向后兼容） ─────────────────
                     "type": {
                         "type": "string",
                         "enum": [
                             "exclusivity", "bias", "hidden_barrier",
                             "ambiguity", "high_risk", "format_issue",
-                            "legal_risk", "procedural_issue"
-                        ]
+                            "legal_risk", "procedural_issue",
+                        ],
                     },
                     "section": {"type": "string"},
                     "text": {"type": "string"},
-                    "risk_level": {"type": "string", "enum": ["high", "medium", "low"]},
                     "reason": {"type": "string"},
-                    "suggestion": {"type": "string"},
-                    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
                     "evidence": {"type": "string"},
                     "law_ref": {"type": "string"},
-                    "consequence": {"type": "string"},
                     "law_refs": {
                         "type": "array",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "title": {"type": "string"},
-                                "article": {"type": "string"}
-                            }
-                        }
-                    }
-                }
-            }
+                                "article": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
         }
-    }
+    },
 }
 
 # 从 schema 中提取的可接受值集合（供 _validate_schema / _parse_violations 使用）
@@ -105,12 +141,17 @@ class LLMViolation(BaseModel):
     - evidence:    风险事实 — 从文档中逐字引用的原文证据
     - consequence: 风险推演 — 若不修正的具体后果
     - confidence:  置信度评分 0.0-1.0
+
+    证据链校验字段（v5 新增）：
+    - validation_error: 证据校验失败原因，为空表示校验通过
+    - requires_human_review: 是否需要人工复核
+
+    注：type 字段原为限定枚举，v4 扩展为自由文本以兼容新格式的 risk_title。
     """
 
     type: str = Field(
         ...,
-        pattern=r"^(exclusivity|bias|hidden_barrier|ambiguity|high_risk|format_issue|legal_risk|procedural_issue)$",
-        description="违例类型：排他性/倾向性/隐性壁垒/含糊性/高风险/格式问题/法律条款/程序问题",
+        description="违例类型（枚举值或风险标题，兼容新旧格式）：排他性/倾向性/隐性壁垒/含糊性/高风险/格式问题/法律条款/程序问题",
     )
     section: str = ""
     text: str = ""
@@ -126,6 +167,9 @@ class LLMViolation(BaseModel):
     evidence: str = ""  # 风险事实：从文档逐字引用的原文
     consequence: str = ""  # 风险推演：若不修正的具体后果
     confidence: float = 0.0  # 置信度评分 (0.0-1.0)
+    # ── 证据链校验（v5 新增） ─────────────────────────────
+    validation_error: Optional[str] = None  # 证据校验失败原因
+    requires_human_review: bool = False  # 是否需要人工复核
 
 
 class LLMEngineResult(BaseModel):
@@ -357,6 +401,7 @@ def _build_section_prompt(
     sampling_rate: float = 0.3,
     marked_doc: Any | None = None,
     industry_context: str = "",
+    kg_context: Optional[str] = None,
 ) -> tuple[list[dict[str, str]], int]:
     """
     将文档章节智能分批，送入大模型分析。
@@ -371,6 +416,10 @@ def _build_section_prompt(
     - LLM 会被告知：<<TEMPLATE>> 区域为标准模板固定文字，无需审查
     - <<REVIEW>> 区域才是代理机构填写的变量内容，是审查重点
 
+    RAG 增强（kg_context）：
+    - 从知识图谱检索的法规原文/典型案例，注入 prompt 末尾
+    - 帮助 LLM 做出更准确的法规引用，降低编造法规的概率
+
     Args:
         sections:         章节名 → 内容
         prompt_template:  Prompt 模板（含 {text} 占位符）
@@ -378,11 +427,8 @@ def _build_section_prompt(
         violated_sections: 规则引擎已查出违规的章节名集合
         sampling_rate:    无违规章节的抽样比例 (0~1)，默认 0.3
         marked_doc:       定变分离标记后的文档（可选）
-
-    Returns:
-        (chunks, sections_skipped)
-        chunks: [{"section_name": ..., "prompt": ...}, ...]
-        sections_skipped: 被抽样跳过的章节数
+        industry_context: 行业上下文描述（可选）
+        kg_context:       知识图谱检索的法规/案例上下文（可选）
     """
     violated_sections = violated_sections or set()
     chunks: list[dict[str, str]] = []
@@ -485,6 +531,12 @@ def _build_section_prompt(
             }
         )
 
+    # ── 注入 KG 上下文（法规依据）到每个 prompt 末尾 ────────
+    if kg_context:
+        kg_section = "\n\n【参考法规依据】\n" + kg_context + "\n\n请结合以上法规依据，以 JSON 格式输出审查结论。"
+        for c in chunks:
+            c["prompt"] += kg_section
+
     return chunks, sections_skipped
 
 
@@ -492,16 +544,12 @@ def _validate_schema(violations: list[dict]) -> list[dict]:
     """
     手动验证每条违规记录是否符合 LLM_OUTPUT_SCHEMA 定义的结构。
 
-    验证规则：
+    验证规则（支持新旧两种格式，至少满足一种即通过）：
     1. 必须是 dict
-    2. 必须包含 type 字段且值在可接受枚举中
-    3. 必须包含 text 字段（非空字符串）
+    2. 新格式（验收要求）：必须包含 risk_title（非空）, is_risk_confirmed（bool）, original_text, location, problem_analysis
+    3. 旧格式（向后兼容）：必须包含 type（枚举值中）, text（非空）
 
-    注意：confidence / risk_level / reason 等字段的缺失和无效值
-    由 _parse_violations 负责填充默认值，不在此处丢弃。
-
-    返回通过验证的违规记录列表（浅拷贝）。
-    对验证失败的记录记录警告日志并丢弃。
+    规则 2 和 3 满足任一即视为有效。
     """
     valid: list[dict] = []
 
@@ -510,26 +558,30 @@ def _validate_schema(violations: list[dict]) -> list[dict]:
             logger.warning("_validate_schema: item[%d] 不是 dict（类型=%s），丢弃", i, type(item).__name__)
             continue
 
-        # ── 校验 type 字段存在且合法 ──────────────────────────
+        # ── 新格式校验（验收要求） ──────────────────────────
+        has_risk_title = isinstance(item.get("risk_title"), str) and bool(item["risk_title"])
+        has_is_risk_confirmed = isinstance(item.get("is_risk_confirmed"), bool)
+
+        if has_risk_title and has_is_risk_confirmed:
+            # 新格式通过
+            valid.append(item)
+            continue
+
+        # ── 旧格式校验（向后兼容） ──────────────────────────
         item_type = item.get("type")
-        if not isinstance(item_type, str) or item_type not in _ALLOWED_VIOLATION_TYPES:
-            logger.warning(
-                "_validate_schema: item[%d] type=%r 不在可接受枚举中，丢弃",
-                i,
-                item_type,
-            )
-            continue
+        if isinstance(item_type, str) and item_type in _ALLOWED_VIOLATION_TYPES:
+            item_text = item.get("text")
+            if item_text and isinstance(item_text, str):
+                valid.append(item)
+                continue
 
-        # ── 校验 text 字段存在 ────────────────────────────────
-        item_text = item.get("text")
-        if not item_text or not isinstance(item_text, str):
-            logger.warning(
-                "_validate_schema: item[%d] text 缺失或非字符串，丢弃",
-                i,
-            )
-            continue
-
-        valid.append(item)
+        logger.warning(
+            "_validate_schema: item[%d] 既不满足新格式（缺少 risk_title/is_risk_confirmed），"
+            "也不满足旧格式（type=%r text=%r），丢弃",
+            i,
+            item.get("type"),
+            item.get("text"),
+        )
 
     dropped = len(violations) - len(valid)
     if dropped:
@@ -565,9 +617,23 @@ def _parse_violations(raw: list[dict]) -> list[LLMViolation]:
     violations: list[LLMViolation] = []
 
     # 字段别名映射：LLM JSON key → LLMViolation field
+    #
+    # 新格式映射（验收要求字段 → 现有 LLMViolation 字段）：
+    #   risk_title     → type        （LLMViolation.type 原本是枚举，现在扩展为任意字符串）
+    #   original_text  → text
+    #   location       → section
+    #   problem_analysis → reason
+    #   legal_basis    → law_ref
+    #   is_risk_confirmed → 仅用于校验，不映射到 LLMViolation 字段
     _FIELD_ALIASES: dict[str, str] = {
         "evidence_text": "evidence",
         "basis": "law_ref",
+        # 新格式映射
+        "risk_title": "type",
+        "original_text": "text",
+        "location": "section",
+        "problem_analysis": "reason",
+        "legal_basis": "law_ref",
     }
 
     for i, item in enumerate(validated):
@@ -1132,6 +1198,7 @@ class LLMEngine:
         target_section_types: set[str] | None = None,
         marked_doc: Any | None = None,
         industry_descriptions: str = "",
+        kg_context: Optional[str] = None,
     ) -> LLMEngineResult:
         """
         对结构化文档进行语义合规审查。
@@ -1145,6 +1212,10 @@ class LLMEngine:
         - 提供 marked_doc 时，LLM 收到标记文本（<<TEMPLATE>> / <<REVIEW>>）
         - LLM 被明确指令：忽略 <<TEMPLATE>> 中的固定模板文字
 
+        RAG 增强（kg_context）：
+        - 从知识图谱检索的法规原文/典型案例上下文
+        - 在 prompt 末尾注入，帮助 LLM 做出更准确的法规引用
+
         Args:
             sections:        解析器输出的结构化章节
             rule_violations: 规则引擎的违规结果（用于成本优化）
@@ -1153,6 +1224,7 @@ class LLMEngine:
             target_section_types: 目标章节类型集合
             marked_doc:      定变分离标记后的文档（可选）
             industry_descriptions: 行业描述，注入 LLM 提示词
+            kg_context:      知识图谱检索的法规/案例上下文（可选）
         """
         if self.mock_mode:
             return self._mock_analyze(sections, marked_doc=marked_doc)
@@ -1228,6 +1300,7 @@ class LLMEngine:
                 sampling_rate=0.3,
                 marked_doc=marked_doc,
                 industry_context=industry_descriptions,
+                kg_context=kg_context,
             )
         if not chunks:
             logger.info("所有章节均被抽样跳过，无需 LLM 调用")

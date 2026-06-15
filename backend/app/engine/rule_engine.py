@@ -50,15 +50,20 @@ _CACHE_MAX_SIZE = 50
 
 
 def _cache_key(sections: dict[str, str], rule_count: int, marked_doc: Any = None) -> str:
-    """Generate a deterministic cache key from section content hashes + rule count.
+    """Generate a deterministic cache key from full section content + rule count.
 
-    Uses section-name + content-length + rule_count to detect content or rule changes.
-    Rule count ensures cache is invalidated when rules are added/removed,
-    avoiding stale results when rules change but document content stays the same.
+    Hashes the full text of each section (not just length) so that different
+    content with the same length produces a different key. Also incorporates
+    marked_doc identity to avoid stale results when variable marking changes.
     """
-    content = "|".join(f"{k}:{len(v)}" for k, v in sorted(sections.items()))
-    content += f"|rules:{rule_count}"
-    return hashlib.md5(content.encode()).hexdigest()
+    hasher = hashlib.md5()
+    for k in sorted(sections.keys()):
+        hasher.update(k.encode())
+        hasher.update(sections[k].encode())
+    hasher.update(f"|rules:{rule_count}".encode())
+    if marked_doc is not None:
+        hasher.update(b"|md")
+    return hasher.hexdigest()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -85,6 +90,13 @@ class RuleDefinition(BaseModel):
     pattern: Optional[str] = None  # 禁用词规则：正则匹配模式
     severity: str = "medium"  # 禁用词规则：严重程度
     exclude_contexts: Optional[list[str]] = None  # 禁用词排除上下文（FORB-008 等）
+
+    # ── 溯源字段（v3 新增） ────────────────────────────
+    source_file: str = ""  # 规则来源文件（相对于 rules/ 目录）
+    source_version: str = ""  # 规则来源文件的版本号
+    source_url: Optional[str] = None  # 外部来源 URL（如法律法规原文链接）
+    provenance: str = ""  # 来源说明（如 "hlgs config/rules/*.json", "baohegui 原创"）
+    last_updated: Optional[str] = None  # 规则最后更新日期
 
 
 # Violation 和 RuleEngineResult 已迁移到 app.engine.shared_types
@@ -218,6 +230,14 @@ class RuleEngine:
             with open(base_path, encoding="utf-8") as f:
                 data = json.load(f)
             raw = data.get("rules", [])
+            base_version = data.get("version", "")
+            base_updated = data.get("last_updated", "")
+            base_provenance = data.get("description", "")
+            for r in raw:
+                r.setdefault("source_file", "base_rules.json")
+                r.setdefault("source_version", base_version)
+                r.setdefault("provenance", base_provenance)
+                r.setdefault("last_updated", base_updated)
             self.rules = [RuleDefinition(**r) for r in raw]
             logger.info("已加载 %d 条基础规则（%s）", len(self.rules), base_path)
         else:
@@ -229,6 +249,9 @@ class RuleEngine:
                 data = json.load(f)
 
             patterns_data = data.get("patterns", {})
+            fb_version = data.get("version", "")
+            fb_updated = data.get("last_updated", "")
+            fb_provenance = data.get("description", "")
             for category_name, cat_info in patterns_data.items():
                 regex_list = cat_info.get("regex_list", [])
                 default_severity = cat_info.get("severity", "medium")
@@ -246,6 +269,10 @@ class RuleEngine:
                             law_ref=item.get("law_ref"),
                             category="base",
                             exclude_contexts=item.get("exclude_contexts"),
+                            source_file="forbidden_words.json",
+                            source_version=item.get("version", fb_version),
+                            provenance=item.get("provenance", fb_provenance),
+                            last_updated=item.get("last_updated", fb_updated),
                         )
                     )
 
@@ -254,6 +281,10 @@ class RuleEngine:
                 len([r for r in self.rules if r.type == "forbidden"]),
                 len(patterns_data),
             )
+
+        # 2b. compliance_rules.json 合规模块规则
+        #     从 hlgs 提取的 88 条结构化规则，涵盖资格/评标/商务/程序/法规五大类
+        self._load_compliance_rules()
 
         # 3. 行业细分规则
         if industry:
@@ -303,6 +334,103 @@ class RuleEngine:
                     self.platform_mapping.setdefault(f"~fuzzy_{fuzzy_key}", []).append(entry)
 
         logger.info("规则引擎初始化完成，共 %d 条规则", len(self.rules))
+
+    def _load_compliance_rules(self) -> int:
+        """加载 rules/compliance_rules.json 中的合规模块规则（88 条结构化规则）
+
+        映射关系（compliance_rules 的丰富 schema → RuleDefinition 基础字段）：
+          rule_id                → id
+          rule_name + message    → description
+          risk_level             → severity
+          regulation_basis       → law_ref（拼接为 "title article"）
+          suggestion             → suggestion
+          rule_type              → type:
+            required             → keyword_required（不设 keyword，避免误命中）
+            forbidden_pattern    → forbidden（使用 pattern 字段）
+            pattern_required     → keyword_required
+            numeric_range        → format_required
+            date_interval        → format_required
+            conditional          → keyword_required
+
+        注意：compliance_rules 的 trigger_condition.keywords 是指"什么条件下触发该规则"，
+        不是"要搜索的关键字"，因此不映射到 RuleDefinition.keyword。
+        pattern 字段仅在 forbidden_pattern 类型时映射，用于实际的禁用词正则匹配。
+
+        跳过已加载的同 id 规则（避免与 base_rules / forbidden_words 重复）。
+        """
+        comp_path = self.rules_dir / "compliance_rules.json"
+        if not comp_path.exists():
+            logger.warning("合规模块规则文件不存在: %s", comp_path)
+            return 0
+
+        with open(comp_path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        comp_version = data.get("version", "")
+        comp_updated = data.get("last_updated", "")
+        comp_provenance = data.get("description", "")
+
+        raw_rules = data.get("rules", [])
+        loaded = 0
+        for r in raw_rules:
+            rule_id = r.get("rule_id", "")
+            if not rule_id:
+                continue
+
+            # 跳过已存在的 rule_id（防止重复）
+            if any(existing.id == rule_id for existing in self.rules):
+                continue
+
+            rule_name = r.get("rule_name", "")
+            message = r.get("message", "")
+            description = message or rule_name
+            rule_type_raw = r.get("rule_type", "")
+
+            # 类型映射：compliance_rules 的规则类型是"字段级"语义检查，
+            # 不能直接映射到规则引擎的"全局"检查类型（keyword_required/forbidden）。
+            #
+            # forbidden_pattern 在 compliance_rules 中的语义是"该字段内容中
+            # 不得出现此模式"——字段上下文相关，与全局禁用词含义不同。
+            # 因此全部映射为 keyword_required（不设 keyword），规则被动加载
+            # 供后续使用，不参与当前引擎的主动匹配。
+            resolved_type = "keyword_required"
+
+            # 不设 pattern / keyword，避免 compliance_rules 的字段级模式
+            # 被全局正则匹配引擎误命中。"厂家授权"在"资质要求"字段是禁止的，
+            # 但在全文"评审办法"中可能是合法的说明。
+
+            # regulation_basis → law_ref（拼接）
+            reg_basis = r.get("regulation_basis", [])
+            law_ref = "；".join(
+                f"{b.get('title', '')} {b.get('article', '')}"
+                for b in reg_basis if b
+            ) if reg_basis else None
+
+            risk_level = r.get("risk_level", "medium")
+            suggestion = r.get("suggestion", "")
+
+            weight_map = {"critical": 20.0, "high": 15.0, "medium": 10.0, "low": 5.0}
+            weight = weight_map.get(risk_level, 10.0)
+
+            self.rules.append(RuleDefinition(
+                id=rule_id,
+                type=resolved_type,
+                description=description,
+                severity=risk_level,
+                law_ref=law_ref,
+                suggestion=suggestion,
+                category="compliance",
+                weight=weight,
+                source_file="compliance_rules.json",
+                source_version=comp_version,
+                provenance=comp_provenance,
+                last_updated=comp_updated,
+                source_url=r.get("source_url"),
+            ))
+            loaded += 1
+
+        logger.info("已加载 %d 条合规模块规则（来自 compliance_rules.json）", loaded)
+        return loaded
 
     # ── 清单加载 ──────────────────────────────────────────
 
@@ -925,5 +1053,71 @@ class RuleEngine:
         return chapters
 
 
+# 实时规则监控
+import threading
+import time
+from pathlib import Path
+
+class LiveRuleMonitor:
+    """实时监控规则文件变更并在检测到变化时触发 RuleEngine 热加载"""
+    def __init__(self, rules_dir: str | Path, engine: RuleEngine):
+        self.rules_dir = Path(rules_dir)
+        self.engine = engine
+        self._last_mtime = 0.0
+        self._thread = None
+        self._stop_event = threading.Event()
+
+    def _get_rule_files_mtime(self) -> float:
+        """返回规则目录下所有关联 JSON 文件的最大修改时间"""
+        try:
+            files = []
+            # 基础文件
+            for name in ("base_rules.json", "compliance_rules.json", "forbidden_words.json", "platform_rules.json"):
+                p = self.rules_dir / name
+                if p.exists():
+                    files.append(p)
+            # 行业目录
+            industry_dir = self.rules_dir / "industry"
+            if industry_dir.is_dir():
+                for p in industry_dir.glob("*.json"):
+                    files.append(p)
+            # 版本目录（可选）
+            versions_dir = self.rules_dir / "versions"
+            if versions_dir.is_dir():
+                for p in versions_dir.glob("*.json"):
+                    files.append(p)
+            # 计算最大 mtime
+            return max((p.stat().st_mtime for p in files), default=0.0)
+        except Exception:
+            return 0.0
+
+    def _watch(self):
+        while not self._stop_event.is_set():
+            try:
+                current_mtime = self._get_rule_files_mtime()
+                if current_mtime != self._last_mtime:
+                    logger.info("检测到规则文件变更，触发热加载")
+                    self.engine.reload()
+                    self._last_mtime = current_mtime
+            except Exception as exc:
+                logger.debug("规则监控异常: %s", exc)
+            time.sleep(2)  # 轮询间隔
+
+    def start(self) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._watch, daemon=True, name="live_rule_monitor")
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+
 # 模块级单例（兼容已有导入）
 rule_engine = RuleEngine()
+# 启动实时规则监控（在生产环境中可根据需要关闭）
+try:
+    rule_engine._live_monitor = LiveRuleMonitor(rule_engine.rules_dir, rule_engine)
+    rule_engine._live_monitor.start()
+except Exception as e:
+    logger.warning("实时规则监控启动失败: %s", e)
