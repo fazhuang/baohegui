@@ -1,9 +1,8 @@
 """认证与权限管理"""
 
-import bcrypt
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
+import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt

@@ -493,6 +493,7 @@ class TestFiveLayerPipelineE2E:
     async def test_full_pipeline_green_light(self, client, auth_headers):
         """绿灯路由：小额公开招标 → 跳过LLM → 规则+参数检测 → 四路合并"""
         import tempfile
+
         from docx import Document
 
         # Create a docx with small budget
@@ -544,6 +545,7 @@ class TestFiveLayerPipelineE2E:
     async def test_full_pipeline_red_light(self, client, auth_headers):
         """红灯路由：大额单一来源 → 五层全开"""
         import tempfile
+
         from docx import Document
 
         doc = Document()
@@ -587,6 +589,7 @@ class TestFiveLayerPipelineE2E:
     async def test_pipeline_with_violations_produces_merge_result(self, client, auth_headers):
         """包含违规内容的文档 → 四路合并产生风险项"""
         import tempfile
+
         from docx import Document
 
         doc = Document()

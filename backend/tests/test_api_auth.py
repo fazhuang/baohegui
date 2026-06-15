@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-import time
-
-import pytest
 from fastapi.testclient import TestClient
-
-from app.core.security import create_access_token
 
 
 class TestRegister:
@@ -106,6 +101,7 @@ class TestTokenExpiry:
     def test_expired_token_returns_401(self, client: TestClient):
         """使用过期 token 请求应返回 401"""
         from datetime import datetime, timedelta, timezone
+
         from jose import jwt
 
         # 创建一个已过期的 token（exp 设为 1 小时前）
