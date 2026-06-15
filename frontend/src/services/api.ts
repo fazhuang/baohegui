@@ -316,7 +316,10 @@ export async function getMemberDashboard(): Promise<MemberDashboardResponse> {
 // Announcements
 // ═══════════════════════════════════════════════════════════════
 
-export async function listAnnouncements(params?: { limit?: number }): Promise<Array<Record<string, unknown>>> {
+export async function listAnnouncements(params?: { limit?: number }): Promise<Array<{
+  id: number; title: string; summary: string; severity: string; source: string;
+  published_at: string; created_at: string; content?: string; url?: string;
+}>> {
   const { data } = await http.get('/announcements', { params });
   return data;
 }

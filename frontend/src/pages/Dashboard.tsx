@@ -6,12 +6,13 @@
  */
 
 import React from 'react';
-import { usePermission } from '../contexts/PermissionContext';
+import { useAuthStore } from '../stores/authStore';
 import AdminDashboard from './dashboards/AdminDashboard';
 import UserDashboard from './dashboards/UserDashboard';
 
 const DashboardPage: React.FC = () => {
-  const { role, loading } = usePermission();
+  const role = useAuthStore(s => s.role());
+  const loading = useAuthStore(s => s.loading);
 
   if (loading) return null;
 

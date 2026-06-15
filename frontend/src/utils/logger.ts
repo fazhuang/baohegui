@@ -1,9 +1,13 @@
 /** 轻量日志工具 — 仅 dev 模式输出 */
 
-/* eslint-disable @typescript-eslint/no-explicit-any — import.meta.env 在 Vite 中无类型声明 */
-const _meta = import.meta as unknown as Record<string, unknown> | undefined;
-const isDev = !!(typeof _meta !== 'undefined' && _meta && (_meta as { env?: Record<string, unknown> }).env?.DEV);
-/* eslint-enable @typescript-eslint/no-explicit-any */
+// Vite 注入 import.meta.env.DEV，全局通过 Vite client types 声明
+declare global {
+  interface ImportMeta {
+    readonly env: Record<string, string | boolean | undefined>;
+  }
+}
+
+const isDev = import.meta.env?.DEV === true;
 
 const _console = {
   info: (...args: unknown[]) => { if (isDev) console.info('[baohegui]', ...args) },

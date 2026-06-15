@@ -21,7 +21,7 @@ import {
   LogoutOutlined,
 } from '@ant-design/icons';
 import { Dropdown, Avatar, Input, Badge, theme as antTheme } from 'antd';
-import { usePermission } from '../contexts/PermissionContext';
+import { useAuthStore } from '../stores/authStore';
 import Sidebar from './Sidebar';
 import MobileNav from './MobileNav';
 
@@ -39,7 +39,10 @@ function useIsMobile(): boolean {
 }
 
 const ShellLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
-  const { user, isAdmin, isSuperAdmin, logout } = usePermission();
+  const user = useAuthStore(s => s.user);
+  const isAdmin = useAuthStore(s => s.isAdmin());
+  const isSuperAdmin = useAuthStore(s => s.isSuperAdmin());
+  const logout = useAuthStore(s => s.logout);
   const { token } = antTheme.useToken();
   const isMobile = useIsMobile();
 

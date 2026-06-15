@@ -1,15 +1,23 @@
+/**
+ * App — 应用根组件
+ *
+ * 认证状态通过 zustand useAuthStore 统一管理。
+ * 路由受 ShellLayout 包裹，未认证用户由 ProtectedShell 拦截。
+ */
+
 import React, { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { ConfigProvider, App as AntApp, Spin } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import { PermissionProvider, usePermission } from './contexts/PermissionContext'
+import { useAuthStore } from './stores/authStore'
 import ShellLayout from './layouts/ShellLayout'
 import RouteGuard from './routes/RouteGuard'
 import NotFoundPage from './routes/NotFoundPage'
 import ComingSoonPage from './components/common/ComingSoonPage'
 import ErrorBoundary from './components/ErrorBoundary'
+import AuthInitializer from './components/AuthInitializer'
 
-// ── 懒加载页面 ──────────────────────────────────────────────
+// ── 懒加载页面 ──────────────────────────────────────────────────
 const LoginPage = lazy(() => import('./pages/Login'))
 const ForgotPassword = lazy(() => import('./pages/ForgotPassword'))
 const ResetPassword = lazy(() => import('./pages/ResetPassword'))
@@ -29,7 +37,7 @@ const SystemManage = lazy(() => import('./pages/SystemManage'))
 
 const FB = <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}><Spin size="large" /></div>
 
-/** ErrorBoundary 包裹的懒加载组件 */
+/** ErrorBoundary + Suspense 包裹的懒加载组件 */
 function EL({ children }: { children: React.ReactNode }) {
   return (
     <ErrorBoundary>
@@ -38,8 +46,10 @@ function EL({ children }: { children: React.ReactNode }) {
   )
 }
 
+/** 受保护壳：未认证 → 跳转登录；认证中 → 加载态 */
 function ProtectedShell() {
-  const { user, loading } = usePermission()
+  const user = useAuthStore(s => s.user)
+  const loading = useAuthStore(s => s.loading)
   const token = localStorage.getItem('token')
   if (loading) return FB
   if (!token || !user) return <Navigate to="/login" replace />
@@ -68,90 +78,97 @@ const theme = {
   },
 }
 
+function AppInner() {
+  return (
+    <BrowserRouter>
+      <AuthInitializer />
+      <Routes>
+        {/* ── 公开路由 ── */}
+        <Route path="/login" element={<EL><LoginPage onLogin={() => window.location.href = '/'} /></EL>} />
+        <Route path="/forgot-password" element={<EL><ForgotPassword /></EL>} />
+        <Route path="/reset-password" element={<EL><ResetPassword /></EL>} />
+
+        {/* ── 受保护路由 ── */}
+        <Route element={<ProtectedShell />}>
+          {/* 工作台 */}
+          <Route index element={<EL><DashboardPage /></EL>} />
+          <Route path="report/:id" element={<EL><ReportPage /></EL>} />
+
+          {/* ── 审查中心 ── */}
+          <Route path="review" element={<EL><ReviewCenter /></EL>}>
+            <Route index element={<EL><UploadPage /></EL>} />
+            <Route path="history" element={<EL><HistoryPage /></EL>} />
+          </Route>
+
+          {/* ── 报告中心 ── */}
+          <Route path="reports" element={<EL><ReportCenter /></EL>}>
+            <Route index element={<EL><HistoryPage /></EL>} />
+            <Route path="feedback" element={
+              <RouteGuard roles={['admin']}><ComingSoonPage title="反馈管理" /></RouteGuard>
+            } />
+          </Route>
+
+          {/* ── 知识库 ── */}
+          <Route path="kg" element={<EL><KnowledgeBase /></EL>}>
+            <Route index element={<ComingSoonPage title="知识图谱" />} />
+            <Route path="cases" element={<ComingSoonPage title="案例库" />} />
+            <Route path="legal" element={<ComingSoonPage title="法规库" />} />
+          </Route>
+
+          {/* ── 警示公告 ── */}
+          <Route path="announcements" element={<EL><Announcements /></EL>}>
+            <Route index element={<ComingSoonPage title="警示公告" />} />
+            <Route path="manage" element={
+              <RouteGuard roles={['admin']}><ComingSoonPage title="公告管理" /></RouteGuard>
+            } />
+          </Route>
+
+          {/* ── 用户中心 ── */}
+          <Route path="account" element={<EL><UserCenter /></EL>}>
+            <Route index element={<ComingSoonPage title="我的账户" />} />
+            <Route path="subscription" element={<ComingSoonPage title="订阅管理" />} />
+          </Route>
+
+          {/* ── 规则中心 (admin) ── */}
+          <Route element={<RouteGuard roles={['admin']} />}>
+            <Route path="rules" element={<EL><RulesCenter /></EL>}>
+              <Route index element={<EL><AdminRulesPage /></EL>} />
+              <Route path="editor" element={<EL><AdminRulesPage /></EL>} />
+              <Route path="versions" element={<EL><AdminRulesPage /></EL>} />
+              <Route path="sync" element={<EL><AdminRulesPage /></EL>} />
+              <Route path="industry" element={<ComingSoonPage title="行业配置" />} />
+            </Route>
+
+            {/* ── 系统管理 (admin) ── */}
+            <Route path="manage" element={<EL><SystemManage /></EL>}>
+              <Route index element={<EL><AdminPanel /></EL>} />
+              <Route path="audit" element={<EL><AdminPanel /></EL>} />
+              <Route path="quota" element={<EL><AdminPanel /></EL>} />
+            </Route>
+          </Route>
+
+          {/* ── 向后兼容重定向 ── */}
+          <Route path="upload" element={<Navigate to="/review" replace />} />
+          <Route path="history" element={<Navigate to="/review/history" replace />} />
+          <Route path="admin/rules" element={<Navigate to="/rules" replace />} />
+          <Route path="admin/panel" element={<Navigate to="/manage" replace />} />
+
+          {/* ── 404 ── */}
+          <Route path="*" element={<NotFoundPage />} />
+        </Route>
+
+        {/* 最外层 404 */}
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
 function App() {
   return (
     <ConfigProvider locale={zhCN} theme={theme}>
       <AntApp>
-        <BrowserRouter>
-          <Routes>
-            {/* ── 公开路由 ────────────────────────────────── */}
-            <Route path="/login" element={<EL><LoginPage onLogin={() => window.location.href = '/'} /></EL>} />
-            <Route path="/forgot-password" element={<EL><ForgotPassword /></EL>} />
-            <Route path="/reset-password" element={<EL><ResetPassword /></EL>} />
-
-            {/* ── 受保护路由 ──────────────────────────────── */}
-            <Route element={<PermissionProvider><ProtectedShell /></PermissionProvider>}>
-              {/* 工作台 */}
-              <Route index element={<EL><DashboardPage /></EL>} />
-              <Route path="report/:id" element={<EL><ReportPage /></EL>} />
-
-              {/* ── 审查中心 ──────────────────────────────── */}
-              <Route path="review" element={<EL><ReviewCenter /></EL>}>
-                <Route index element={<EL><UploadPage /></EL>} />
-                <Route path="history" element={<EL><HistoryPage /></EL>} />
-              </Route>
-
-              {/* ── 报告中心 ──────────────────────────────── */}
-              <Route path="reports" element={<EL><ReportCenter /></EL>}>
-                <Route index element={<EL><HistoryPage /></EL>} />
-                <Route path="feedback" element={
-                  <RouteGuard roles={['admin']}><ComingSoonPage title="反馈管理" /></RouteGuard>
-                } />
-              </Route>
-
-              {/* ── 知识库 ────────────────────────────────── */}
-              <Route path="kg" element={<EL><KnowledgeBase /></EL>}>
-                <Route index element={<ComingSoonPage title="知识图谱" />} />
-                <Route path="cases" element={<ComingSoonPage title="案例库" />} />
-                <Route path="legal" element={<ComingSoonPage title="法规库" />} />
-              </Route>
-
-              {/* ── 警示公告 ──────────────────────────────── */}
-              <Route path="announcements" element={<EL><Announcements /></EL>}>
-                <Route index element={<ComingSoonPage title="警示公告" />} />
-                <Route path="manage" element={
-                  <RouteGuard roles={['admin']}><ComingSoonPage title="公告管理" /></RouteGuard>
-                } />
-              </Route>
-
-              {/* ── 用户中心 ──────────────────────────────── */}
-              <Route path="account" element={<EL><UserCenter /></EL>}>
-                <Route index element={<ComingSoonPage title="我的账户" />} />
-                <Route path="subscription" element={<ComingSoonPage title="订阅管理" />} />
-              </Route>
-
-              {/* ── 规则中心 (admin) ──────────────────────── */}
-              <Route element={<RouteGuard roles={['admin']} />}>
-                <Route path="rules" element={<EL><RulesCenter /></EL>}>
-                  <Route index element={<EL><AdminRulesPage /></EL>} />
-                  <Route path="editor" element={<EL><AdminRulesPage /></EL>} />
-                  <Route path="versions" element={<EL><AdminRulesPage /></EL>} />
-                  <Route path="sync" element={<EL><AdminRulesPage /></EL>} />
-                  <Route path="industry" element={<ComingSoonPage title="行业配置" />} />
-                </Route>
-
-                {/* ── 系统管理 (admin) ─────────────────── */}
-                <Route path="manage" element={<EL><SystemManage /></EL>}>
-                  <Route index element={<EL><AdminPanel /></EL>} />
-                  <Route path="audit" element={<EL><AdminPanel /></EL>} />
-                  <Route path="quota" element={<EL><AdminPanel /></EL>} />
-                </Route>
-              </Route>
-
-              {/* ── 向后兼容重定向 ────────────────────────── */}
-              <Route path="upload" element={<Navigate to="/review" replace />} />
-              <Route path="history" element={<Navigate to="/review/history" replace />} />
-              <Route path="admin/rules" element={<Navigate to="/rules" replace />} />
-              <Route path="admin/panel" element={<Navigate to="/manage" replace />} />
-
-              {/* ── 404 ───────────────────────────────────── */}
-              <Route path="*" element={<NotFoundPage />} />
-            </Route>
-
-            {/* 最外层 404 */}
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
-        </BrowserRouter>
+        <AppInner />
       </AntApp>
     </ConfigProvider>
   )

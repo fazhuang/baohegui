@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { Card, Form, Input, Button, Typography, message, Alert, Spin, Tabs, Checkbox } from 'antd'
 import { UserOutlined, LockOutlined, ReloadOutlined, TeamOutlined, MailOutlined, ProfileOutlined } from '@ant-design/icons'
-import { loginUser, registerUser } from '../services/api'
+import { useAuthStore } from '../stores/authStore'
+import { registerUser } from '../services/api'
 import { getErrorMessage } from '../utils/error'
 import { useNavigate } from 'react-router-dom'
 
@@ -15,6 +16,7 @@ const LoginPage: React.FC<LoginProps> = (props) => {
   const [tab, setTab] = useState('login')
   const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('remember_me') === 'true')
   const navigate = useNavigate()
+  const authLogin = useAuthStore(s => s.login)
 
   const [loginForm] = Form.useForm()
 
@@ -32,14 +34,11 @@ const LoginPage: React.FC<LoginProps> = (props) => {
     setLoading(true)
     setError(null)
     setServerDown(false)
-    let ok = false
 
     try {
-      const data = await loginUser(values)
-      localStorage.setItem('token', data.access_token)
-      localStorage.setItem('saved_username', data.username || '')
+      await authLogin(values)
+      localStorage.setItem('saved_username', values.username)
 
-      // 记住账号（不存储明文密码）
       if (rememberMe) {
         localStorage.setItem('remember_me', 'true')
         localStorage.setItem('saved_username', values.username)
@@ -48,8 +47,8 @@ const LoginPage: React.FC<LoginProps> = (props) => {
         localStorage.removeItem('saved_username')
       }
 
-      message.success(`登录成功，欢迎 ${data.username}`)
-      ok = true
+      message.success(`登录成功，欢迎 ${values.username}`)
+      props.onLogin?.()
     } catch (err: unknown) {
       const axiosErr = err as { code?: string; message?: string; response?: { status?: number; data?: { detail?: string } } }
       if (axiosErr?.code === 'ERR_NETWORK' || axiosErr?.code === 'ECONNREFUSED' || String(axiosErr?.message || '').includes('Network')) {
@@ -60,27 +59,26 @@ const LoginPage: React.FC<LoginProps> = (props) => {
       } else {
         setError(getErrorMessage(err, '登录失败'))
       }
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
-    if (ok) props.onLogin?.()
   }
 
   const handleRegister = async (values: { username: string; password: string; company?: string; email?: string }) => {
     if (regLoading) return
     setRegLoading(true)
     setError(null)
-    let ok = false
     try {
       const data = await registerUser(values)
       localStorage.setItem('token', data.access_token)
       localStorage.setItem('saved_username', data.username || '')
       message.success(`注册成功，欢迎 ${data.username}`)
-      ok = true
+      props.onLogin?.()
     } catch (err: unknown) {
       setError(getErrorMessage(err, '注册失败'))
+    } finally {
+      setRegLoading(false)
     }
-    setRegLoading(false)
-    if (ok) props.onLogin?.()
   }
 
   const loginFormContent = loading ? (

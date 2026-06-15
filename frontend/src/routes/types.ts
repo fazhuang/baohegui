@@ -32,7 +32,7 @@ export interface RouteConfig {
   };
   /** 面包屑项 (不声明则自动从 title 生成) */
   breadcrumb?: { label: string; path?: string }[];
-  /** 允许的角色 (基于服务端 role，不是前端推导) */
+  /** 允许的角色 (基于服务端 role) */
   requiredRoles?: UserRole[];
   /** 允许的权限 (基于服务端 permissions 数组) */
   requiredPermissions?: string[];

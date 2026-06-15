@@ -104,15 +104,15 @@ const ReportPage: React.FC = () => {
 
   const { rule_violations, llm_violations } = report;
   const pipelineData: PipelineSummaryData = {
-    traffic_light: (report as any).traffic_light,
-    routing_reasoning: (report as any).routing_reasoning,
-    parameter_bias_score: (report as any).parameter_bias_score,
-    parameter_bias_findings: (report as any).parameter_bias_findings,
-    merge_risk_level: (report as any).merge_risk_level,
-    merge_review_status: (report as any).merge_review_status,
-    merge_requires_human_review: (report as any).merge_requires_human_review,
-    merge_confirmed_count: (report as any).merge_confirmed_count,
-    merge_high_risk_count: (report as any).merge_high_risk_count,
+    traffic_light: report.traffic_light ?? '',
+    routing_reasoning: report.routing_reasoning ?? '',
+    parameter_bias_score: report.parameter_bias_score ?? 0,
+    parameter_bias_findings: report.parameter_bias_findings ?? 0,
+    merge_risk_level: report.merge_risk_level ?? 'unknown',
+    merge_review_status: report.merge_review_status ?? 'unknown',
+    merge_requires_human_review: report.merge_requires_human_review ?? false,
+    merge_confirmed_count: report.merge_confirmed_count ?? 0,
+    merge_high_risk_count: report.merge_high_risk_count ?? 0,
   };
 
   const total = rule_violations.length + llm_violations.length;

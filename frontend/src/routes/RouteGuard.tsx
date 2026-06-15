@@ -1,7 +1,7 @@
 import React from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import { Result, Button } from 'antd';
-import { usePermission } from '../contexts/PermissionContext';
+import { useAuthStore } from '../stores/authStore';
 import type { UserRole, PermissionKey } from '../types';
 
 interface RouteGuardProps {
@@ -11,19 +11,21 @@ interface RouteGuardProps {
 }
 
 const RouteGuard: React.FC<RouteGuardProps> = ({ roles, permissions, children }) => {
-  const { user, hasPerm, role } = usePermission();
+  const user = useAuthStore(s => s.user);
+  const hasPermFn = useAuthStore(s => s.hasPerm);
+  const roleVal = useAuthStore(s => s.role());
 
   if (!user) {
     return <Navigate to="/login" replace />;
   }
 
   if (permissions && permissions.length > 0) {
-    const ok = permissions.some((p) => hasPerm(p));
+    const ok = permissions.some(p => hasPermFn(p));
     if (!ok) return <ForbiddenResult />;
   }
 
   if (roles && roles.length > 0) {
-    if (role && !roles.includes(role)) return <ForbiddenResult />;
+    if (roleVal && !roles.includes(roleVal)) return <ForbiddenResult />;
   }
 
   return children ? <>{children}</> : <Outlet />;

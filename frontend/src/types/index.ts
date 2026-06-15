@@ -136,6 +136,16 @@ export interface ComplianceReport {
   rule_count: number
   /** M1+M2 升级后新增字段 — report_data JSON 字符串 */
   report_data?: string
+  /** 五层流水线字段 */
+  traffic_light?: string
+  routing_reasoning?: string
+  parameter_bias_score?: number
+  parameter_bias_findings?: number
+  merge_risk_level?: string
+  merge_review_status?: string
+  merge_requires_human_review?: boolean
+  merge_confirmed_count?: number
+  merge_high_risk_count?: number
 }
 
 // ═══════════════════════════════════════════════════════════════
