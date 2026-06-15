@@ -10,6 +10,15 @@ interface RouteGuardProps {
   children?: React.ReactNode;
 }
 
+/**
+ * RouteGuard — 路由权限守卫
+ *
+ * requiredRoles 语义:
+ *   undefined   → 不传（renderRoutes 不调用 RouteGuard）
+ *   []          → 已验证但禁止访问 (403)
+ *   ['admin']   → 仅 admin
+ *   ['admin','user'] → 所有已登录用户
+ */
 const RouteGuard: React.FC<RouteGuardProps> = ({ roles, permissions, children }) => {
   const user = useAuthStore(s => s.user);
   const hasPermFn = useAuthStore(s => s.hasPerm);
@@ -17,6 +26,11 @@ const RouteGuard: React.FC<RouteGuardProps> = ({ roles, permissions, children })
 
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  // [] = 需要登录但禁止访问
+  if (roles && roles.length === 0) {
+    return <ForbiddenResult />;
   }
 
   if (permissions && permissions.length > 0) {

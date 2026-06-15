@@ -2,31 +2,12 @@
  * App — 应用根组件
  *
  * 路由树由 routeConfig 自动生成, 不再手写 <Route>。
- * 认证状态通过 zustand useAuthStore 统一管理。
+ * 路由逻辑在 routes/AppRoutes.tsx。
  */
 
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { ConfigProvider, App as AntApp, Spin } from 'antd'
+import { ConfigProvider, App as AntApp } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import { useAuthStore } from './stores/authStore'
-import ShellLayout from './layouts/ShellLayout'
-import { routeConfig } from './routes/routeConfig'
-import { renderRouteTree } from './routes/renderRoutes'
-import AuthInitializer from './components/AuthInitializer'
-
-const FB = <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}><Spin size="large" /></div>
-
-/** 受保护壳：未认证 → 跳转登录；认证中 → 加载态 */
-function ProtectedShell() {
-  const user = useAuthStore(s => s.user)
-  const loading = useAuthStore(s => s.loading)
-  const token = localStorage.getItem('token')
-  if (loading) return FB
-  if (!token || !user) {
-    return <Navigate to="/login" replace />
-  }
-  return <ShellLayout />
-}
+import { BrowserAppRoutes } from './routes/AppRoutes'
 
 const theme = {
   token: {
@@ -50,26 +31,11 @@ const theme = {
   },
 }
 
-function AppInner() {
-  return (
-    <BrowserRouter>
-      <AuthInitializer />
-      <Routes>
-        {renderRouteTree(routeConfig)}
-        {/* 兜底 404 (处理受保护壳外的未知路径) */}
-        <Route element={<ProtectedShell />}>
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
-  )
-}
-
 function App() {
   return (
     <ConfigProvider locale={zhCN} theme={theme}>
       <AntApp>
-        <AppInner />
+        <BrowserAppRoutes />
       </AntApp>
     </ConfigProvider>
   )
