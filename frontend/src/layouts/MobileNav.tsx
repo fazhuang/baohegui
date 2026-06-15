@@ -14,10 +14,10 @@ import {
   UserOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
-import { usePermission } from '../contexts/PermissionContext';
+import { useAuthStore } from '../stores/authStore';
 
 const MobileNav: React.FC = () => {
-  const { isAdmin } = usePermission();
+  const isAdmin = useAuthStore(s => s.isAdmin());
   const navigate = useNavigate();
   const location = useLocation();
 

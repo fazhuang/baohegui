@@ -10,13 +10,13 @@ import React from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Tabs } from 'antd';
 import { FileTextOutlined, CommentOutlined } from '@ant-design/icons';
-import { usePermission } from '../contexts/PermissionContext';
+import { useAuthStore } from '../stores/authStore';
 import PageHeader from '../components/PageHeader';
 
 const ReportCenter: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { isAdmin } = usePermission();
+  const isAdmin = useAuthStore(s => s.isAdmin());
   const canReview = isAdmin;
 
   const items = [

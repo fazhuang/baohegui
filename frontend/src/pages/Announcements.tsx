@@ -10,13 +10,13 @@ import React from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Tabs } from 'antd';
 import { NotificationOutlined, SettingOutlined } from '@ant-design/icons';
-import { usePermission } from '../contexts/PermissionContext';
+import { useAuthStore } from '../stores/authStore';
 import PageHeader from '../components/PageHeader';
 
 const Announcements: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { isAdmin } = usePermission();
+  const isAdmin = useAuthStore(s => s.isAdmin());
 
   const items = [
     { key: '/announcements', label: '公告列表', icon: <NotificationOutlined /> },

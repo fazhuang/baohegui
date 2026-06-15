@@ -10,9 +10,11 @@ export interface RouteConfig {
   /** URL 路径 (React Router path pattern) */
   path: string;
   /** 页面组件 (支持 lazy import) */
-  element: LazyExoticComponent<ComponentType<Record<string, never>>> | ComponentType<Record<string, never>>;
+  element?: LazyExoticComponent<ComponentType<Record<string, never>>> | ComponentType<Record<string, never>>;
   /** 是否为 index 路由 (对应父路径的默认子路由) */
   index?: boolean;
+  /** 重定向目标路径 (设置此项后，element 可省略) */
+  redirect?: string;
   /** 页面标题 (用于 PageHeader 和面包屑) */
   title: string;
   /** 副标题 (PageHeader subtitle) */
@@ -32,7 +34,7 @@ export interface RouteConfig {
   };
   /** 面包屑项 (不声明则自动从 title 生成) */
   breadcrumb?: { label: string; path?: string }[];
-  /** 允许的角色 (基于服务端 role) */
+  /** 允许的角色 (基于服务端 role)。undefined = 无需认证。空数组[] = 已认证但禁止访问(403)。 */
   requiredRoles?: UserRole[];
   /** 允许的权限 (基于服务端 permissions 数组) */
   requiredPermissions?: string[];

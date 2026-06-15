@@ -1,36 +1,29 @@
 /**
- * 角色守卫路由组件
+ * @deprecated 已废弃 — 路由权限已由 renderRoutes.tsx 统一套用 RouteGuard，不再需要此组件。
  *
- * 使用方式:
- *   <Route element={<RequireRole roles={['super_admin', 'admin']} />}>
- *     <Route path="manage" element={<SystemManage />} />
- *   </Route>
- *
- *   <Route element={<RequireRole roles={['super_admin']} />}>
- *     <Route path="ops" element={<OpsCenter />} />
- *   </Route>
+ * 保留本文件仅供历史参考。
  */
 
 import React from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import { Result, Button } from 'antd';
-import { usePermission } from '../contexts/PermissionContext';
+import { useAuthStore } from '../stores/authStore';
 import type { UserRole } from '../types';
 
 interface RequireRoleProps {
   roles: UserRole[];
-  /** 如果无权限，重定向到此路径（默认不走，展示 403 页面） */
   redirectTo?: string;
 }
 
 const RequireRole: React.FC<RequireRoleProps> = ({ roles, redirectTo }) => {
-  const { user, role } = usePermission();
+  const user = useAuthStore(s => s.user);
+  const roleVal = useAuthStore(s => s.role());
 
   if (!user) {
     return <Navigate to="/login" replace />;
   }
 
-  if (role && roles.includes(role)) {
+  if (roleVal && roles.includes(roleVal)) {
     return <Outlet />;
   }
 

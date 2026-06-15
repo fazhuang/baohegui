@@ -6,12 +6,19 @@
  * 2. 权限在路由层声明 (requiredRoles / requiredPermissions)
  * 3. 面包屑从 title 和层级自动生成
  * 4. 新增页面只需在此文件加一条
+ * 5. App.tsx 的路由树由 renderRoutes() 从此文件自动生成
+ *
+ * requiredRoles 语义:
+ *   undefined  = 公开路由 (无需登录)
+ *   []         = 需要登录但禁止访问 (403)
+ *   ['admin']  = 仅管理员
+ *   ['admin','user'] = 所有已登录用户
  */
 
 import { lazy } from 'react';
 import type { RouteConfig } from './types';
 
-// ── 懒加载页面 ──────────────────────────────────────────────
+// ── 懒加载页面 ──────────────────────────────────────────────────
 const LoginPage = lazy(() => import('../pages/Login'));
 const ForgotPassword = lazy(() => import('../pages/ForgotPassword'));
 const ResetPassword = lazy(() => import('../pages/ResetPassword'));
@@ -28,19 +35,21 @@ const ReportCenter = lazy(() => import('../pages/ReportCenter'));
 const Announcements = lazy(() => import('../pages/Announcements'));
 const UserCenter = lazy(() => import('../pages/UserCenter'));
 const SystemManage = lazy(() => import('../pages/SystemManage'));
-const OpsCenter = lazy(() => import('../pages/OpsCenter'));
+const ComingSoonPage = lazy(() => import('../components/common/ComingSoonPage'));
+
+/** 全局 404 页面 — 非懒加载以保证始终可用 */
+import NotFoundPage from './NotFoundPage';
 
 // ═══════════════════════════════════════════════════════════════
-// 路由树 — 单一数据源
+// 路由树 — 真实应用路由的单一数据源
 // ═══════════════════════════════════════════════════════════════
 
 export const routeConfig: RouteConfig[] = [
-  // ── 公开路由 ──────────────────────────────────────────────
+  // ── 公开路由 ──────────────────────────────────────────────────
   {
     path: '/login',
     element: LoginPage,
     title: '登录',
-    // 公开路由 — 无 requiredRoles
   },
   {
     path: '/forgot-password',
@@ -53,7 +62,7 @@ export const routeConfig: RouteConfig[] = [
     title: '重置密码',
   },
 
-  // ── 工作台 ────────────────────────────────────────────────
+  // ── 受保护路由 (父级: ProtectedShell) ──────────────────────────
   {
     path: '/',
     element: DashboardPage,
@@ -62,8 +71,14 @@ export const routeConfig: RouteConfig[] = [
     menu: { key: 'dashboard', label: '工作台', icon: 'AppstoreOutlined', group: 'workspace' },
     requiredRoles: ['admin', 'user'],
   },
+  {
+    path: '/report/:id',
+    element: ReportPage,
+    title: '审查报告',
+    requiredRoles: ['admin', 'user'],
+  },
 
-  // ── 审查中心 ──────────────────────────────────────────────
+  // ── 审查中心 ──────────────────────────────────────────────────
   {
     path: '/review',
     element: ReviewCenter,
@@ -90,15 +105,7 @@ export const routeConfig: RouteConfig[] = [
     ],
   },
 
-  // ── 报告详情 ──────────────────────────────────────────────
-  {
-    path: '/report/:id',
-    element: ReportPage,
-    title: '审查报告',
-    requiredRoles: ['admin', 'user'],
-  },
-
-  // ── 报告中心 ──────────────────────────────────────────────
+  // ── 报告中心 ──────────────────────────────────────────────────
   {
     path: '/reports',
     element: ReportCenter,
@@ -115,10 +122,17 @@ export const routeConfig: RouteConfig[] = [
         menu: { key: 'reports-list', label: '报告列表', icon: 'UnorderedListOutlined', group: 'reports' },
         requiredRoles: ['admin', 'user'],
       },
+      {
+        path: '/reports/feedback',
+        element: ComingSoonPage,
+        title: '反馈管理',
+        menu: { key: 'reports-feedback', label: '反馈管理', icon: 'MessageOutlined', group: 'reports', adminOnly: true },
+        requiredRoles: ['admin'],
+      },
     ],
   },
 
-  // ── 知识库 ────────────────────────────────────────────────
+  // ── 知识库 ────────────────────────────────────────────────────
   {
     path: '/kg',
     element: KnowledgeBase,
@@ -126,27 +140,85 @@ export const routeConfig: RouteConfig[] = [
     subtitle: '招标投标知识图谱、投诉案例与法规依据',
     menu: { key: 'kg', label: '知识库', icon: 'BookOutlined', group: 'knowledge' },
     requiredRoles: ['admin', 'user'],
+    children: [
+      {
+        path: '/kg',
+        element: ComingSoonPage,
+        index: true,
+        title: '知识图谱',
+        menu: { key: 'kg-graph', label: '知识图谱', icon: 'NodeIndexOutlined', group: 'knowledge' },
+        requiredRoles: ['admin', 'user'],
+      },
+      {
+        path: '/kg/cases',
+        element: ComingSoonPage,
+        title: '案例库',
+        menu: { key: 'kg-cases', label: '案例库', icon: 'FolderOpenOutlined', group: 'knowledge' },
+        requiredRoles: ['admin', 'user'],
+      },
+      {
+        path: '/kg/legal',
+        element: ComingSoonPage,
+        title: '法规库',
+        menu: { key: 'kg-legal', label: '法规库', icon: 'ReadOutlined', group: 'knowledge' },
+        requiredRoles: ['admin', 'user'],
+      },
+    ],
   },
 
-  // ── 警示公告 ──────────────────────────────────────────────
+  // ── 警示公告 ──────────────────────────────────────────────────
   {
     path: '/announcements',
     element: Announcements,
     title: '警示公告',
     menu: { key: 'announcements', label: '警示公告', icon: 'AlertOutlined', group: 'announcements' },
     requiredRoles: ['admin', 'user'],
+    children: [
+      {
+        path: '/announcements',
+        element: ComingSoonPage,
+        index: true,
+        title: '公告列表',
+        menu: { key: 'ann-list', label: '公告列表', icon: 'NotificationOutlined', group: 'announcements' },
+        requiredRoles: ['admin', 'user'],
+      },
+      {
+        path: '/announcements/manage',
+        element: ComingSoonPage,
+        title: '公告管理',
+        menu: { key: 'ann-manage', label: '公告管理', icon: 'FormOutlined', group: 'announcements', adminOnly: true },
+        requiredRoles: ['admin'],
+      },
+    ],
   },
 
-  // ── 用户中心 ──────────────────────────────────────────────
+  // ── 用户中心 ──────────────────────────────────────────────────
   {
     path: '/account',
     element: UserCenter,
     title: '用户中心',
     menu: { key: 'account', label: '用户中心', icon: 'UserOutlined', group: 'account' },
     requiredRoles: ['admin', 'user'],
+    children: [
+      {
+        path: '/account',
+        element: ComingSoonPage,
+        index: true,
+        title: '我的账户',
+        menu: { key: 'account-profile', label: '我的账户', icon: 'IdcardOutlined', group: 'account' },
+        requiredRoles: ['admin', 'user'],
+      },
+      {
+        path: '/account/subscription',
+        element: ComingSoonPage,
+        title: '订阅管理',
+        menu: { key: 'account-subscription', label: '订阅管理', icon: 'DollarOutlined', group: 'account' },
+        requiredRoles: ['admin', 'user'],
+      },
+    ],
   },
 
-  // ── 规则中心 (admin) ──────────────────────────────────────
+  // ── 规则中心 (admin only) ─────────────────────────────────────
   {
     path: '/rules',
     element: RulesCenter,
@@ -184,10 +256,17 @@ export const routeConfig: RouteConfig[] = [
         menu: { key: 'rules-sync', label: '规则同步', icon: 'SyncOutlined', group: 'rules', adminOnly: true },
         requiredRoles: ['admin'],
       },
+      {
+        path: '/rules/industry',
+        element: ComingSoonPage,
+        title: '行业配置',
+        menu: { key: 'rules-industry', label: '行业配置', icon: 'ApartmentOutlined', group: 'rules', adminOnly: true },
+        requiredRoles: ['admin'],
+      },
     ],
   },
 
-  // ── 系统管理 (admin) ──────────────────────────────────────
+  // ── 系统管理 (admin only) ─────────────────────────────────────
   {
     path: '/manage',
     element: SystemManage,
@@ -221,12 +300,34 @@ export const routeConfig: RouteConfig[] = [
     ],
   },
 
-  // ── 运维中心 — 暂不开放 (等后端 is_super_admin) ──────────
+  // ── 运维中心 — 需要登录但禁止访问 (等后端 is_super_admin) ──────
   {
     path: '/ops',
-    element: OpsCenter,
+    element: NotFoundPage,
     title: '运维中心',
-    requiredRoles: [],  // 不开放 — 等超管角色落地
+    requiredRoles: [],  // [] = 认证用户访问此路由直接 403
+  },
+
+  // ── 向后兼容重定向 ────────────────────────────────────────────
+  {
+    path: '/upload',
+    redirect: '/review',
+    title: '重定向',
+  },
+  {
+    path: '/history',
+    redirect: '/review/history',
+    title: '重定向',
+  },
+  {
+    path: '/admin/rules',
+    redirect: '/rules',
+    title: '重定向',
+  },
+  {
+    path: '/admin/panel',
+    redirect: '/manage',
+    title: '重定向',
   },
 ];
 

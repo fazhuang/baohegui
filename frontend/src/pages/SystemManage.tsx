@@ -19,13 +19,13 @@ import {
   UserOutlined, AuditOutlined, FundOutlined,
   TeamOutlined, SettingOutlined, SafetyOutlined, RobotOutlined,
 } from '@ant-design/icons';
-import { usePermission } from '../contexts/PermissionContext';
+import { useAuthStore } from '../stores/authStore';
 import PageHeader from '../components/PageHeader';
 
 const SystemManage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { isSuperAdmin } = usePermission();
+  const isSuperAdmin = useAuthStore(s => s.isSuperAdmin());
 
   const items = [
     { key: '/manage', label: '用户管理', icon: <UserOutlined /> },
