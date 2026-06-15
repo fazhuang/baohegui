@@ -300,7 +300,7 @@ export const routeConfig: RouteConfig[] = [
     ],
   },
 
-  // ── 运维中心 — 需要登录但禁止访问 (等后端 is_super_admin) ──────
+  // ── 运维中心 — 需要登录但禁止访问（后端 is_super_admin 未落地，暂不开放）──
   {
     path: '/ops',
     element: NotFoundPage,

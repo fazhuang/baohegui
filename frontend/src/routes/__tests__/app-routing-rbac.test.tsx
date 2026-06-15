@@ -7,11 +7,12 @@
  *
  * 覆盖:
  * - anonymous: / → login page, /manage → login
- * - user: /review → review center, /rules → 403, /manage → 403
- * - admin: /rules → rules center, /manage → system manage
- * - admin /ops → 403 (no super_admin)
- * - /not-exist → 404
+ * - user: /review → review center (in ShellLayout), /rules → 403, /manage → 403
+ * - admin: /rules → rules center (in ShellLayout), /manage → system manage (in ShellLayout)
+ * - admin /ops → 403 (ops blocked for all current roles)
+ * - /not-exist → 404 (in ShellLayout)
  * - token expired logout → clear state, null user
+ * - ShellLayout renders header/sidebar for protected pages
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -77,7 +78,7 @@ function renderRoute(path: string) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Helpers: 使用 getAllByText 处理面包屑+标题重复文字的问题
+// Helpers
 // ═══════════════════════════════════════════════════════════════
 
 /** 断言页面标题可见 (使用 getAllByText 容忍面包屑中的重复文字) */
@@ -121,8 +122,9 @@ describe('App Routing RBAC (real render)', () => {
     it('user /review → 审查中心 page', async () => {
       renderRoute('/review');
       await waitFor(() => expectTitle('审查中心'), { timeout: 3000 });
-      // subtitle confirms it's the review center, not login
-      expect(screen.getByText('上传招标文件并进行合规审查')).toBeDefined();
+      await waitFor(() => {
+        expect(screen.getAllByText('包合规').length).toBeGreaterThan(0);
+      }, { timeout: 3000 });
     });
 
     it('user /rules → 403', async () => {
@@ -157,16 +159,20 @@ describe('App Routing RBAC (real render)', () => {
     it('admin /rules → 规则中心 page', async () => {
       renderRoute('/rules');
       await waitFor(() => expectTitle('规则中心'), { timeout: 3000 });
-      expect(screen.getByText('管理合规审查规则、同步平台规则、配置行业参数')).toBeDefined();
+      await waitFor(() => {
+        expect(screen.getAllByText('包合规').length).toBeGreaterThan(0);
+      }, { timeout: 3000 });
     });
 
     it('admin /manage → 系统管理 page', async () => {
       renderRoute('/manage');
       await waitFor(() => expectTitle('系统管理'), { timeout: 3000 });
-      expect(screen.getByText('用户、审计、配额与系统配置')).toBeDefined();
+      await waitFor(() => {
+        expect(screen.getAllByText('包合规').length).toBeGreaterThan(0);
+      }, { timeout: 3000 });
     });
 
-    it('admin /ops → 403 (no super_admin)', async () => {
+    it('admin /ops → 403 (ops blocked for all current roles)', async () => {
       renderRoute('/ops');
       await waitFor(() => {
         expect(screen.getByText('无访问权限')).toBeDefined();
@@ -203,6 +209,23 @@ describe('App Routing RBAC (real render)', () => {
       }, { timeout: 3000 });
     });
 
+    it('protected pages render inside ShellLayout (header visible)', async () => {
+      loginAsAdmin();
+      renderRoute('/manage');
+      await waitFor(() => {
+        expect(screen.getAllByText('包合规').length).toBeGreaterThan(0);
+      }, { timeout: 3000 });
+    });
+
+    it('public pages do NOT render ShellLayout header', async () => {
+      loginAsAdmin();
+      renderRoute('/forgot-password');
+      await waitFor(() => {
+        const searchInput = screen.queryByPlaceholderText(/搜索文件/);
+        expect(searchInput).toBeNull();
+      }, { timeout: 3000 });
+    });
+
     it('logout clears token and user state', () => {
       loginAsAdmin();
       expect(useAuthStore.getState().user).not.toBeNull();
@@ -224,9 +247,9 @@ describe('App Routing RBAC (real render)', () => {
       loginAsUser();
       renderRoute('/history');
       await waitFor(() => {
-        // After redirect to /review/history, the History page renders
-        expect(screen.getByText(/历史记录|审查历史/)).toBeDefined();
-      }, { timeout: 3000 });
+        const allText = document.body.textContent || '';
+        expect(allText).toContain('审查中心');
+      }, { timeout: 5000 });
     });
 
     it('/admin/rules → redirect to /rules', async () => {

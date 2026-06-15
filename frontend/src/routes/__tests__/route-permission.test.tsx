@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import React from 'react';
 import { routeConfig, flattenRoutes, extractMenuItems } from '../routeConfig';
-import { renderRoute, renderRouteTree } from '../renderRoutes';
+import { renderRoute, renderRouteTree, renderRouteTreeWith404 } from '../renderRoutes';
 
 describe('routeConfig', () => {
   const flat = flattenRoutes(routeConfig);
@@ -93,13 +93,13 @@ describe('routeConfig', () => {
       }
     });
 
-    it('no route should declare non-existent roles (super_admin, reviewer, agent, enterprise)', () => {
+    it('all requiredRoles must be subset of valid roles (admin, user)', () => {
+      const VALID = new Set(['admin', 'user']);
       for (const r of flat) {
         if (r.requiredRoles) {
-          expect(r.requiredRoles).not.toContain('super_admin');
-          expect(r.requiredRoles).not.toContain('reviewer');
-          expect(r.requiredRoles).not.toContain('agent');
-          expect(r.requiredRoles).not.toContain('enterprise');
+          for (const role of r.requiredRoles) {
+            expect(VALID.has(role), `${r.path}: invalid role "${role}"`).toBe(true);
+          }
         }
       }
     });
@@ -151,8 +151,16 @@ describe('routeConfig', () => {
       }
     });
 
-    it('rendered route tree contains 404 catch-all', () => {
-      const tree = renderRouteTree(routeConfig);
+    it('renderRouteTreeWith404 appends a catch-all * route', () => {
+      const tree = renderRouteTreeWith404(routeConfig);
+      const starRoute = tree.find(el =>
+        React.isValidElement(el) && (el.props as { path?: string })?.path === '*'
+      );
+      expect(starRoute).toBeDefined();
+    });
+
+    it('rendered route tree with 404 contains catch-all', () => {
+      const tree = renderRouteTreeWith404(routeConfig);
       const starRoute = tree.find(el =>
         React.isValidElement(el) && (el.props as { path?: string })?.path === '*'
       );

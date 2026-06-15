@@ -11,8 +11,6 @@
  *   - redirect route (Navigate to)
  *   - RouteGuard 统一套用 (requiredRoles / requiredPermissions)
  *   - 403 返回 (requiredRoles=[] → 需要登录但禁止访问)
- *   - 404 兜底
- *   - Login page 特殊处理 (传递 onLogin prop)
  */
 
 import React, { Suspense } from 'react';
@@ -72,7 +70,7 @@ export function renderRoute(route: RouteConfig): React.ReactElement {
 
   if (childRoutes && childRoutes.length > 0) {
     return (
-      <Route key={path} path={path} element={node}>
+      <Route key={`${path}--parent`} path={path} element={node}>
         {childRoutes}
       </Route>
     );
@@ -81,10 +79,14 @@ export function renderRoute(route: RouteConfig): React.ReactElement {
   return <Route key={path} path={path} element={node} />;
 }
 
-/** 将 routeConfig[] 转换为完整 <Routes> 树，含 404 兜底 */
+/** 将 routeConfig[] 转换为 <Route> 元素列表 (不含 404 兜底) */
 export function renderRouteTree(configs: RouteConfig[]): React.ReactElement[] {
-  const routes = configs.map(renderRoute);
-  // 追加 404 兜底
+  return configs.map(renderRoute);
+}
+
+/** 将 routeConfig[] 转换为含 404 兜底的 <Route> 元素列表 (用于顶层 <Routes>) */
+export function renderRouteTreeWith404(configs: RouteConfig[]): React.ReactElement[] {
+  const routes = renderRouteTree(configs);
   routes.push(<Route key="*" path="*" element={<NotFoundPage />} />);
   return routes;
 }

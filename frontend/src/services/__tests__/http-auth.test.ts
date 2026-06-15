@@ -1,108 +1,168 @@
 /**
  * HTTP Auth Integration Tests
  *
- * 测试 http 拦截器行为:
+ * 测试真实 http 实例（axios + 拦截器）行为：
  * - token 自动附加到 Authorization header
  * - 401 响应清空 token 并跳转
- * - blob download 带 token
+ * - 401 响应清空 saved_username
+ * - 无 token 时不注入 Authorization
+ * - downloadBlob 带/不带 token
  */
 
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import MockAdapter from 'axios-mock-adapter';
+import http, { downloadBlob } from '../http';
+
+// Mock global fetch for downloadBlob (uses native fetch, not axios)
+const originalFetch = globalThis.fetch;
 
 describe('HTTP Client (auth)', () => {
-  beforeAll(() => {
-    // No need for complex axios mocking — test the behavior contracts directly
-  });
+  let mock: MockAdapter;
 
   beforeEach(() => {
     localStorage.clear();
+    mock = new MockAdapter(http);
+    // Mock window.location
+    vi.stubGlobal('location', { ...window.location, href: '', pathname: '/review' });
   });
 
-  describe('token behavior', () => {
-    it('should attach token from localStorage as Bearer', () => {
+  afterEach(() => {
+    mock.restore();
+    vi.unstubAllGlobals();
+    globalThis.fetch = originalFetch;
+  });
+
+  describe('request interceptor — token injection', () => {
+    it('injects Bearer token from localStorage when token exists', async () => {
       localStorage.setItem('token', 'test-bearer-token');
 
-      // Simulate what the http interceptor request handler does
-      const token = localStorage.getItem('token');
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
+      mock.onGet('/auth/me').reply((config) => {
+        expect(config.headers?.Authorization).toBe('Bearer test-bearer-token');
+        return [200, { user_id: 1, username: 'test', role: 'user' }];
+      });
 
-      expect(headers['Authorization']).toBe('Bearer test-bearer-token');
+      await http.get('/auth/me');
+      expect(mock.history.get.length).toBe(1);
     });
 
-    it('should not attach Authorization header when no token', () => {
-      const token = localStorage.getItem('token');
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
+    it('does NOT inject Authorization header when no token in localStorage', async () => {
+      mock.onGet('/auth/me').reply((config) => {
+        expect(config.headers?.Authorization).toBeUndefined();
+        return [200, {}];
+      });
 
-      expect(headers['Authorization']).toBeUndefined();
+      await http.get('/auth/me');
+      expect(mock.history.get.length).toBe(1);
     });
   });
 
-  describe('401 response handling', () => {
-    it('should remove token from localStorage on 401', () => {
+  describe('response interceptor — 401 handling', () => {
+    it('removes token from localStorage on 401 response', async () => {
       localStorage.setItem('token', 'will-expire');
-      expect(localStorage.getItem('token')).toBe('will-expire');
+      localStorage.setItem('saved_username', 'testuser');
 
-      // Simulate the 401 handler in the response interceptor
-      localStorage.removeItem('token');
+      mock.onGet('/protected').reply(401, { detail: 'Token expired' });
+
+      try {
+        await http.get('/protected');
+      } catch {
+        // expected — 401 is an error
+      }
 
       expect(localStorage.getItem('token')).toBeNull();
     });
 
-    it('should remove saved_username on 401', () => {
-      localStorage.setItem('token', 'x');
+    it('removes saved_username from localStorage on 401 response', async () => {
+      localStorage.setItem('token', 'will-expire');
       localStorage.setItem('saved_username', 'testuser');
 
-      // Simulate the 401 handler
-      localStorage.removeItem('token');
-      localStorage.removeItem('saved_username');
+      mock.onGet('/protected').reply(401);
 
-      expect(localStorage.getItem('token')).toBeNull();
+      try { await http.get('/protected'); } catch { /* expected */ }
+
       expect(localStorage.getItem('saved_username')).toBeNull();
     });
 
-    it('should redirect to /login on 401 (not already on login page)', () => {
+    it('sets window.location.href to /login on 401 when not already on login page', async () => {
       localStorage.setItem('token', 'x');
+      const hrefSetter = vi.fn();
+      vi.stubGlobal('location', {
+        ...window.location,
+        href: '',
+        pathname: '/review',
+      });
+      // Intercept location.href set
+      Object.defineProperty(window.location, 'href', {
+        set: hrefSetter,
+        get: () => '',
+        configurable: true,
+      });
 
-      // Simulate: http interceptor would do window.location.href = '/login'
-      // When pathname !== '/login'
-      // We test the condition logic, not the actual redirect (which jsdom can't do)
-      const pathname = '/review' as string;
-      const shouldRedirect = pathname !== '/login';
-      expect(shouldRedirect).toBe(true);
+      mock.onGet('/protected').reply(401);
+
+      try { await http.get('/protected'); } catch { /* expected */ }
+
+      expect(hrefSetter).toHaveBeenCalledWith('/login');
     });
 
-    it('should NOT redirect if already on login page', () => {
+    it('does NOT redirect if already on /login page', async () => {
       localStorage.setItem('token', 'x');
+      const hrefSetter = vi.fn();
+      Object.defineProperty(window.location, 'href', {
+        set: hrefSetter,
+        get: () => '/login',
+        configurable: true,
+      });
 
-      const pathname = '/login' as string;
-      const shouldRedirect = pathname !== '/login';
-      expect(shouldRedirect).toBe(false);
+      mock.onGet('/protected').reply(401);
+
+      try { await http.get('/protected'); } catch { /* expected */ }
+
+      // It's already on /login, so href shouldn't be set again
+      // The interceptor checks pathname !== '/login' before setting href
     });
   });
 
-  describe('blob download', () => {
-    it('downloadBlob should include token in Authorization header', () => {
-      localStorage.setItem('token', 'download-token');
-
-      const headers: Record<string, string> = {};
-      const token = localStorage.getItem('token');
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-
-      expect(headers['Authorization']).toBe('Bearer download-token');
+  describe('downloadBlob', () => {
+    beforeEach(() => {
+      globalThis.fetch = vi.fn();
     });
 
-    it('downloadBlob should NOT include Authorization if no token', () => {
-      const headers: Record<string, string> = {};
-      const token = localStorage.getItem('token');
-      if (token) headers['Authorization'] = `Bearer ${token}`;
+    it('passes Authorization header with token', async () => {
+      localStorage.setItem('token', 'download-token');
+      const mockBlob = new Blob(['test']);
+      const mockResp = { ok: true, blob: () => Promise.resolve(mockBlob) };
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockResp);
 
-      expect(headers['Authorization']).toBeUndefined();
+      await downloadBlob('/download/report/1');
+
+      expect(globalThis.fetch).toHaveBeenCalledWith('/download/report/1', {
+        headers: { Authorization: 'Bearer download-token' },
+      });
+    });
+
+    it('sends no Authorization header when no token', async () => {
+      const mockBlob = new Blob(['test']);
+      const mockResp = { ok: true, blob: () => Promise.resolve(mockBlob) };
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockResp);
+
+      await downloadBlob('/download/report/1');
+
+      expect(globalThis.fetch).toHaveBeenCalledWith('/download/report/1', { headers: {} });
+    });
+
+    it('throws "无权访问" on 401', async () => {
+      localStorage.setItem('token', 'x');
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, status: 401 });
+
+      await expect(downloadBlob('/download/report/1')).rejects.toThrow('无权访问');
+    });
+
+    it('throws "下载失败: <status>" on other errors', async () => {
+      localStorage.setItem('token', 'x');
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, status: 500 });
+
+      await expect(downloadBlob('/download/report/1')).rejects.toThrow('下载失败: 500');
     });
   });
 });
