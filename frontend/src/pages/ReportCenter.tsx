@@ -3,7 +3,7 @@
  *
  * 路由结构:
  *   /reports           → 报告列表
- *   /reports/feedback  → 反馈管理 (admin/reviewer)
+ *   /reports/feedback  → 反馈管理 (admin)
  */
 
 import React from 'react';

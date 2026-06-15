@@ -2,11 +2,11 @@ import React from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import { Result, Button } from 'antd';
 import { useAuthStore } from '../stores/authStore';
-import type { UserRole, PermissionKey } from '../types';
+import type { UserRole } from '../types';
 
 interface RouteGuardProps {
   roles?: UserRole[];
-  permissions?: PermissionKey[];
+  permissions?: string[];
   children?: React.ReactNode;
 }
 

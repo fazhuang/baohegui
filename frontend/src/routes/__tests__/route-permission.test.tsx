@@ -153,7 +153,9 @@ describe('routeConfig', () => {
 
     it('rendered route tree contains 404 catch-all', () => {
       const tree = renderRouteTree(routeConfig);
-      const starRoute = tree.find(el => (el as any).props?.path === '*');
+      const starRoute = tree.find(el =>
+        React.isValidElement(el) && (el.props as { path?: string })?.path === '*'
+      );
       expect(starRoute).toBeDefined();
     });
   });

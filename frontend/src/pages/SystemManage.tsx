@@ -1,15 +1,10 @@
 /**
  * SystemManage — 系统管理容器
  *
- * 路由结构:
- *   /manage          → AdminPanel (用户管理 Tab)
- *   /manage/users    → AdminPanel (用户管理)
- *   /manage/audit    → AdminPanel (审计日志)
- *   /manage/quota    → AdminPanel (配额管理)
- *   /manage/roles    → 角色管理 (仅 super_admin)
- *   /manage/config   → 系统配置 (仅 super_admin)
- *   /manage/security → 安全中心 (仅 super_admin)
- *   /manage/model    → 模型配置 (仅 super_admin)
+ * admin 可访问标准 Tabs (用户/审计/配额)
+ *
+ * 以下 4 个 Tab 需要 isSuperAdmin 才可见 (后端 is_super_admin 字段尚未落地, 当前对所有 admin 隐藏):
+ * /manage/roles, /manage/config, /manage/security, /manage/model
  */
 
 import React from 'react';

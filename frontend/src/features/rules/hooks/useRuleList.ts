@@ -17,7 +17,7 @@ export function useRuleList() {
   const [editOpen, setEditOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
 
-  const fetch = useCallback(async () => {
+  const loadRules = useCallback(async () => {
     setLoading(true);
     try {
       const data = await listPlatformRules({ search: search || undefined });
@@ -26,18 +26,18 @@ export function useRuleList() {
     setLoading(false);
   }, [search]);
 
-  useEffect(() => { fetch(); }, [fetch]);
+  useEffect(() => { loadRules(); }, [loadRules]);
 
   const handleToggle = async (id: string) => {
     const enabled = await togglePlatformRule(id);
     message.success(`规则已${enabled ? '启用' : '停用'}`);
-    fetch();
+    loadRules();
   };
 
   const handleDelete = async (id: string) => {
     await deletePlatformRule(id);
     message.success('规则已删除');
-    fetch();
+    loadRules();
   };
 
   const handleEdit = async (values: Partial<PlatformRule>) => {
@@ -45,7 +45,7 @@ export function useRuleList() {
     await updatePlatformRule(editRule.rule_id, values);
     message.success('规则已更新');
     setEditOpen(false);
-    fetch();
+    loadRules();
   };
 
   const filtered = rules.filter(r => !typeFilter || r.rule_type === typeFilter);
@@ -53,7 +53,7 @@ export function useRuleList() {
   return {
     rules, loading, search, typeFilter, editRule, editOpen, createOpen, filtered,
     setSearch, setTypeFilter, setEditRule, setEditOpen, setCreateOpen,
-    fetch, handleToggle, handleDelete, handleEdit,
-    handleReload: () => { reloadRules(); fetch(); },
+    loadRules, handleToggle, handleDelete, handleEdit,
+    handleReload: () => { reloadRules(); loadRules(); },
   };
 }

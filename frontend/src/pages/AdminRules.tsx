@@ -42,7 +42,7 @@ const RuleListTab: React.FC = () => {
   const {
     loading, search, editRule, editOpen, createOpen, filtered,
     setSearch, setTypeFilter, setEditRule, setEditOpen, setCreateOpen,
-    fetch, handleToggle, handleDelete, handleEdit, handleReload,
+    loadRules, handleToggle, handleDelete, handleEdit, handleReload,
   } = useRuleList()
 
   return (
@@ -102,7 +102,7 @@ const RuleListTab: React.FC = () => {
 
       <Modal title="新建规则" open={createOpen} onCancel={() => setCreateOpen(false)} footer={null} width={560}>
         <Form layout="vertical" onFinish={async (v: Partial<PlatformRule>) => {
-          await createPlatformRule(v); message.success('规则已创建'); setCreateOpen(false); fetch();
+          await createPlatformRule(v); message.success('规则已创建'); setCreateOpen(false); loadRules();
         }}>
           <Form.Item label="规则 ID" name="rule_id" rules={[{ required: true }]}><Input placeholder="如: CUSTOM-001" /></Form.Item>
           <Form.Item label="平台" name="platform" initialValue="自定义"><Input /></Form.Item>
@@ -180,7 +180,7 @@ const FeedbackTab: React.FC = () => {
   const [drafts, setDrafts] = useState<PlatformRule[]>([])
   const [loading, setLoading] = useState(true)
 
-  const fetch = React.useCallback(async () => {
+  const loadDrafts = React.useCallback(async () => {
     setLoading(true)
     try {
       const { listPlatformRules } = await import('../services/api')
@@ -190,11 +190,11 @@ const FeedbackTab: React.FC = () => {
     setLoading(false)
   }, [])
 
-  React.useEffect(() => { fetch() }, [fetch])
+  React.useEffect(() => { loadDrafts() }, [loadDrafts])
 
   const handleActivate = async (r: PlatformRule) => {
     await updatePlatformRule(r.rule_id, { enabled: true, category: 'custom' })
-    message.success('规则已启用'); fetch()
+    message.success('规则已启用'); loadDrafts()
   }
 
   if (loading) return <Spin style={{ display: 'block', textAlign: 'center', padding: 40 }} />
@@ -215,7 +215,7 @@ const FeedbackTab: React.FC = () => {
               render: (_: unknown, r: PlatformRule) => (
                 <Space>
                   <Button size="small" type="primary" icon={<CheckCircleOutlined />} onClick={() => handleActivate(r)}>转为规则</Button>
-                  <Button size="small" danger icon={<CloseCircleOutlined />} onClick={async () => { await deletePlatformRule(r.rule_id); message.success('已忽略'); fetch(); }}>忽略</Button>
+                  <Button size="small" danger icon={<CloseCircleOutlined />} onClick={async () => { await deletePlatformRule(r.rule_id); message.success('已忽略'); loadDrafts(); }}>忽略</Button>
                 </Space>
               ) },
           ]} />

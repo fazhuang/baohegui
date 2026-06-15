@@ -55,7 +55,7 @@ export function renderRoute(route: RouteConfig): React.ReactElement {
   } else {
     // 受保护路由 — RouteGuard 统一套用
     node = (
-      <RouteGuard roles={requiredRoles} permissions={requiredPermissions as any}>
+      <RouteGuard roles={requiredRoles} permissions={requiredPermissions}>
         {El ? <EL><El /></EL> : null}
       </RouteGuard>
     );

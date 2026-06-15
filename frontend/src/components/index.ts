@@ -20,8 +20,6 @@ export { default as StatusTag } from './StatusTag';
 
 export { default as EmptyState } from './EmptyState';
 
-export { default as RequireRole } from './RequireRole';
-
 export { default as ErrorBoundary } from './ErrorBoundary';
 
 export { default as ComingSoonPage } from './common/ComingSoonPage';

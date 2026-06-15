@@ -1,5 +1,5 @@
 /**
- * UserDashboard — 普通用户工作台（agent / enterprise / reviewer）
+ * UserDashboard — 普通用户工作台（user / admin）
  *
  * 保留原 DashboardPage 的全部逻辑，不做行为变更。
  * 仅提取为独立组件，由 DashboardPage 按角色路由到此。

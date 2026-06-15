@@ -9,14 +9,14 @@ export function useDashboardTab() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetch = useCallback(async () => {
+  const loadDashboardStats = useCallback(async () => {
     setLoading(true);
     try { setStats(await getDashboardStats()); }
     catch { message.error('加载统计数据失败'); }
     setLoading(false);
   }, []);
 
-  useEffect(() => { fetch(); }, [fetch]);
+  useEffect(() => { loadDashboardStats(); }, [loadDashboardStats]);
 
-  return { stats, loading, fetch };
+  return { stats, loading, loadDashboardStats };
 }

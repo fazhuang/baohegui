@@ -11,26 +11,26 @@ export function useSyncManager() {
   const [history, setHistory] = useState<SyncHistoryItem[]>([]);
   const [syncing, setSyncing] = useState(false);
 
-  const fetch = useCallback(async () => {
+  const loadSyncStatus = useCallback(async () => {
     try {
       setStatus(await getSyncStatus());
       setHistory(await getSyncHistory());
     } catch { /* ignore */ }
   }, []);
 
-  useEffect(() => { fetch(); }, [fetch]);
+  useEffect(() => { loadSyncStatus(); }, [loadSyncStatus]);
 
   const handleSync = async (platform: string) => {
     setSyncing(true);
     try {
       const result: SyncResultData = await runSync(platform);
       message.success(`同步完成：新增${result.new_rules} 更新${result.updated_rules}`);
-      fetch();
+      loadSyncStatus();
     } catch (e: unknown) {
       message.error(getErrorMessage(e, '同步失败'));
     }
     setSyncing(false);
   };
 
-  return { status, history, syncing, fetch, handleSync };
+  return { status, history, syncing, loadSyncStatus, handleSync };
 }
