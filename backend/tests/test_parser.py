@@ -302,7 +302,7 @@ class TestParseDocxAdvanced:
             Path(tmp.name).unlink(missing_ok=True)
 
     def test_table_extraction(self, parser):
-        """表格内容被提取"""
+        """表格内容被提取并正确归属到所属章节（新增 v4: 表格出现在所属章节而非全部堆到最后一个）"""
         from docx import Document
         import tempfile
         from pathlib import Path
@@ -311,14 +311,25 @@ class TestParseDocxAdvanced:
         doc.add_heading("招标公告", level=1)
         doc.add_paragraph("公告正文。")
 
-        # 添加表格
-        table = doc.add_table(rows=2, cols=3)
+        # 招标公告中的表格
+        table = doc.add_table(rows=2, cols=2)
         table.cell(0, 0).text = "序号"
         table.cell(0, 1).text = "名称"
-        table.cell(0, 2).text = "数量"
         table.cell(1, 0).text = "1"
-        table.cell(1, 1).text = "服务器"
-        table.cell(1, 2).text = "5台"
+        table.cell(1, 1).text = "项目一"
+
+        doc.add_heading("评审办法", level=1)
+        doc.add_paragraph("综合评分法。")
+
+        # 评审办法中的表格（评分标准）
+        table2 = doc.add_table(rows=2, cols=2)
+        table2.cell(0, 0).text = "评分项"
+        table2.cell(0, 1).text = "分值"
+        table2.cell(1, 0).text = "技术方案"
+        table2.cell(1, 1).text = "30分"
+
+        doc.add_heading("合同条款", level=1)
+        doc.add_paragraph("合同正文。")
 
         tmp = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
         tmp.close()
@@ -327,8 +338,15 @@ class TestParseDocxAdvanced:
         try:
             result = parser.parse(tmp.name)
             full_text = result.full_text
-            assert "服务器" in full_text, f"Table content '服务器' not found in: {full_text[:200]}"
-            assert "序号 | 名称" in full_text, f"Table header not found"
+            assert "项目一" in full_text, f"Table content not found"
+            assert "评分项 | 分值" in full_text, f"Table header not found"
+
+            # v4: 表格应出现在所属章节的 sections 中
+            bid_section = result.sections.get("招标公告", "")
+            eval_section = result.sections.get("评审办法", "")
+            assert "项目一" in bid_section, "招标公告中的表格应该出现在 '招标公告' 章节"
+            assert "技术方案" in eval_section, "评审办法中的表格应该出现在 '评审办法' 章节"
+            assert "技术方案" not in bid_section, "评审办法的表格不应出现在招标公告中"
         finally:
             Path(tmp.name).unlink(missing_ok=True)
 

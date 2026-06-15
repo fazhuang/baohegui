@@ -226,8 +226,9 @@ class TestLLMViolation:
         assert v.weight == 10.0
 
     def test_invalid_type(self):
-        with pytest.raises(Exception):
-            LLMViolation(type="invalid", section="", text="")
+        """v4: type 已扩展为自由文本（风险标题），不再限制枚举"""
+        v = LLMViolation(type="任意文字", section="", text="")
+        assert v.type == "任意文字"
 
     def test_evidence_field_default(self):
         """v3 新增：evidence 字段默认值为空字符串"""

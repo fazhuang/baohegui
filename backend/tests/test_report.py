@@ -13,7 +13,26 @@ class TestReportEndpoints:
         """空报告列表"""
         resp = client.get("/api/report/list/", headers=auth_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        data = resp.json()
+        assert isinstance(data, dict)
+        assert set(data.keys()) == {"items", "total", "page", "page_size", "pages"}
+        assert data["items"] == []
+        assert data["total"] == 0
+        assert data["page"] == 1
+        assert data["page_size"] == 20
+        assert data["pages"] == 0
+
+    def test_list_reports_accepts_filters(self, client, auth_headers):
+        """列表接口接受筛选参数"""
+        resp = client.get(
+            "/api/report/list/?search=招标&date_from=2026-01-01&date_to=2026-01-31&score_min=60&score_max=95&sort_by=total_score&sort_order=asc&page=2&page_size=10",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["page"] == 2
+        assert data["page_size"] == 10
+        assert isinstance(data["items"], list)
 
     def test_report_not_found(self, client, auth_headers):
         """报告不存在"""

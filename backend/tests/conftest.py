@@ -175,6 +175,16 @@ def db_session(_test_db_engine):
 # ═══════════════════════════════════════════════════════════════
 
 
+@pytest.fixture(autouse=True)
+def _reset_check_rate_limit():
+    """Reset in-memory check rate limiter between tests."""
+    from app.api import check as check_api
+
+    check_api._rate_limit_store.clear()
+    yield
+    check_api._rate_limit_store.clear()
+
+
 @pytest.fixture
 def client(db_session):
     """FastAPI TestClient，数据库依赖注入为测试 session"""

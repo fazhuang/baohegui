@@ -18,6 +18,7 @@ dependencies = [
     "spacy>=3.8",
     "PyMuPDF>=1.25",
     "python-docx>=1.1",
+    "openpyxl>=3.1",
     "WeasyPrint>=63",
     "boto3>=1.36",
     "httpx>=0.28",
@@ -30,6 +31,7 @@ dependencies = [
     "minio>=7.2",
     "cloudscraper>=1.2.71",
     "playwright>=1.60.0",
+    "prometheus-client>=0.21",
 ]
 
 [project.optional-dependencies]
