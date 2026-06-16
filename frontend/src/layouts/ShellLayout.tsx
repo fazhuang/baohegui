@@ -41,7 +41,6 @@ function useIsMobile(): boolean {
 const ShellLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const user = useAuthStore(s => s.user);
   const isAdmin = useAuthStore(s => s.isAdmin());
-  const isSuperAdmin = useAuthStore(s => s.isSuperAdmin());
   const logout = useAuthStore(s => s.logout);
   const { token } = antTheme.useToken();
   const isMobile = useIsMobile();
@@ -50,9 +49,6 @@ const ShellLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => 
     ...(isAdmin ? [
       { key: 'rules', icon: <ProfileOutlined />, label: '规则管理' },
       { key: 'manage', icon: <ProfileOutlined />, label: '系统管理' },
-      ...(isSuperAdmin ? [
-        { key: 'ops', icon: <ProfileOutlined />, label: '运维中心' },
-      ] : []),
       { type: 'divider' as const },
     ] : []),
     {

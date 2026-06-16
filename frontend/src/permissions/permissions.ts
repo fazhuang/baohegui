@@ -4,11 +4,7 @@
  * 硬规则：
  * 1. 禁止信任 localStorage.role / localStorage.username
  * 2. 禁止从 permissions 数组推导管理员身份
- * 3. 超管判定来自服务端显式字段 is_super_admin (后端暂未落地，前端统一返回 false)
- * 4. 后端真实角色模型: admin / user — 前端不凭空声明不存在的角色
- *
- * 注意：is_super_admin 仅为从后端传递的数据字段，不作为前端独立的角色枚举值。
- * 前端角色枚举只有 'admin' 和 'user'。
+ * 3. 后端真实角色模型: admin / user — 前端不凭空声明不存在的角色
  */
 
 import type { PermissionKey, UserRole } from '../types';
@@ -47,12 +43,3 @@ export function isAdminLike(_permissions: string[], role: UserRole | null): bool
   return role === 'admin';
 }
 
-/**
- * 是否为超级管理员
- *
- * 依赖服务端 is_super_admin 字段。后端尚未落地该字段，当前始终返回 false。
- * 相关入口（/ops 等）统一隐藏，直到后端支持。
- */
-export function isSuperAdminLike(_permissions: string[], _role: UserRole | null): boolean {
-  return false;
-}

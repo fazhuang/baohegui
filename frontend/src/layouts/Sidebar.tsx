@@ -2,7 +2,7 @@
  * Sidebar — 分组导航菜单
  *
  * 菜单数据源：routeConfig (通过 extractMenuItems 派生，再注入 menuStore)
- * 权限控制：useAuthStore.isAdmin / isSuperAdmin
+ * 权限控制：useAuthStore.isAdmin
  */
 
 import React, { useMemo } from 'react';
@@ -22,7 +22,6 @@ const GROUPS: Record<string, { key: string; label: string; order: number }> = {
   announcements: { key: 'announcements', label: '警示公告', order: 60 },
   account:       { key: 'account', label: '用户中心', order: 70 },
   system:        { key: 'system', label: '系统管理', order: 80 },
-  ops:           { key: 'ops', label: '运维中心', order: 90 },
 };
 
 /** 从 routeConfig 派生全量菜单项（一次性计算，不在组件内） */

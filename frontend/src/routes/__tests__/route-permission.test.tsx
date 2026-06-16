@@ -6,8 +6,7 @@
  * 2. Role-based access — route requiredRoles match real role model
  * 3. No stale roles in config (only admin/user allowed)
  * 4. All required app paths are covered
- * 5. /ops is blocked (requiredRoles=[])
- * 6. Render functions produce valid React elements
+ * 5. Render functions produce valid React elements
  */
 
 import { describe, it, expect } from 'vitest';
@@ -116,14 +115,6 @@ describe('routeConfig', () => {
           expect(r.requiredRoles).toContain('admin');
         }
       }
-    });
-
-    it('/ops should use requiredRoles=[] (authenticated but forbidden → 403)', () => {
-      const ops = flat.find(r => r.path === '/ops');
-      expect(ops).toBeDefined();
-      expect(ops!.requiredRoles).toEqual([]);
-      // Must not be a redirect
-      expect(ops!.redirect).toBeUndefined();
     });
 
     it('public routes should have undefined requiredRoles', () => {

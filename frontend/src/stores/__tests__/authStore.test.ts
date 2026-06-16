@@ -1,7 +1,7 @@
 /**
  * Auth Store Unit Tests
  *
- * Tests: login, restoreSession, logout, hasPerm, isAdmin, isSuperAdmin
+ * Tests: login, register, restoreSession, logout, hasPerm, isAdmin
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -10,10 +10,11 @@ import { useAuthStore } from '../authStore';
 // Mock services/api
 vi.mock('../../services/api', () => ({
   loginUser: vi.fn(),
+  registerUser: vi.fn(),
   getCurrentUser: vi.fn(),
 }));
 
-import { getCurrentUser } from '../../services/api';
+import { getCurrentUser, registerUser } from '../../services/api';
 
 describe('useAuthStore', () => {
   beforeEach(() => {
@@ -27,7 +28,6 @@ describe('useAuthStore', () => {
 
   describe('initial state', () => {
     it('should have null user and loading=true by default', () => {
-      // Initial state may vary — test after reset
       const state = useAuthStore.getState();
       expect(state.user).toBeNull();
       expect(state.error).toBeNull();
@@ -44,7 +44,6 @@ describe('useAuthStore', () => {
           company: '',
           email: '',
           permissions: ['admin:users', 'rules:write'],
-          isSuperAdmin: false,
         },
       });
       expect(useAuthStore.getState().hasPerm('admin:users')).toBe(true);
@@ -59,7 +58,6 @@ describe('useAuthStore', () => {
           company: '',
           email: '',
           permissions: ['file:upload'],
-          isSuperAdmin: false,
         },
       });
       expect(useAuthStore.getState().hasPerm('admin:users')).toBe(false);
@@ -81,7 +79,6 @@ describe('useAuthStore', () => {
           company: '',
           email: '',
           permissions: [],
-          isSuperAdmin: false,
         },
       });
       expect(useAuthStore.getState().isAdmin()).toBe(true);
@@ -96,59 +93,105 @@ describe('useAuthStore', () => {
           company: '',
           email: '',
           permissions: [],
-          isSuperAdmin: false,
         },
       });
       expect(useAuthStore.getState().isAdmin()).toBe(false);
     });
   });
 
-  describe('isSuperAdmin', () => {
-    it('should return false when isSuperAdmin flag is false (default)', () => {
-      useAuthStore.setState({
-        user: {
-          userId: 1,
-          username: 'admin',
-          role: 'admin',
-          company: '',
-          email: '',
-          permissions: ['kg:seed', 'crawler:trigger'],
-          isSuperAdmin: false,
-        },
+  describe('register', () => {
+    const registerResponse = {
+      access_token: 'new-user-token',
+      token_type: 'bearer',
+      user_id: 5,
+      username: 'newuser',
+      role: 'user',
+      company: '',
+    };
+
+    const meResponse = {
+      user_id: 5,
+      username: 'newuser',
+      role: 'user',
+      company: '测试公司',
+      email: 'new@test.com',
+      permissions: ['file:upload', 'file:check', 'report:view'],
+    };
+
+    it('should set user after successful registration', async () => {
+      (registerUser as ReturnType<typeof vi.fn>).mockResolvedValue(registerResponse);
+      (getCurrentUser as ReturnType<typeof vi.fn>).mockResolvedValue(meResponse);
+
+      await useAuthStore.getState().register({
+        username: 'newuser',
+        password: 'password123',
+        company: '测试公司',
+        email: 'new@test.com',
       });
-      expect(useAuthStore.getState().isSuperAdmin()).toBe(false);
+
+      const state = useAuthStore.getState();
+      expect(state.user).not.toBeNull();
+      expect(state.user!.username).toBe('newuser');
+      expect(state.user!.userId).toBe(5);
+      expect(state.user!.permissions).toEqual(['file:upload', 'file:check', 'report:view']);
+      expect(state.error).toBeNull();
     });
 
-    it('should return true when isSuperAdmin flag is true', () => {
-      useAuthStore.setState({
-        user: {
-          userId: 1,
-          username: 'super',
-          role: 'admin',
-          company: '',
-          email: '',
-          permissions: ['kg:seed', 'crawler:trigger'],
-          isSuperAdmin: true,
-        },
+    it('should set role from /auth/me, NOT from register response', async () => {
+      // register response says 'user', but /auth/me says 'admin'
+      (registerUser as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...registerResponse,
+        role: 'user',
       });
-      expect(useAuthStore.getState().isSuperAdmin()).toBe(true);
+      (getCurrentUser as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...meResponse,
+        role: 'admin',
+        permissions: ['admin:users', 'rules:write'],
+      });
+
+      await useAuthStore.getState().register({
+        username: 'newadmin',
+        password: 'password123',
+      });
+
+      const state = useAuthStore.getState();
+      expect(state.user!.role).toBe('admin');
+      expect(state.user!.permissions).toContain('admin:users');
     });
 
-    it('isSuperAdmin should NEVER derive from permissions', () => {
-      // Even with kg:seed and crawler:trigger, isSuperAdmin should be false
-      // unless explicitly set
-      useAuthStore.setState({
-        user: {
-          userId: 1,
-          username: 'admin',
-          role: 'admin',
-          company: '',
-          email: '',
-          permissions: ['kg:seed', 'crawler:trigger'],
-          isSuperAdmin: false,
-        },
-      });
-      expect(useAuthStore.getState().isSuperAdmin()).toBe(false);
+    it('should not leave token on register failure', async () => {
+      localStorage.setItem('token', 'should-be-cleared');
+      (registerUser as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('用户名已存在'));
+
+      await expect(
+        useAuthStore.getState().register({ username: 'dup', password: 'pw', email: 'dup@test.com' })
+      ).rejects.toThrow();
+
+      expect(localStorage.getItem('token')).toBeNull();
+      expect(useAuthStore.getState().user).toBeNull();
+    });
+
+    it('should not leave user state on register failure', async () => {
+      (registerUser as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Network error'));
+
+      await expect(
+        useAuthStore.getState().register({ username: 'fail', password: 'pw', email: 'fail@test.com' })
+      ).rejects.toThrow();
+
+      expect(useAuthStore.getState().user).toBeNull();
+      expect(useAuthStore.getState().loading).toBe(false);
+    });
+
+    it('should clear token on /auth/me failure after register', async () => {
+      (registerUser as ReturnType<typeof vi.fn>).mockResolvedValue(registerResponse);
+      (getCurrentUser as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Auth failed'));
+
+      await expect(
+        useAuthStore.getState().register({ username: 'bad', password: 'pw', email: 'bad@test.com' })
+      ).rejects.toThrow();
+
+      expect(useAuthStore.getState().user).toBeNull();
+      expect(localStorage.getItem('token')).toBeNull();
     });
   });
 
@@ -163,7 +206,6 @@ describe('useAuthStore', () => {
           company: '',
           email: '',
           permissions: [],
-          isSuperAdmin: false,
         },
       });
       useAuthStore.getState().logout();

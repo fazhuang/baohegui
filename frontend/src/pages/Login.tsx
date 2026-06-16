@@ -9,14 +9,11 @@ import React, { useState, useEffect } from 'react';
 import { Card, Form, Input, Button, Typography, message, Alert, Spin, Tabs, Checkbox } from 'antd';
 import { UserOutlined, LockOutlined, ReloadOutlined, TeamOutlined, MailOutlined, ProfileOutlined } from '@ant-design/icons';
 import { useAuthStore } from '../stores/authStore';
-import { registerUser } from '../services/api';
 import { getErrorMessage } from '../utils/error';
 import { useNavigate } from 'react-router-dom';
 import { useRememberMe } from '../features/login/hooks/useRememberMe';
 
-interface LoginProps { onLogin?: () => void; }
-
-const LoginPage: React.FC<LoginProps> = (props) => {
+const LoginPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [regLoading, setRegLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +22,7 @@ const LoginPage: React.FC<LoginProps> = (props) => {
   const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('remember_me') === 'true');
   const navigate = useNavigate();
   const authLogin = useAuthStore(s => s.login);
+  const authRegister = useAuthStore(s => s.register);
   const remember = useRememberMe();
 
   const [loginForm] = Form.useForm();
@@ -44,7 +42,7 @@ const LoginPage: React.FC<LoginProps> = (props) => {
       await authLogin(values);
       remember.persist(values.username, rememberMe);
       message.success(`登录成功，欢迎 ${values.username}`);
-      props.onLogin?.();
+      navigate('/');
     } catch (err: unknown) {
       const axiosErr = err as { code?: string; message?: string; response?: { status?: number; data?: { detail?: string } } };
       if (axiosErr?.code === 'ERR_NETWORK' || axiosErr?.code === 'ECONNREFUSED' || String(axiosErr?.message || '').includes('Network')) {
@@ -65,11 +63,10 @@ const LoginPage: React.FC<LoginProps> = (props) => {
     setRegLoading(true);
     setError(null);
     try {
-      const data = await registerUser(values);
-      localStorage.setItem('token', data.access_token);
-      remember.persist(data.username || '', false);
-      message.success(`注册成功，欢迎 ${data.username}`);
-      props.onLogin?.();
+      await authRegister(values);
+      remember.persist(values.username, false);
+      message.success(`注册成功，欢迎 ${values.username}`);
+      navigate('/');
     } catch (err: unknown) {
       setError(getErrorMessage(err, '注册失败'));
     } finally {

@@ -9,7 +9,6 @@
  * - anonymous: / → login page, /manage → login
  * - user: /review → review center (in ShellLayout), /rules → 403, /manage → 403
  * - admin: /rules → rules center (in ShellLayout), /manage → system manage (in ShellLayout)
- * - admin /ops → 403 (ops blocked for all current roles)
  * - /not-exist → 404 (in ShellLayout)
  * - token expired logout → clear state, null user
  * - ShellLayout renders header/sidebar for protected pages
@@ -38,7 +37,6 @@ const ADMIN_USER: AuthUser = {
     'admin:users', 'admin:audit', 'admin:billing',
     'stats:dashboard', 'kg:read', 'kg:seed', 'crawler:read', 'crawler:trigger',
   ],
-  isSuperAdmin: false,
 };
 
 const USER_USER: AuthUser = {
@@ -48,7 +46,6 @@ const USER_USER: AuthUser = {
   company: '',
   email: 'user@test.com',
   permissions: ['file:upload', 'file:check', 'report:view', 'report:download', 'rules:read', 'kg:read'],
-  isSuperAdmin: false,
 };
 
 function loginAsUser() {
@@ -172,17 +169,6 @@ describe('App Routing RBAC (real render)', () => {
       }, { timeout: 3000 });
     });
 
-    it('admin /ops → 403 (ops blocked for all current roles)', async () => {
-      renderRoute('/ops');
-      await waitFor(() => {
-        expect(screen.getByText('无访问权限')).toBeDefined();
-      }, { timeout: 3000 });
-    });
-
-    it('admin isSuperAdmin() = false', () => {
-      expect(useAuthStore.getState().isSuperAdmin()).toBe(false);
-    });
-
     it('admin isAdmin() = true', () => {
       expect(useAuthStore.getState().isAdmin()).toBe(true);
     });
@@ -194,6 +180,44 @@ describe('App Routing RBAC (real render)', () => {
     it('admin can access /review too', async () => {
       renderRoute('/review');
       await waitFor(() => expectTitle('审查中心'), { timeout: 3000 });
+    });
+  });
+
+  // ── register flow ─────────────────────────────────────────────
+
+  describe('register flow (ProtectedShell acceptance)', () => {
+    it('registered user with valid store can access / without being redirected', async () => {
+      // Simulate a freshly registered user — token + user both present
+      localStorage.setItem('token', 'fresh-register-token');
+      useAuthStore.setState({
+        user: {
+          userId: 10,
+          username: '新用户',
+          role: 'user',
+          company: '',
+          email: 'new@test.com',
+          permissions: ['file:upload'],
+        },
+        loading: false,
+        error: null,
+      });
+
+      renderRoute('/');
+      await waitFor(() => {
+        // Should see the ShellLayout header (包合规 appears) and NOT be on login page
+        expect(screen.getAllByText('包合规').length).toBeGreaterThan(0);
+      }, { timeout: 3000 });
+    });
+
+    it('registered user with token but no user state → redirect /login', async () => {
+      // Simulate broken registration that wrote token but didn't set user
+      localStorage.setItem('token', 'token-only-no-user');
+      useAuthStore.setState({ user: null, loading: false, error: null });
+
+      renderRoute('/');
+      await waitFor(() => {
+        expect(screen.getByText('招标文件合规自检系统')).toBeDefined();
+      }, { timeout: 3000 });
     });
   });
 

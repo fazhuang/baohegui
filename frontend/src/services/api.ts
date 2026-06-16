@@ -39,8 +39,6 @@ export interface CurrentUserResponse {
   company: string;
   email: string;
   permissions: string[];
-  /** 超管标记（后端暂未落地，始终为 false/undefined） */
-  is_super_admin?: boolean;
 }
 
 export async function loginUser(params: LoginParams): Promise<LoginResult> {

@@ -37,8 +37,7 @@ const UserCenter = lazy(() => import('../pages/UserCenter'));
 const SystemManage = lazy(() => import('../pages/SystemManage'));
 const ComingSoonPage = lazy(() => import('../components/common/ComingSoonPage'));
 
-/** 全局 404 页面 — 非懒加载以保证始终可用 */
-import NotFoundPage from './NotFoundPage';
+/** 全局 404 页面引用保留在 renderRoutes.tsx / AppRoutes.tsx */
 
 // ═══════════════════════════════════════════════════════════════
 // 路由树 — 真实应用路由的单一数据源
@@ -298,14 +297,6 @@ export const routeConfig: RouteConfig[] = [
         requiredRoles: ['admin'],
       },
     ],
-  },
-
-  // ── 运维中心 — 需要登录但禁止访问（后端 is_super_admin 未落地，暂不开放）──
-  {
-    path: '/ops',
-    element: NotFoundPage,
-    title: '运维中心',
-    requiredRoles: [],  // [] = 认证用户访问此路由直接 403
   },
 
   // ── 向后兼容重定向 ────────────────────────────────────────────

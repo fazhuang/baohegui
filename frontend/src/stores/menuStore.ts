@@ -45,7 +45,6 @@ const MENU_GROUP_MAP: Record<string, MenuGroupData> = {
   announcements: { key: 'announcements', label: '警示公告', icon: 'AlertOutlined', order: 60 },
   account:       { key: 'account', label: '用户中心', icon: 'UserOutlined', order: 70 },
   system:        { key: 'system', label: '系统管理', icon: 'ControlOutlined', order: 80 },
-  ops:           { key: 'ops', label: '运维中心', icon: 'DashboardOutlined', order: 90 },
 };
 
 export const useMenuStore = create<MenuState>((set, get) => ({

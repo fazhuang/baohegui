@@ -29,7 +29,6 @@ function setStoreAsAdmin() {
         'kg:read', 'kg:seed',
         'crawler:read', 'crawler:trigger',
       ],
-      isSuperAdmin: false,
     },
     loading: false,
     error: null,
@@ -45,7 +44,6 @@ function setStoreAsUser() {
       company: '',
       email: 'user@test.com',
       permissions: ['file:upload', 'file:check', 'report:view', 'report:download', 'rules:read', 'kg:read'],
-      isSuperAdmin: false,
     },
     loading: false,
     error: null,
@@ -81,10 +79,6 @@ describe('Admin RBAC', () => {
 
     it('admin isAdmin() = true', () => {
       expect(useAuthStore.getState().isAdmin()).toBe(true);
-    });
-
-    it('admin isSuperAdmin() = false (default)', () => {
-      expect(useAuthStore.getState().isSuperAdmin()).toBe(false);
     });
 
     it('admin has admin:users permission', () => {
@@ -123,10 +117,6 @@ describe('Admin RBAC', () => {
 
     it('user isAdmin() = false', () => {
       expect(useAuthStore.getState().isAdmin()).toBe(false);
-    });
-
-    it('user isSuperAdmin() = false', () => {
-      expect(useAuthStore.getState().isSuperAdmin()).toBe(false);
     });
 
     it('user does NOT have admin:users permission', () => {
@@ -171,52 +161,10 @@ describe('Admin RBAC', () => {
       expect(useAuthStore.getState().isAdmin()).toBe(false);
     });
 
-    it('anonymous isSuperAdmin() = false', () => {
-      expect(useAuthStore.getState().isSuperAdmin()).toBe(false);
-    });
-
     it('anonymous hasPerm() always returns false', () => {
       expect(useAuthStore.getState().hasPerm('file:upload')).toBe(false);
       expect(useAuthStore.getState().hasPerm('admin:users')).toBe(false);
       expect(useAuthStore.getState().hasPerm('anything')).toBe(false);
-    });
-  });
-
-  // ── isSuperAdmin 安全 ──────────────────────────────────────────
-
-  describe('superAdmin safety', () => {
-    it('admin with all permissions is NOT superAdmin (no derivation)', () => {
-      useAuthStore.setState({
-        user: {
-          userId: 1,
-          username: 'power_admin',
-          role: 'admin',
-          company: '',
-          email: 'admin@test.com',
-          permissions: ['kg:seed', 'crawler:trigger', 'admin:users', 'admin:audit', 'rules:write', 'rules:sync'],
-          isSuperAdmin: false,
-        },
-        loading: false,
-        error: null,
-      });
-      expect(useAuthStore.getState().isSuperAdmin()).toBe(false);
-    });
-
-    it('only explicit isSuperAdmin=true makes super admin', () => {
-      useAuthStore.setState({
-        user: {
-          userId: 99,
-          username: 'true_super',
-          role: 'admin',
-          company: '',
-          email: 'super@test.com',
-          permissions: [],
-          isSuperAdmin: true,
-        },
-        loading: false,
-        error: null,
-      });
-      expect(useAuthStore.getState().isSuperAdmin()).toBe(true);
     });
   });
 
@@ -231,7 +179,6 @@ describe('Admin RBAC', () => {
 
       expect(useAuthStore.getState().user).toBeNull();
       expect(useAuthStore.getState().isAdmin()).toBe(false);
-      expect(useAuthStore.getState().isSuperAdmin()).toBe(false);
       expect(useAuthStore.getState().role()).toBeNull();
     });
 

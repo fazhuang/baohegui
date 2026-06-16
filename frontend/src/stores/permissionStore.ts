@@ -2,7 +2,6 @@
  * Permission Store — 权限状态 (派生自 authStore)
  *
  * 权限判断只基于服务端返回的 permissions 数组。
- * isSuperAdmin 来自服务端 is_super_admin 字段。
  */
 
 import { create } from 'zustand';
