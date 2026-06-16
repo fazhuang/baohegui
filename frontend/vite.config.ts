@@ -43,15 +43,7 @@ export default defineConfig(() => {
       rollupOptions: {
         output: {
           manualChunks(id: string) {
-            if (!id.includes('node_modules')) {
-              if (id.includes('src/pages/Report') || id.includes('src/features/report')) return 'page-report';
-              if (id.includes('src/pages/Upload') || id.includes('src/features/upload')) return 'page-upload';
-              if (id.includes('src/pages/AdminPanel') || id.includes('src/features/admin')) return 'page-admin';
-              if (id.includes('src/pages/AdminRules') || id.includes('src/features/rules')) return 'page-rules';
-              if (id.includes('src/pages/History') || id.includes('src/features/history')) return 'page-history';
-              if (id.includes('src/pages/dashboards/')) return 'page-dashboard';
-              return undefined;
-            }
+            if (!id.includes('node_modules')) return undefined;
 
             // React ecosystem — standalone, no circular deps
             if (id.includes('node_modules/react-dom/') || id.includes('node_modules/react-dom-')) return 'vendor-react-dom';
@@ -61,15 +53,18 @@ export default defineConfig(() => {
             if (id.includes('node_modules/dayjs/')) return 'vendor-dayjs';
             if (id.includes('node_modules/zustand/')) return 'vendor-zustand';
 
-            // Ant Design — single chunk, zero cycles.
-            // antd/ ↔ rc-* ↔ @ant-design/ ↔ @rc-component form a
-            // dense dependency mesh; any split creates circular chunks.
-            // 1.18 MB raw / 368 KB gzip — cached after first load.
-            if (id.includes('node_modules/antd/') ||
-                id.includes('node_modules/rc-') ||
-                id.includes('node_modules/@ant-design/') ||
-                id.includes('node_modules/@rc-component/')) return 'vendor-antd';
+            // antd icons — pure SVG data, zero circular risk
+            if (id.includes('node_modules/@ant-design/icons/') ||
+                id.includes('node_modules/@ant-design/icons-svg/')) return 'vendor-antd-icons';
 
+            // antd core runtime (cssinjs, theme) — leaf deps, zero circular risk
+            if (id.includes('node_modules/@ant-design/cssinjs/') ||
+                id.includes('node_modules/@ant-design/fast-color/') ||
+                id.includes('node_modules/@emotion/') ||
+                id.includes('node_modules/stylis/')) return 'vendor-antd-runtime';
+
+            // Let all other antd/rc-* components distribute naturally
+            // across lazy page chunks via Rollup's automatic splitting.
             return undefined;
           },
         },
