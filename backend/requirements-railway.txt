@@ -19,3 +19,4 @@ openpyxl>=3.1
 WeasyPrint>=63
 lxml>=5.0
 beautifulsoup4>=4.12
+prometheus_client>=0.21
