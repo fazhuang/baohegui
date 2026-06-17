@@ -71,11 +71,25 @@ describe('routeConfig', () => {
       }
     });
 
+    it('menu item paths should be unique', () => {
+      const paths = menuItems.map(m => m.path);
+      const dupes = paths.filter((p, i) => paths.indexOf(p) !== i);
+      expect(dupes).toEqual([]);
+    });
+
     it('every menu item should have requiredRoles', () => {
       for (const item of menuItems) {
         expect(item.requiredRoles.length,
           `Menu "${item.key}" has empty requiredRoles`).toBeGreaterThan(0);
       }
+    });
+
+    it('knowledge group should not repeat the parent label as a child item', () => {
+      const knowledgeLabels = menuItems
+        .filter(item => item.group === 'knowledge')
+        .map(item => item.label);
+
+      expect(knowledgeLabels).toEqual(['知识图谱', '案例库', '法规库']);
     });
   });
 

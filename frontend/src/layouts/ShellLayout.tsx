@@ -12,7 +12,7 @@
 
 import React from 'react';
 import { Layout } from 'antd';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useNavigate } from 'react-router-dom';
 import {
   ProfileOutlined,
   SearchOutlined,
@@ -42,8 +42,16 @@ const ShellLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => 
   const user = useAuthStore(s => s.user);
   const isAdmin = useAuthStore(s => s.isAdmin());
   const logout = useAuthStore(s => s.logout);
+  const navigate = useNavigate();
   const { token } = antTheme.useToken();
   const isMobile = useIsMobile();
+  const [notificationOpen, setNotificationOpen] = React.useState(false);
+
+  const notifications = [
+    { key: 'platform-rules', title: '平台规则有更新', description: '查看最新公共资源交易平台审查提醒', path: '/announcements' },
+    { key: 'report-review', title: '待复核报告 1 份', description: '进入报告中心查看最近审查结果', path: '/reports' },
+    { key: 'legal-update', title: '法规库新增条目', description: '查看法规库与合规依据更新', path: '/kg/legal' },
+  ];
 
   const userMenuItems = [
     ...(isAdmin ? [
@@ -64,6 +72,33 @@ const ShellLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => 
       onClick: logout,
     },
   ];
+
+  const handleUserMenuClick = ({ key }: { key: string }) => {
+    if (key === 'logout') {
+      logout();
+      return;
+    }
+
+    const routeByKey: Record<string, string> = {
+      rules: '/rules',
+      manage: '/manage',
+      account: '/account',
+    };
+    const path = routeByKey[key];
+    if (path) navigate(path);
+  };
+
+  const notificationMenuItems = notifications.map(item => ({
+    key: item.key,
+    label: (
+      <div style={{ width: isMobile ? 240 : 300, padding: '4px 0' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: token.colorText }}>{item.title}</div>
+        <div style={{ marginTop: 2, fontSize: 12, color: token.colorTextSecondary, whiteSpace: 'normal' as const }}>
+          {item.description}
+        </div>
+      </div>
+    ),
+  }));
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -113,19 +148,59 @@ const ShellLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => 
 
         {/* 右侧：通知 + 用户 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <Badge count={3} size="small">
-            <BellOutlined style={{ fontSize: 18, cursor: 'pointer', color: token.colorTextSecondary }} />
-          </Badge>
+          <Dropdown
+            menu={{
+              items: notificationMenuItems,
+              onClick: ({ key }) => {
+                const target = notifications.find(item => item.key === key);
+                if (!target) return;
+                setNotificationOpen(false);
+                navigate(target.path);
+              },
+            }}
+            trigger={['click']}
+            open={notificationOpen}
+            onOpenChange={setNotificationOpen}
+            placement="bottomRight"
+          >
+            <button
+              type="button"
+              aria-label="系统通知"
+              style={{
+                border: 'none',
+                background: 'transparent',
+                padding: 0,
+                lineHeight: 1,
+                cursor: 'pointer',
+              }}
+            >
+              <Badge count={notifications.length} size="small">
+                <BellOutlined style={{ fontSize: 18, color: token.colorTextSecondary }} />
+              </Badge>
+            </button>
+          </Dropdown>
 
-          <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+          <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenuClick }} placement="bottomRight" trigger={['click']}>
+            <button
+              type="button"
+              aria-label="用户菜单"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                cursor: 'pointer',
+                border: 'none',
+                background: 'transparent',
+                padding: 0,
+              }}
+            >
               <Avatar size={32} icon={<UserOutlined />} style={{ backgroundColor: token.colorPrimary }} />
               {!isMobile && (
                 <span style={{ fontSize: 13, color: token.colorTextSecondary }}>
                   {user?.username ?? '用户'}
                 </span>
               )}
-            </div>
+            </button>
           </Dropdown>
         </div>
       </Header>

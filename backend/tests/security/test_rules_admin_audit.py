@@ -182,48 +182,114 @@ class TestAdminRulesCreate200AndAudit:
 class TestRulesFileIntegrity:
     """防回归测试：确保测试规则不会写入真实 rules/versions 文件"""
 
-    def test_platform_rules_json_has_no_test_artifacts(self):
-        """真实 rules/platform_rules.json 不含 TEST-AUDIT 或测试产物"""
+    # ── 统一污染标记集合 ───────────────────────────────
+    _TEST_MARKERS = frozenset({
+        "TEST-AUDIT", "FILE-T1", "UFB-3390EBC9", "VR-T2", "V-TEST-1", "V-T3",
+    })
+
+    @staticmethod
+    def _is_test_rule(rule: dict) -> bool:
+        """基于 rule_id 判断是否为测试规则"""
+        rid = rule.get("rule_id", "")
+        return any(m in rid for m in TestRulesFileIntegrity._TEST_MARKERS)
+
+    # ── 通用扫描辅助 ──────────────────────────────────
+
+    @staticmethod
+    def _rules_dir() -> "Path":
         from pathlib import Path
+        return Path(__file__).resolve().parent.parent.parent.parent / "rules"
+
+    @staticmethod
+    def _check_file(path: "Path", key: str, label: str) -> list[str]:
+        """扫描单个 JSON 文件中的测试规则，返回违规描述列表。"""
         import json
-
-        # Resolve from backend/tests/security/ -> repo root -> rules/
-        rules_dir = Path(__file__).resolve().parent.parent.parent.parent / "rules"
-        platform_file = rules_dir / "platform_rules.json"
-
-        assert platform_file.exists(), f"platform_rules.json not found at {platform_file}"
-        data = json.loads(platform_file.read_text(encoding="utf-8"))
-        mappings = data.get("mappings", [])
-
-        test_ids = {"TEST-AUDIT", "FILE-T1", "UFB-", "VR-T2", "V-TEST-1", "V-T3"}
-        for rule in mappings:
-            rid = rule.get("rule_id", "")
-            for tid in test_ids:
-                assert tid not in rid, (
-                    f"Test artifact found in platform_rules.json: "
-                    f"rule_id={rid} matches {tid}"
+        violations: list[str] = []
+        if not path.exists():
+            return violations
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entries = data.get(key, []) if key else []
+        # 也做一次全文字符串兜底
+        raw = json.dumps(data)
+        for marker in TestRulesFileIntegrity._TEST_MARKERS:
+            if marker in raw:
+                violations.append(
+                    f"{label} 全文匹配标记 '{marker}'"
                 )
+        # JSON 结构级检查 rule_id
+        for i, entry in enumerate(entries):
+            if TestRulesFileIntegrity._is_test_rule(entry):
+                violations.append(
+                    f"{label}[{i}] rule_id={entry.get('rule_id')}"
+                )
+        return violations
 
-    def test_versions_manifest_json_has_no_test_audit(self):
-        """真实 rules/versions/manifest.json 不含 TEST-AUDIT"""
+    def test_platform_rules_json_has_no_test_artifacts(self):
+        """真实 rules/platform_rules.json 不含测试产物"""
+        violations = self._check_file(
+            self._rules_dir() / "platform_rules.json",
+            key="mappings", label="platform_rules.json"
+        )
+        assert not violations, f"platform_rules.json 污染:\n" + "\n".join(violations)
+
+    def test_versions_manifest_json_has_no_test_artifacts(self):
+        """真实 rules/versions/manifest.json 不含测试产物（所有标记）"""
+        violations = self._check_file(
+            self._rules_dir() / "versions" / "manifest.json",
+            key="", label="manifest.json"
+        )
+        # manifest 结构特殊 — versions[].rules[].rule_id
         from pathlib import Path
         import json
+        mf = self._rules_dir() / "versions" / "manifest.json"
+        if mf.exists():
+            data = json.loads(mf.read_text(encoding="utf-8"))
+            for vi, v in enumerate(data.get("versions", [])):
+                for ri, r in enumerate(v.get("rules", [])):
+                    if self._is_test_rule(r):
+                        violations.append(
+                            f"manifest.json versions[{vi}].rules[{ri}] rule_id={r.get('rule_id')}"
+                        )
+        assert not violations, f"manifest.json 污染:\n" + "\n".join(violations)
 
-        rules_dir = Path(__file__).resolve().parent.parent.parent.parent / "rules"
-        manifest_file = rules_dir / "versions" / "manifest.json"
+    def test_all_version_snapshots_have_no_test_artifacts(self):
+        """全部 rules/versions/rules_*.json 不含测试产物（不限日期前缀）"""
+        from pathlib import Path
+        versions_dir = self._rules_dir() / "versions"
+        assert versions_dir.exists(), f"versions dir not found: {versions_dir}"
 
-        if not manifest_file.exists():
-            return
+        all_violations: list[str] = []
+        for fpath in sorted(versions_dir.glob("rules_*.json")):
+            violations = self._check_file(fpath, key="rules", label=fpath.name)
+            all_violations.extend(violations)
 
-        data = json.loads(manifest_file.read_text(encoding="utf-8"))
-        content = json.dumps(data)
-        assert "TEST-AUDIT" not in content, (
-            "TEST-AUDIT found in versions/manifest.json"
+        assert not all_violations, (
+            f"版本快照污染 ({len(all_violations)} 条):\n" + "\n".join(all_violations)
         )
 
     def test_no_unexpected_version_snapshots_generated(self):
         """rules/versions/ 下不存在未追踪的 rules_20260616*.json"""
         from pathlib import Path
+        import subprocess
+
+        versions_dir = self._rules_dir() / "versions"
+        assert versions_dir.exists()
+
+        # 列出所有文件 + git tracked
+        all_files = set(f.name for f in versions_dir.glob("rules_*.json"))
+        result = subprocess.run(
+            ["git", "ls-files", "--", "rules/versions/"],
+            capture_output=True, text=True,
+            cwd=str(self._rules_dir().parent),
+        )
+        tracked = {f.split("/")[-1] for f in result.stdout.strip().split("\n") if f}
+        untracked = all_files - tracked
+
+        # 只禁止 20260616 前缀的未追踪文件（测试运行典型残留）
+        suspicious = {u for u in untracked if u.startswith("rules_20260616")}
+        assert not suspicious, (
+            f"未追踪测试快照: {sorted(suspicious)}"
+        )
 
         rules_dir = Path(__file__).resolve().parent.parent.parent.parent / "rules"
         versions_dir = rules_dir / "versions"
