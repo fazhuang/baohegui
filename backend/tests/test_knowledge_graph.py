@@ -475,10 +475,12 @@ class TestSearchFilters:
         admin = _create_user(db_session, "kg_admin_def", role="admin")
         _seed_node(db_session, title="visible", node_type="regulation", audit_status="verified")
         _seed_node(db_session, title="hidden", node_type="regulation", audit_status="rejected")
-        # Default search (no audit_status param) — admin can see all but we filter
-        # by current behavior: if is_admin and no explicit audit_status → all visible
         resp = client.get("/api/kg/search", params={"q": ""}, headers=_headers(admin))
         assert resp.status_code == 200
+        data = resp.json()
+        titles = [r["title"] for r in data["results"]]
+        assert "hidden" not in titles, f"Admin default search should exclude rejected, got {titles}"
+        assert "visible" in titles
 
 
 class TestStats:

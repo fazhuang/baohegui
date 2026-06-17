@@ -60,23 +60,107 @@ def _index_exists(conn, index_name: str) -> bool:
         return result is not None
 
 
+def _table_exists(conn, table: str) -> bool:
+    """Check if a table exists."""
+    dialect_name = conn.dialect.name
+    if dialect_name == "sqlite":
+        rows = conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+            (table,),
+        ).fetchall()
+        return len(rows) > 0
+    else:
+        from sqlalchemy import text
+        result = conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_name = :tbl"
+            ),
+            {"tbl": table},
+        ).fetchone()
+        return result is not None
+
+
 def _safe_add_column(conn, table: str, column_name: str, column_spec) -> None:
-    """Add a column only if it doesn't already exist."""
+    """Add a column only if it doesn't already exist AND the table exists."""
+    if not _table_exists(conn, table):
+        return
     if not _column_exists(conn, table, column_name):
         op.add_column(table, column_spec)
 
 
 def _safe_create_index(index_name: str, table: str, columns: list) -> None:
-    """Create an index only if it doesn't already exist."""
+    """Create an index only if it doesn't already exist AND the table exists."""
     try:
-        if not _index_exists(op.get_bind(), index_name):
+        conn = op.get_bind()
+        if not _table_exists(conn, table):
+            return
+        if not _index_exists(conn, index_name):
             op.create_index(index_name, table, columns)
     except Exception:
         pass
 
 
+def _safe_create_nodes_table(conn) -> None:
+    """Create kg_nodes table if it doesn't exist (for old DBs that never had it)."""
+    if _table_exists(conn, "kg_nodes"):
+        return
+    dialect_name = conn.dialect.name
+    if dialect_name == "sqlite":
+        conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        conn.exec_driver_sql("""
+            CREATE TABLE IF NOT EXISTS kg_nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_type VARCHAR(32) NOT NULL,
+                title VARCHAR(512) NOT NULL,
+                content TEXT NOT NULL,
+                source VARCHAR(256) DEFAULT '',
+                source_url VARCHAR(1024) DEFAULT '',
+                tags VARCHAR(512) DEFAULT '',
+                rule_id VARCHAR(64),
+                jurisdiction VARCHAR(128) DEFAULT '',
+                effective_date DATE,
+                publish_date DATE,
+                metadata_json TEXT DEFAULT '{}',
+                trust_level FLOAT NOT NULL DEFAULT 0.5,
+                audit_status VARCHAR(16) NOT NULL DEFAULT 'unreviewed',
+                audited_by INTEGER,
+                audited_at DATETIME,
+                created_at DATETIME
+            )
+        """)
+        conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+    else:
+        op.create_table(
+            "kg_nodes",
+            sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+            sa.Column("node_type", sa.String(32), nullable=False),
+            sa.Column("title", sa.String(512), nullable=False),
+            sa.Column("content", sa.Text, nullable=False),
+            sa.Column("source", sa.String(256), server_default=""),
+            sa.Column("source_url", sa.String(1024), server_default=""),
+            sa.Column("tags", sa.String(512), server_default=""),
+            sa.Column("rule_id", sa.String(64), nullable=True),
+            sa.Column("jurisdiction", sa.String(128), server_default=""),
+            sa.Column("effective_date", sa.Date, nullable=True),
+            sa.Column("publish_date", sa.Date, nullable=True),
+            sa.Column("metadata_json", sa.Text, server_default="{}"),
+            sa.Column("trust_level", sa.Float, nullable=False, server_default="0.5"),
+            sa.Column("audit_status", sa.String(16), nullable=False, server_default="unreviewed"),
+            sa.Column("audited_by", sa.Integer, nullable=True),
+            sa.Column("audited_at", sa.DateTime, nullable=True),
+            sa.Column("created_at", sa.DateTime, server_default=sa.func.now()),
+        )
+
+
 def upgrade() -> None:
     conn = op.get_bind()
+
+    # ── Phase 1 fix: ensure tables exist before trying to add columns ──
+    # Old DBs whose initial migration was empty will have alembic_version = 3f5829544a0c
+    # but no kg_nodes / kg_edges tables. Create them with full v3 schema.
+    _safe_create_nodes_table(conn)
+    _safe_create_edges_table(conn)
 
     # Column specs — add only if missing (safe for fresh DB + upgrade)
     _safe_add_column(conn, 'kg_nodes', 'source_url',
@@ -113,8 +197,6 @@ def upgrade() -> None:
 
     # Ensure kg_edges exists (may have been created by fixed initial migration)
     _safe_create_edges_table(conn)
-
-
 def _safe_create_edges_table(conn) -> None:
     """Create kg_edges if it doesn't exist."""
     dialect_name = conn.dialect.name

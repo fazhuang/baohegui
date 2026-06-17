@@ -54,9 +54,9 @@ class KnowledgeGraphService:
         """搜索知识图谱节点（多维度过滤）
 
         安全规则:
-        - 非 admin 调用时，audit_status=rejected 在前端 API 层面已被拦截（403）。
-          此处 is_admin=False 时，搜索默认排除 rejected（防御层）。
-        - admin 可以显式传入 audit_status 查看任何状态（包括 rejected）。
+        - 所有用户默认排除 rejected（包括 admin）。rejected 节点只能在显式传 audit_status=rejected 时查看。
+        - 非 admin 调用时，API 层面 audit_status=rejected 返回 403。
+        - admin 可以显式传 audit_status=rejected 查看已拒绝节点。
         """
         # 硬限制
         limit = min(max(1, limit), KnowledgeGraphService.SEARCH_MAX_LIMIT)
@@ -68,9 +68,9 @@ class KnowledgeGraphService:
         # 审核状态过滤
         if audit_status is not None:
             q = q.filter(KGNode.audit_status == audit_status)
-        elif not is_admin:
+        else:
+            # 所有用户默认排除 rejected（admin 也一样，避免审核视图被污染）
             q = q.filter(KGNode.audit_status != "rejected")
-        # admin + no explicit audit_status: show all (including rejected) — admin can see everything
 
         if min_trust > 0:
             q = q.filter(KGNode.trust_level >= min_trust)
