@@ -21,6 +21,7 @@ class PaginatedResult(BaseModel):
     results: list[dict]
     total: int
     limit: int
+    offset: int
 
 
 # ═══════════════════════════════════════════════════════
@@ -410,12 +411,24 @@ async def create_kg_edge(
     db: Session = Depends(get_db),
     admin: dict = Depends(require_admin),
 ):
-    """创建 KG 边 — 仅管理员，重复边返回已有边不重复插入"""
+    """创建 KG 边 — 仅管理员，重复边返回已有边不重复插入
+
+    安全约束:
+    - relation="references" 且 target node_type="concept" → 422（concept 不是法规，不得作为法规依据进入 RAG）
+    """
     # 验证两端节点存在
     src = db.query(KGNode).filter(KGNode.id == source_id).first()
     tgt = db.query(KGNode).filter(KGNode.id == target_id).first()
     if not src or not tgt:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="源节点或目标节点不存在")
+
+    # 安全约束: references 边只能指向 regulation
+    if relation == "references" and tgt.node_type != "regulation":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"references 关系只能指向 regulation 节点，而目标节点类型为 {tgt.node_type}。"
+                   f"concept 节点不得作为法规依据进入 RAG。",
+        )
 
     # 检查是否已存在（去重）
     existing = db.query(KGEdge).filter(

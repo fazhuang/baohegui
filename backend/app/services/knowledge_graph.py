@@ -134,6 +134,7 @@ class KnowledgeGraphService:
         relation: Optional[str] = None,
         min_trust: float = 0.0,
         direction: str = "outgoing",
+        target_type: Optional[str] = None,
     ) -> list[dict]:
         """获取与指定节点相关的所有节点。
 
@@ -141,6 +142,8 @@ class KnowledgeGraphService:
           - "outgoing": edges where source_id == node_id (默认，向后兼容)
           - "incoming": edges where target_id == node_id (谁引用了此节点)
           - "both": 双向
+
+        target_type: 可选，过滤目标节点类型（如 "regulation" 确保 RAG 只返回法规）
         """
         if direction == "incoming":
             edges = db.query(KGEdge).filter(KGEdge.target_id == node_id)
@@ -169,6 +172,8 @@ class KnowledgeGraphService:
                 KGNode.id == target_id,
                 KGNode.audit_status != "rejected",
             )
+            if target_type:
+                target = target.filter(KGNode.node_type == target_type)
             if min_trust > 0:
                 target = target.filter(KGNode.trust_level >= min_trust)
             target = target.first()
@@ -182,8 +187,13 @@ class KnowledgeGraphService:
                         "title": target.title,
                         "content": target.content[:200],
                         "source": target.source,
+                        "source_url": target.source_url or None,
                         "rule_id": target.rule_id,
                         "tags": target.tags,
+                        "jurisdiction": target.jurisdiction or None,
+                        "effective_date": target.effective_date.isoformat() if target.effective_date else None,
+                        "publish_date": target.publish_date.isoformat() if target.publish_date else None,
+                        "created_at": target.created_at.isoformat() if target.created_at else None,
                         "trust_level": target.trust_level,
                         "audit_status": target.audit_status,
                     },
@@ -247,13 +257,17 @@ class KnowledgeGraphService:
 
     @staticmethod
     def find_regulation_for_rule(db: Session, rule_id: str) -> list[dict]:
-        """查找与某规则相关的法规依据（仅可信 rule 起点 → 可信 target）"""
+        """查找与某规则相关的法规依据（仅可信 rule 起点 → 可信 regulation 目标）
+
+        强制过滤 target_type="regulation"，确保 concept 节点不会混入 RAG 法规依据。
+        """
         rule_node = KnowledgeGraphService._find_trusted_rule_node(db, rule_id)
         if not rule_node:
             return []
         return KnowledgeGraphService.get_related(
             db, rule_node.id, relation="references",
             min_trust=KnowledgeGraphService.TRUST_MIN_ENRICHMENT,
+            target_type="regulation",
         )
 
     @staticmethod
@@ -323,12 +337,12 @@ class KnowledgeGraphService:
                     "rule_id": rule_id,
                     "title": node.get("title", ""),
                     "content": node.get("content", "")[:500],
-                    "source": node.get("source", ""),
-                    "source_url": node.get("source_url", ""),
+                    "source": node.get("source") or None,
+                    "source_url": node.get("source_url") or None,
                     "node_id": node.get("id"),
                     "trust_level": node.get("trust_level", 0),
-                    "effective_date": node.get("effective_date", ""),
-                    "publish_date": node.get("publish_date", ""),
+                    "effective_date": node.get("effective_date") or None,
+                    "publish_date": node.get("publish_date") or None,
                     "relation": r.get("relation", ""),
                     "edge_weight": r.get("weight", 1.0),
                 })
@@ -347,12 +361,12 @@ class KnowledgeGraphService:
                     "rule_id": rule_id,
                     "title": node.get("title", ""),
                     "content": node.get("content", "")[:500],
-                    "source": node.get("source", ""),
-                    "source_url": node.get("source_url", ""),
+                    "source": node.get("source") or None,
+                    "source_url": node.get("source_url") or None,
                     "node_id": node.get("id"),
                     "trust_level": node.get("trust_level", 0),
-                    "effective_date": node.get("effective_date", ""),
-                    "publish_date": node.get("publish_date", ""),
+                    "effective_date": node.get("effective_date") or None,
+                    "publish_date": node.get("publish_date") or None,
                     "relation": c.get("relation", ""),
                     "edge_weight": c.get("weight", 1.0),
                 })
@@ -1056,7 +1070,7 @@ class KnowledgeGraphService:
 
         all_rules = db.query(KGNode).filter(KGNode.node_type == "rule").all()
         all_regulations = db.query(KGNode).filter(
-            KGNode.node_type.in_(["regulation", "concept"])
+            KGNode.node_type == "regulation"
         ).all()
         all_cases = db.query(KGNode).filter(KGNode.node_type == "case").all()
         edges_created = 0

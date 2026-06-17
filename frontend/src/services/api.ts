@@ -328,7 +328,7 @@ export async function listAnnouncements(params?: { limit?: number }): Promise<Ar
 
 export interface KGNode {
   id: number;
-  node_type: 'regulation' | 'case' | 'rule' | 'template';
+  node_type: 'regulation' | 'case' | 'rule' | 'template' | 'concept';
   title: string;
   content: string;
   source: string;
@@ -352,8 +352,13 @@ export interface KGRelatedNode {
     title: string;
     content: string;
     source: string;
+    source_url?: string | null;
     rule_id?: string | null;
     tags: string;
+    jurisdiction?: string | null;
+    effective_date?: string | null;
+    publish_date?: string | null;
+    created_at?: string | null;
     trust_level: number;
     audit_status: string;
   };
@@ -365,8 +370,13 @@ export interface KGRagContext {
   title: string;
   content: string;
   source: string;
+  source_url?: string | null;
   node_id: number;
   trust_level: number;
+  effective_date?: string | null;
+  publish_date?: string | null;
+  relation?: string;
+  edge_weight?: number;
 }
 
 export interface KGStats {
@@ -380,6 +390,8 @@ export interface KGSearchResult {
   query: string;
   results: KGNode[];
   total: number;
+  limit: number;
+  offset: number;
 }
 
 export async function searchKG(params: {
@@ -391,6 +403,7 @@ export async function searchKG(params: {
   rule_id?: string;
   jurisdiction?: string;
   limit?: number;
+  offset?: number;
 }): Promise<KGSearchResult> {
   const { data } = await http.get('/kg/search', { params });
   return data;

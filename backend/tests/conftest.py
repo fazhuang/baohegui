@@ -109,6 +109,7 @@ _TABLES_TO_CLEAN = [
     "rules",
     "announcements",
     "users",
+    "complaint_cases",
     "kg_edges",
     "kg_nodes",
 ]

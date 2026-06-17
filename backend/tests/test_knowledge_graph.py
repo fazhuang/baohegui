@@ -572,3 +572,684 @@ class TestKnowledgeGraphAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert "regulations" in data
+
+
+# ═══════════════════════════════════════════════════════════════
+# v5 新增测试 — 问题修复覆盖
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestRagTraceableFields:
+    """Issue #1: RAG 可追溯字段真正贯通"""
+
+    def test_rag_context_has_source_url_and_dates(self, client: TestClient, db_session):
+        """建 rule -> regulation references，regulation 带 source_url/effective_date/publish_date，
+        build_rag_context 返回 source_url/effective_date/publish_date 原样保留"""
+        from datetime import date
+        user = _create_user(db_session, "kg_trace_user")
+
+        reg = KGNode(
+            node_type="regulation",
+            title="测试法规-追溯验证",
+            content="法规正文内容",
+            source="财政部",
+            source_url="https://law.example.gov/test-law",
+            effective_date=date(2025, 1, 1),
+            publish_date=date(2024, 12, 15),
+            jurisdiction="全国",
+            trust_level=0.8,
+            audit_status="verified",
+        )
+        db_session.add(reg)
+        db_session.commit()
+        db_session.refresh(reg)
+
+        rule = KGNode(
+            node_type="rule",
+            title="R099: trace test rule",
+            content="测试规则正文",
+            source="包合规规则库",
+            rule_id="R099",
+            trust_level=0.8,
+            audit_status="verified",
+        )
+        db_session.add(rule)
+        db_session.commit()
+        db_session.refresh(rule)
+
+        edge = KGEdge(source_id=rule.id, target_id=reg.id, relation="references", weight=1.0)
+        db_session.add(edge)
+        db_session.commit()
+
+        resp = client.get(
+            "/api/kg/rag-context",
+            params={"rule_id": "R099"},
+            headers=_headers(user),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["context_count"] >= 1, f"Expected >=1 context, got {data}"
+
+        ctx = data["contexts"][0]
+        # 关键字段存在
+        assert ctx["node_id"] is not None, f"node_id missing: {ctx}"
+        assert ctx["source"] is not None, f"source missing: {ctx}"
+        assert ctx["trust_level"] >= 0.3, f"trust_level too low: {ctx}"
+        assert ctx["content"], f"content empty: {ctx}"
+        assert ctx["relation"] == "references", f"relation wrong: {ctx}"
+        assert ctx["edge_weight"] == 1.0, f"edge_weight wrong: {ctx}"
+        # source_url 不为空字符串
+        assert ctx["source_url"] == "https://law.example.gov/test-law", \
+            f"source_url should be preserved, got '{ctx.get('source_url')}'"
+        # 日期字段
+        assert ctx["effective_date"] == "2025-01-01", \
+            f"effective_date should be '2025-01-01', got '{ctx.get('effective_date')}'"
+        assert ctx["publish_date"] == "2024-12-15", \
+            f"publish_date should be '2024-12-15', got '{ctx.get('publish_date')}'"
+        assert ctx["type"] == "regulation"
+
+    def test_rag_context_source_url_none_for_missing(self, client: TestClient, db_session):
+        """没有 source_url 的法规节点，RAG 返回 None（不伪造空字符串）"""
+        user = _create_user(db_session, "kg_trace_none")
+
+        reg = KGNode(
+            node_type="regulation",
+            title="无来源法规",
+            content="内容",
+            source="测试",
+            # 无 source_url
+            trust_level=0.8,
+            audit_status="verified",
+        )
+        db_session.add(reg)
+        db_session.commit()
+        db_session.refresh(reg)
+
+        rule = KGNode(
+            node_type="rule",
+            title="R098: no url rule",
+            content="测试",
+            source="test",
+            rule_id="R098",
+            trust_level=0.8,
+            audit_status="verified",
+        )
+        db_session.add(rule)
+        db_session.commit()
+        db_session.refresh(rule)
+
+        edge = KGEdge(source_id=rule.id, target_id=reg.id, relation="references", weight=1.0)
+        db_session.add(edge)
+        db_session.commit()
+
+        resp = client.get(
+            "/api/kg/rag-context",
+            params={"rule_id": "R098"},
+            headers=_headers(user),
+        )
+        assert resp.status_code == 200
+        ctxs = resp.json()["contexts"]
+        assert len(ctxs) >= 1
+        # source_url 应为 None 而非空字符串
+        assert ctxs[0].get("source_url") is None, \
+            f"Expected None for missing source_url, got '{ctxs[0].get('source_url')}'"
+
+
+class TestConceptExcludedFromRag:
+    """Issue #2: 禁止 concept 进入 RAG 法规依据"""
+
+    def test_rule_concept_references_not_in_rag(self, client: TestClient, db_session):
+        """手工创建 rule -> concept references，/api/kg/rag-context 必须为空"""
+        user = _create_user(db_session, "kg_concept_rag")
+
+        concept = KGNode(
+            node_type="concept",
+            title="项目分类: 测试概念",
+            content="概念内容",
+            source="test",
+            rule_id="CAT-TEST",
+            trust_level=0.6,
+            audit_status="verified",
+        )
+        db_session.add(concept)
+        db_session.commit()
+        db_session.refresh(concept)
+
+        rule = KGNode(
+            node_type="rule",
+            title="R097: concept ref rule",
+            content="测试",
+            source="test",
+            rule_id="R097",
+            trust_level=0.8,
+            audit_status="verified",
+        )
+        db_session.add(rule)
+        db_session.commit()
+        db_session.refresh(rule)
+
+        # 创建 rule -> concept references (此 edge 只能通过直接 DB 插入，API 已拒绝)
+        edge = KGEdge(source_id=rule.id, target_id=concept.id, relation="references", weight=1.0)
+        db_session.add(edge)
+        db_session.commit()
+
+        resp = client.get(
+            "/api/kg/rag-context",
+            params={"rule_id": "R097"},
+            headers=_headers(user),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["context_count"] == 0, \
+            f"Concept should not enter RAG as regulation reference, got {data['contexts']}"
+
+    def test_admin_cannot_create_references_to_concept(self, client: TestClient, db_session):
+        """admin 尝试创建 rule -> concept references，必须返回 422"""
+        admin = _create_user(db_session, "kg_concept_admin", role="admin")
+
+        concept = KGNode(
+            node_type="concept",
+            title="概念节点",
+            content="概念内容",
+            source="test",
+            trust_level=0.6,
+            audit_status="verified",
+        )
+        db_session.add(concept)
+        db_session.commit()
+        db_session.refresh(concept)
+
+        rule = KGNode(
+            node_type="rule",
+            title="规则节点",
+            content="规则内容",
+            source="test",
+            trust_level=0.8,
+            audit_status="verified",
+        )
+        db_session.add(rule)
+        db_session.commit()
+        db_session.refresh(rule)
+
+        resp = client.post("/api/kg/edge", params={
+            "source_id": rule.id,
+            "target_id": concept.id,
+            "relation": "references",
+            "weight": 1.0,
+        }, headers=_headers(admin))
+        assert resp.status_code == 422, \
+            f"Expected 422 for references to concept, got {resp.status_code}: {resp.text}"
+
+    def test_concept_search_by_type(self, client: TestClient, db_session):
+        """/api/kg/search?node_type=concept&q=项目分类 能返回概念节点"""
+        user = _create_user(db_session, "kg_conc_search")
+
+        concept = KGNode(
+            node_type="concept",
+            title="项目分类: 测试概念",
+            content="概念内容",
+            source="test",
+            rule_id="CAT-TEST",
+            trust_level=0.6,
+            audit_status="verified",
+        )
+        db_session.add(concept)
+        db_session.commit()
+
+        resp = client.get(
+            "/api/kg/search",
+            params={"node_type": "concept", "q": "项目分类"},
+            headers=_headers(user),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["results"]) >= 1, f"Expected concept in search results, got {data}"
+        for r in data["results"]:
+            assert r["node_type"] == "concept"
+
+
+class TestDuplicateRuleIdEdgeSelection:
+    """Issue #3: duplicate rule_id 选择有边节点"""
+
+    def test_duplicate_rule_id_prefers_edged_node(self, client: TestClient, db_session):
+        """同 rule_id 两个 verified rule，一个无边，一个有 references。
+        rag-context 必须返回有边节点关联法规。"""
+        user = _create_user(db_session, "kg_dup_rule")
+
+        # Rule A: no edges
+        rule_a = KGNode(
+            node_type="rule",
+            title="R096: no edge rule",
+            content="无关联",
+            source="test",
+            rule_id="R096",
+            trust_level=0.8,
+            audit_status="verified",
+        )
+        db_session.add(rule_a)
+        db_session.commit()
+        db_session.refresh(rule_a)
+
+        # Rule B: same rule_id, has references edge
+        rule_b = KGNode(
+            node_type="rule",
+            title="R096: edged rule",
+            content="有关联",
+            source="test",
+            rule_id="R096",
+            trust_level=0.8,
+            audit_status="verified",
+        )
+        db_session.add(rule_b)
+        db_session.commit()
+        db_session.refresh(rule_b)
+
+        reg = KGNode(
+            node_type="regulation",
+            title="关联法规",
+            content="法规内容",
+            source="测试",
+            trust_level=0.8,
+            audit_status="verified",
+        )
+        db_session.add(reg)
+        db_session.commit()
+        db_session.refresh(reg)
+
+        edge = KGEdge(source_id=rule_b.id, target_id=reg.id, relation="references", weight=1.0)
+        db_session.add(edge)
+        db_session.commit()
+
+        resp = client.get(
+            "/api/kg/rag-context",
+            params={"rule_id": "R096"},
+            headers=_headers(user),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["context_count"] >= 1, \
+            f"Should return context from edged node, got {data}"
+        # The regulation title should come through
+        ctx = data["contexts"][0]
+        assert ctx["title"] == "关联法规", \
+            f"Expected regulation from edged rule, got {ctx['title']}"
+
+
+class TestPagination:
+    """Issue #3: 分页"""
+
+    def test_pagination_120_nodes(self, client: TestClient, db_session):
+        """创建 120 个节点，limit=50 offset=0 返回 50 + total=120。
+        offset=50 返回下一页。"""
+        user = _create_user(db_session, "kg_page_user")
+
+        for i in range(120):
+            n = KGNode(
+                node_type="regulation",
+                title=f"Page Test Regulation #{i:04d}",
+                content=f"content {i}",
+                source="test",
+                audit_status="verified",
+                trust_level=0.8,
+            )
+            db_session.add(n)
+        db_session.commit()
+
+        # Page 1
+        resp = client.get(
+            "/api/kg/search",
+            params={"q": "Page Test", "limit": 50, "offset": 0},
+            headers=_headers(user),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 120, f"Expected total=120, got {data['total']}"
+        assert data["limit"] == 50
+        assert data["offset"] == 0
+        assert len(data["results"]) == 50, f"Expected 50 results, got {len(data['results'])}"
+
+        # Page 2
+        resp2 = client.get(
+            "/api/kg/search",
+            params={"q": "Page Test", "limit": 50, "offset": 50},
+            headers=_headers(user),
+        )
+        assert resp2.status_code == 200
+        data2 = resp2.json()
+        assert len(data2["results"]) == 50, f"Expected 50 results on page 2, got {len(data2['results'])}"
+
+        # Page 3 (should have 20 left)
+        resp3 = client.get(
+            "/api/kg/search",
+            params={"q": "Page Test", "limit": 50, "offset": 100},
+            headers=_headers(user),
+        )
+        assert resp3.status_code == 200
+        data3 = resp3.json()
+        assert len(data3["results"]) == 20, f"Expected 20 results on page 3, got {len(data3['results'])}"
+
+
+class TestEdgeValidation:
+    """Issue #3: 边创建校验"""
+
+    def test_illegal_relation_returns_422(self, client: TestClient, db_session):
+        """非法 relation 返回 422（FastAPI 参数校验）"""
+        admin = _create_user(db_session, "kg_illegal_admin", role="admin")
+
+        src = KGNode(
+            node_type="regulation", title="src", content="c",
+            audit_status="verified",
+        )
+        tgt = KGNode(
+            node_type="regulation", title="tgt", content="c",
+            audit_status="verified",
+        )
+        db_session.add_all([src, tgt])
+        db_session.commit()
+        db_session.refresh(src)
+        db_session.refresh(tgt)
+
+        resp = client.post("/api/kg/edge", params={
+            "source_id": src.id,
+            "target_id": tgt.id,
+            "relation": "INVALID_RELATION",
+            "weight": 1.0,
+        }, headers=_headers(admin))
+        assert resp.status_code == 422, \
+            f"Expected 422 for illegal relation, got {resp.status_code}: {resp.text}"
+
+    def test_duplicate_edge_returns_duplicate_flag(self, client: TestClient, db_session):
+        """重复创建同一 edge 不重复插入，返回 duplicate=true"""
+        admin = _create_user(db_session, "kg_dup_edge_admin", role="admin")
+
+        src = KGNode(
+            node_type="regulation", title="dup_src", content="c",
+            audit_status="verified",
+        )
+        tgt = KGNode(
+            node_type="regulation", title="dup_tgt", content="c",
+            audit_status="verified",
+        )
+        db_session.add_all([src, tgt])
+        db_session.commit()
+        db_session.refresh(src)
+        db_session.refresh(tgt)
+
+        # 第一次：创建
+        resp1 = client.post("/api/kg/edge", params={
+            "source_id": src.id,
+            "target_id": tgt.id,
+            "relation": "related_to",
+            "weight": 0.5,
+        }, headers=_headers(admin))
+        assert resp1.status_code == 201, f"First create should succeed, got {resp1.status_code}: {resp1.text}"
+        assert not resp1.json().get("duplicate")
+
+        # 第二次：重复 — 不插入
+        resp2 = client.post("/api/kg/edge", params={
+            "source_id": src.id,
+            "target_id": tgt.id,
+            "relation": "related_to",
+            "weight": 0.5,
+        }, headers=_headers(admin))
+        assert resp2.status_code in (200, 201), f"Duplicate should return 200/201, got {resp2.status_code}: {resp2.text}"
+        data2 = resp2.json()
+        assert data2.get("duplicate") is True, f"Expected duplicate=true, got {data2}"
+
+
+class TestComplaintCaseSync:
+    """Issue #3: complaint_cases 表同步"""
+
+    def test_complaint_case_table_exists(self, client: TestClient, db_session):
+        """Alembic 迁移后表存在"""
+        from sqlalchemy import inspect
+        inspector = inspect(db_session.get_bind())
+        tables = inspector.get_table_names()
+        assert "complaint_cases" in tables, \
+            f"complaint_cases table should exist, got tables: {tables}"
+
+    def test_complaint_case_sync_creates_unreviewed_case_node(self, client: TestClient, db_session):
+        """插入 ComplaintCase 后 seed 同步为 case 节点，audit_status=unreviewed，trust_level=0.55"""
+        from app.models.complaint_case import ComplaintCase
+
+        cc = ComplaintCase(
+            province="甘肃",
+            title="测试投诉案例-同步验证",
+            project_name="测试项目",
+            decision_type="upheld",
+            complaint_types='["品牌锁定", "参数排他"]',
+            legal_basis='["政府采购法第二十条"]',
+            summary="这是一个测试投诉案例",
+            is_analyzed=1,
+        )
+        db_session.add(cc)
+        db_session.commit()
+        db_session.refresh(cc)
+
+        # Seed — 应由 ComplaintCase 创建对应 KGNode
+        from app.services.knowledge_graph import knowledge_graph
+        knowledge_graph.seed_builtin_knowledge(db_session)
+
+        # 查找新同步的节点
+        from app.models.knowledge_graph import KGNode
+        synced = db_session.query(KGNode).filter(
+            KGNode.rule_id == f"CC-{cc.id}",
+            KGNode.node_type == "case",
+        ).first()
+
+        assert synced is not None, f"ComplaintCase should be synced to KG case node"
+        assert synced.audit_status == "unreviewed", \
+            f"Synced case should be unreviewed, got {synced.audit_status}"
+        assert synced.trust_level == 0.55, \
+            f"Synced case trust_level should be 0.55, got {synced.trust_level}"
+        assert synced.node_type == "case"
+
+    def test_unreviewed_complaint_case_not_in_rag(self, client: TestClient, db_session):
+        """unreviewed complaint case 节点不进入 RAG"""
+        from app.models.complaint_case import ComplaintCase
+
+        user = _create_user(db_session, "kg_cc_rag_user")
+
+        cc = ComplaintCase(
+            province="宁夏",
+            title="未审核投诉案例",
+            project_name="测试项目2",
+            decision_type="upheld",
+            complaint_types='["品牌锁定"]',
+            summary="未审核案例不应进入RAG",
+            is_analyzed=1,
+        )
+        db_session.add(cc)
+        db_session.commit()
+        db_session.refresh(cc)
+
+        from app.services.knowledge_graph import knowledge_graph
+        knowledge_graph.seed_builtin_knowledge(db_session)
+
+        # 先验证节点存在
+        from app.models.knowledge_graph import KGNode
+        synced = db_session.query(KGNode).filter(
+            KGNode.rule_id == f"CC-{cc.id}",
+            KGNode.node_type == "case",
+        ).first()
+        assert synced is not None, "Synced node must exist"
+        assert synced.audit_status == "unreviewed"
+
+        # 尝试用相似案例搜索 — unreviewed case 不应被返回
+        resp = client.get(
+            "/api/kg/similar-cases",
+            params={"desc": "品牌锁定", "limit": 5},
+            headers=_headers(user),
+        )
+        assert resp.status_code == 200
+        for c in resp.json()["cases"]:
+            assert c["id"] != synced.id, \
+                f"Unreviewed case should not appear in similar cases: {c}"
+
+
+class TestRagTrustedFilters:
+    """Issue #3: RAG 可信过滤 — 补缺口"""
+
+    def test_rejected_target_not_in_rag(self, client: TestClient, db_session):
+        """rejected target 不进入 RAG（已有验证，确认保留）"""
+        user = _create_user(db_session, "kg_rag_rej_target")
+        rule = KGNode(
+            node_type="rule", title="R001: rej target rule", content="t",
+            rule_id="R001", audit_status="verified", trust_level=0.8, source="test",
+        )
+        reg_rej = KGNode(
+            node_type="regulation", title="rejected reg", content="t",
+            audit_status="rejected", source="test", trust_level=0.8,
+        )
+        reg_ok = KGNode(
+            node_type="regulation", title="ok reg", content="t",
+            audit_status="verified", trust_level=0.8, source="test",
+        )
+        db_session.add_all([rule, reg_rej, reg_ok])
+        db_session.commit()
+        db_session.refresh(rule)
+        db_session.refresh(reg_rej)
+        db_session.refresh(reg_ok)
+        db_session.add(KGEdge(source_id=rule.id, target_id=reg_rej.id, relation="references"))
+        db_session.add(KGEdge(source_id=rule.id, target_id=reg_ok.id, relation="references"))
+        db_session.commit()
+
+        resp = client.get("/api/kg/rag-context", params={"rule_id": "R001"}, headers=_headers(user))
+        assert resp.status_code == 200
+        ctxs = resp.json()["contexts"]
+        titles = [c["title"] for c in ctxs]
+        assert "rejected reg" not in titles, f"Rejected target leaked: {titles}"
+        assert "ok reg" in titles
+
+    def test_low_trust_target_not_in_rag(self, client: TestClient, db_session):
+        """low-trust target (0.1) 不进入 RAG"""
+        user = _create_user(db_session, "kg_rag_target_low")
+        rule = KGNode(
+            node_type="rule", title="R001: low target rule", content="t",
+            rule_id="R001", audit_status="verified", trust_level=0.8, source="test",
+        )
+        reg_low = KGNode(
+            node_type="regulation", title="low trust reg", content="t",
+            audit_status="verified", trust_level=0.1, source="test",
+        )
+        reg_ok = KGNode(
+            node_type="regulation", title="ok reg", content="t",
+            audit_status="verified", trust_level=0.8, source="test",
+        )
+        db_session.add_all([rule, reg_low, reg_ok])
+        db_session.commit()
+        db_session.refresh(rule)
+        db_session.refresh(reg_low)
+        db_session.refresh(reg_ok)
+        db_session.add(KGEdge(source_id=rule.id, target_id=reg_low.id, relation="references"))
+        db_session.add(KGEdge(source_id=rule.id, target_id=reg_ok.id, relation="references"))
+        db_session.commit()
+
+        resp = client.get("/api/kg/rag-context", params={"rule_id": "R001"}, headers=_headers(user))
+        assert resp.status_code == 200
+        for ctx in resp.json()["contexts"]:
+            assert ctx["trust_level"] >= 0.3, f"Low trust target leaked: {ctx}"
+
+    def test_rejected_rule_not_in_rag(self, client: TestClient, db_session):
+        """rejected rule 不进入 RAG"""
+        user = _create_user(db_session, "kg_rag_rej_rule2")
+        rule = KGNode(
+            node_type="rule", title="R001: rej rule", content="t",
+            rule_id="R001", audit_status="rejected", trust_level=0.8, source="test",
+        )
+        reg = KGNode(
+            node_type="regulation", title="good reg", content="t",
+            audit_status="verified", trust_level=0.9, source="test",
+        )
+        db_session.add_all([rule, reg])
+        db_session.commit()
+        db_session.refresh(rule)
+        db_session.refresh(reg)
+        db_session.add(KGEdge(source_id=rule.id, target_id=reg.id, relation="references"))
+        db_session.commit()
+
+        resp = client.get("/api/kg/rag-context", params={"rule_id": "R001"}, headers=_headers(user))
+        assert resp.status_code == 200
+        assert len(resp.json()["contexts"]) == 0, \
+            f"Rejected rule should not produce RAG context"
+
+    def test_low_trust_rule_not_in_rag(self, client: TestClient, db_session):
+        """low-trust rule (0.1) 不进入 RAG"""
+        user = _create_user(db_session, "kg_rag_low_rule2")
+        rule = KGNode(
+            node_type="rule", title="R001: low rule", content="t",
+            rule_id="R001", audit_status="verified", trust_level=0.1, source="test",
+        )
+        reg = KGNode(
+            node_type="regulation", title="good reg", content="t",
+            audit_status="verified", trust_level=0.9, source="test",
+        )
+        db_session.add_all([rule, reg])
+        db_session.commit()
+        db_session.refresh(rule)
+        db_session.refresh(reg)
+        db_session.add(KGEdge(source_id=rule.id, target_id=reg.id, relation="references"))
+        db_session.commit()
+
+        resp = client.get("/api/kg/rag-context", params={"rule_id": "R001"}, headers=_headers(user))
+        assert resp.status_code == 200
+        assert len(resp.json()["contexts"]) == 0, \
+            f"Low trust rule should not produce RAG context"
+
+
+class TestRelatedNodeFields:
+    """Issue #1: get_related 返回完整字段"""
+
+    def test_related_node_has_traceable_fields(self, client: TestClient, db_session):
+        """get_related 返回的 node 字典包含 source_url/jurisdiction/effective_date/publish_date/created_at"""
+        from datetime import date
+        user = _create_user(db_session, "kg_rel_fields_user")
+
+        reg = KGNode(
+            node_type="regulation",
+            title="关联节点字段验证",
+            content="完整字段测试",
+            source="国务院",
+            source_url="https://law.test/rel",
+            jurisdiction="全国",
+            effective_date=date(2024, 6, 1),
+            publish_date=date(2024, 5, 15),
+            trust_level=0.8,
+            audit_status="verified",
+        )
+        db_session.add(reg)
+        db_session.commit()
+        db_session.refresh(reg)
+
+        rule = KGNode(
+            node_type="rule",
+            title="关联字段发起节点",
+            content="测试",
+            source="test",
+            rule_id="R095",
+            trust_level=0.8,
+            audit_status="verified",
+        )
+        db_session.add(rule)
+        db_session.commit()
+        db_session.refresh(rule)
+
+        edge = KGEdge(source_id=rule.id, target_id=reg.id, relation="references", weight=0.9)
+        db_session.add(edge)
+        db_session.commit()
+
+        resp = client.get(f"/api/kg/related/{rule.id}", headers=_headers(user))
+        assert resp.status_code == 200
+        related = resp.json()["related"]
+        assert len(related) >= 1
+        node = related[0]["node"]
+
+        assert node.get("source_url") == "https://law.test/rel", \
+            f"source_url mismatch: {node.get('source_url')}"
+        assert node.get("jurisdiction") == "全国", \
+            f"jurisdiction mismatch: {node.get('jurisdiction')}"
+        assert node.get("effective_date") == "2024-06-01", \
+            f"effective_date mismatch: {node.get('effective_date')}"
+        assert node.get("publish_date") == "2024-05-15", \
+            f"publish_date mismatch: {node.get('publish_date')}"
+        assert node.get("created_at") is not None, f"created_at should not be None"

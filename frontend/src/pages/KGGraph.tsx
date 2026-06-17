@@ -8,7 +8,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Input, Select, Slider, Row, Col, Card, List, Tag, Statistic,
-  Drawer, Button, Space, Typography, Tooltip, Spin, Empty, message,
+  Drawer, Button, Space, Typography, Tooltip, Spin, Empty, message, Pagination,
 } from 'antd';
 import {
   SearchOutlined, NodeIndexOutlined, FolderOpenOutlined,
@@ -53,6 +53,7 @@ const NODE_TYPE_ICONS: Record<string, React.ReactNode> = {
   case: <FolderOpenOutlined />,
   rule: <SettingOutlined />,
   template: <FileTextOutlined />,
+  concept: <ApartmentOutlined />,
 };
 
 const KGGraph: React.FC = () => {
@@ -67,7 +68,12 @@ const KGGraph: React.FC = () => {
   // Data
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<KGNode[]>([]);
+  const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<KGStats | null>(null);
+
+  // Pagination
+  const pageSize = 50;
+  const [page, setPage] = useState(1);
 
   // Drawer
   const [selectedNode, setSelectedNode] = useState<KGNode | null>(null);
@@ -79,23 +85,32 @@ const KGGraph: React.FC = () => {
   const [needingReviewCount, setNeedingReviewCount] = useState(0);
 
   // ── Search ──
-  const doSearch = useCallback(async () => {
+  const doSearch = useCallback(async (searchPage: number = 1) => {
     setLoading(true);
     try {
+      const offset = (searchPage - 1) * pageSize;
       const res = await searchKG({
         q: query || '',
         node_type: nodeType || undefined,
         min_trust: minTrust > 0 ? minTrust : undefined,
         audit_status: auditStatus || undefined,
-        limit: 50,
+        limit: pageSize,
+        offset,
       });
       setResults(res.results);
+      setTotal(res.total);
+      setPage(searchPage);
     } catch {
       // handled by interceptor
     } finally {
       setLoading(false);
     }
   }, [query, nodeType, minTrust, auditStatus]);
+
+  // Search with filter reset to page 1
+  const handleSearch = useCallback(() => {
+    doSearch(1);
+  }, [doSearch]);
 
   // ── Stats ──
   const loadStats = useCallback(async () => {
@@ -109,7 +124,7 @@ const KGGraph: React.FC = () => {
 
   // ── Load on mount ──
   useEffect(() => {
-    doSearch();
+    handleSearch();
     loadStats();
     if (isAdmin) {
       getNodesNeedingReview().then(r => setNeedingReviewCount(r.nodes.length)).catch(() => {});
@@ -137,14 +152,14 @@ const KGGraph: React.FC = () => {
     try {
       const res = await seedKG();
       message.success(`知识库种子完成: ${res.count} 条记录`);
-      doSearch();
+      handleSearch();
       loadStats();
     } catch {
       message.error('种子数据失败');
     } finally {
       setSeeding(false);
     }
-  }, [isAdmin, doSearch, loadStats]);
+  }, [isAdmin, handleSearch, loadStats]);
 
   // ── Tag color ──
   const tagColors = (tags: string) => {
@@ -190,7 +205,7 @@ const KGGraph: React.FC = () => {
               placeholder="搜索标题/内容/标签..."
               value={query}
               onChange={e => setQuery(e.target.value)}
-              onPressEnter={doSearch}
+              onPressEnter={() => handleSearch()}
               allowClear
             />
           </Col>
@@ -225,7 +240,7 @@ const KGGraph: React.FC = () => {
             </Space>
           </Col>
           <Col xs={12} sm={4}>
-            <Button type="primary" icon={<SearchOutlined />} onClick={doSearch} loading={loading}>
+            <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch} loading={loading}>
               搜索
             </Button>
           </Col>
@@ -254,7 +269,7 @@ const KGGraph: React.FC = () => {
       </Card>
 
       {/* ── Results ── */}
-      <Card size="small" title={`搜索结果 (${results.length})`}>
+      <Card size="small" title={`搜索结果 (${total} 条，当前第 ${page} 页)`}>
         {loading ? (
           <div style={{ textAlign: 'center', padding: 64 }}><Spin size="large" /></div>
         ) : results.length === 0 ? (
@@ -266,54 +281,68 @@ const KGGraph: React.FC = () => {
             )}
           </Empty>
         ) : (
-          <List
-            dataSource={results}
-            renderItem={item => (
-              <List.Item
-                key={item.id}
-                style={{ cursor: 'pointer' }}
-                onClick={() => openNodeDetail(item)}
-                extra={
-                  <Space direction="vertical" size={2} style={{ textAlign: 'right' }}>
-                    <Tag color={NODE_TYPE_COLORS[item.node_type] || 'default'}>
-                      {NODE_TYPE_OPTIONS.find(o => o.value === item.node_type)?.label ?? item.node_type}
-                    </Tag>
-                    {item.rule_id && <Tag color="blue">{item.rule_id}</Tag>}
-                  </Space>
-                }
-              >
-                <List.Item.Meta
-                  avatar={<span style={{ fontSize: 20 }}>{NODE_TYPE_ICONS[item.node_type]}</span>}
-                  title={
-                    <Space>
-                      <Text strong>{item.title}</Text>
-                      {item.audit_status === 'verified' && (
-                        <Tag color="success" style={{ fontSize: 10 }}>已审核</Tag>
-                      )}
-                      {item.audit_status === 'unreviewed' && (
-                        <Tag color="warning" style={{ fontSize: 10 }}>未审核</Tag>
-                      )}
-                      <Tag style={{ fontSize: 10 }}>
-                        可信度 {(item.trust_level * 100).toFixed(0)}%
+          <>
+            <List
+              dataSource={results}
+              renderItem={item => (
+                <List.Item
+                  key={item.id}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => openNodeDetail(item)}
+                  extra={
+                    <Space direction="vertical" size={2} style={{ textAlign: 'right' }}>
+                      <Tag color={NODE_TYPE_COLORS[item.node_type] || 'default'}>
+                        {NODE_TYPE_OPTIONS.find(o => o.value === item.node_type)?.label ?? item.node_type}
                       </Tag>
+                      {item.rule_id && <Tag color="blue">{item.rule_id}</Tag>}
                     </Space>
                   }
-                  description={
-                    <div>
-                      <Paragraph ellipsis={{ rows: 1 }} style={{ marginBottom: 4 }}>
-                        {item.content}
-                      </Paragraph>
-                      <Space size={4}>
-                        {item.source && <Text type="secondary" style={{ fontSize: 12 }}>来源: {item.source}</Text>}
-                        {item.jurisdiction && <Text type="secondary" style={{ fontSize: 12 }}>管辖: {item.jurisdiction}</Text>}
+                >
+                  <List.Item.Meta
+                    avatar={<span style={{ fontSize: 20 }}>{NODE_TYPE_ICONS[item.node_type] || <NodeIndexOutlined />}</span>}
+                    title={
+                      <Space>
+                        <Text strong>{item.title}</Text>
+                        {item.audit_status === 'verified' && (
+                          <Tag color="success" style={{ fontSize: 10 }}>已审核</Tag>
+                        )}
+                        {item.audit_status === 'unreviewed' && (
+                          <Tag color="warning" style={{ fontSize: 10 }}>未审核</Tag>
+                        )}
+                        <Tag style={{ fontSize: 10 }}>
+                          可信度 {(item.trust_level * 100).toFixed(0)}%
+                        </Tag>
                       </Space>
-                      <div style={{ marginTop: 4 }}>{tagColors(item.tags)}</div>
-                    </div>
-                  }
+                    }
+                    description={
+                      <div>
+                        <Paragraph ellipsis={{ rows: 1 }} style={{ marginBottom: 4 }}>
+                          {item.content}
+                        </Paragraph>
+                        <Space size={4}>
+                          {item.source && <Text type="secondary" style={{ fontSize: 12 }}>来源: {item.source}</Text>}
+                          {item.jurisdiction && <Text type="secondary" style={{ fontSize: 12 }}>管辖: {item.jurisdiction}</Text>}
+                        </Space>
+                        <div style={{ marginTop: 4 }}>{tagColors(item.tags)}</div>
+                      </div>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+            {total > pageSize && (
+              <div style={{ textAlign: 'center', marginTop: 16 }}>
+                <Pagination
+                  current={page}
+                  pageSize={pageSize}
+                  total={total}
+                  onChange={p => doSearch(p)}
+                  showSizeChanger={false}
+                  showTotal={(t) => `共 ${t} 条`}
                 />
-              </List.Item>
+              </div>
             )}
-          />
+          </>
         )}
       </Card>
 

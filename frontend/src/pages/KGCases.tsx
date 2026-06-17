@@ -8,7 +8,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Input, Select, Row, Col, Card, List, Tag,
-  Drawer, Button, Space, Typography, Spin, Empty,
+  Drawer, Button, Space, Typography, Spin, Empty, Pagination,
 } from 'antd';
 import {
   SearchOutlined, FolderOpenOutlined, SettingOutlined,
@@ -51,22 +51,29 @@ const KGCases: React.FC = () => {
   const [results, setResults] = useState<KGNode[]>([]);
   const [total, setTotal] = useState(0);
 
+  // Pagination
+  const pageSize = 50;
+  const [page, setPage] = useState(1);
+
   const [selectedNode, setSelectedNode] = useState<KGNode | null>(null);
   const [relatedNodes, setRelatedNodes] = useState<KGRelatedNode[]>([]);
   const [relatedLoading, setRelatedLoading] = useState(false);
 
-  const doSearch = useCallback(async () => {
+  const doSearch = useCallback(async (searchPage: number = 1) => {
     setLoading(true);
     try {
+      const offset = (searchPage - 1) * pageSize;
       const res = await searchKG({
         q: query || '',
         node_type: 'case',
         tags: tagFilter || undefined,
         jurisdiction: jurisdiction || undefined,
-        limit: 50,
+        limit: pageSize,
+        offset,
       });
       setResults(res.results);
       setTotal(res.total);
+      setPage(searchPage);
     } catch {
       // handled by interceptor
     } finally {
@@ -74,8 +81,13 @@ const KGCases: React.FC = () => {
     }
   }, [query, tagFilter, jurisdiction]);
 
+  // Search with filter reset to page 1
+  const handleSearch = useCallback(() => {
+    doSearch(1);
+  }, [doSearch]);
+
   useEffect(() => {
-    doSearch();
+    handleSearch();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openDetail = useCallback(async (node: KGNode) => {
@@ -116,7 +128,7 @@ const KGCases: React.FC = () => {
               placeholder="搜索案例标题/内容..."
               value={query}
               onChange={e => setQuery(e.target.value)}
-              onPressEnter={doSearch}
+              onPressEnter={() => handleSearch()}
               allowClear
             />
           </Col>
@@ -140,7 +152,7 @@ const KGCases: React.FC = () => {
             />
           </Col>
           <Col xs={12} sm={4}>
-            <Button type="primary" icon={<SearchOutlined />} onClick={doSearch} loading={loading}>
+            <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch} loading={loading}>
               搜索
             </Button>
           </Col>
@@ -153,49 +165,63 @@ const KGCases: React.FC = () => {
       </Card>
 
       {/* ── Results ── */}
-      <Card size="small" title={`案例列表 (${results.length})`}>
+      <Card size="small" title={`案例列表 (${total} 个，当前第 ${page} 页)`}>
         {loading ? (
           <div style={{ textAlign: 'center', padding: 64 }}><Spin size="large" /></div>
         ) : results.length === 0 ? (
           <Empty description="未找到匹配的案例" />
         ) : (
-          <List
-            dataSource={results}
-            renderItem={item => (
-              <List.Item
-                key={item.id}
-                style={{ cursor: 'pointer' }}
-                onClick={() => openDetail(item)}
-              >
-                <List.Item.Meta
-                  avatar={<FolderOpenOutlined style={{ fontSize: 20, color: '#fa8c16' }} />}
-                  title={
-                    <Space size={8}>
-                      <Text strong>{item.title}</Text>
-                      {item.audit_status === 'verified' && (
-                        <Tag color="success" style={{ fontSize: 10 }}>已审核</Tag>
-                      )}
-                    </Space>
-                  }
-                  description={
-                    <div>
-                      <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 4 }}>
-                        {item.content}
-                      </Paragraph>
-                      <Space size={4}>
-                        {item.source && <Text type="secondary" style={{ fontSize: 12 }}>来源: {item.source}</Text>}
-                        {item.jurisdiction && <Text type="secondary" style={{ fontSize: 12 }}>· {item.jurisdiction}</Text>}
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          · 可信度 {(item.trust_level * 100).toFixed(0)}%
-                        </Text>
+          <>
+            <List
+              dataSource={results}
+              renderItem={item => (
+                <List.Item
+                  key={item.id}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => openDetail(item)}
+                >
+                  <List.Item.Meta
+                    avatar={<FolderOpenOutlined style={{ fontSize: 20, color: '#fa8c16' }} />}
+                    title={
+                      <Space size={8}>
+                        <Text strong>{item.title}</Text>
+                        {item.audit_status === 'verified' && (
+                          <Tag color="success" style={{ fontSize: 10 }}>已审核</Tag>
+                        )}
                       </Space>
-                      <div style={{ marginTop: 4 }}>{tagColors(item.tags)}</div>
-                    </div>
-                  }
+                    }
+                    description={
+                      <div>
+                        <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 4 }}>
+                          {item.content}
+                        </Paragraph>
+                        <Space size={4}>
+                          {item.source && <Text type="secondary" style={{ fontSize: 12 }}>来源: {item.source}</Text>}
+                          {item.jurisdiction && <Text type="secondary" style={{ fontSize: 12 }}>· {item.jurisdiction}</Text>}
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            · 可信度 {(item.trust_level * 100).toFixed(0)}%
+                          </Text>
+                        </Space>
+                        <div style={{ marginTop: 4 }}>{tagColors(item.tags)}</div>
+                      </div>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+            {total > pageSize && (
+              <div style={{ textAlign: 'center', marginTop: 16 }}>
+                <Pagination
+                  current={page}
+                  pageSize={pageSize}
+                  total={total}
+                  onChange={p => doSearch(p)}
+                  showSizeChanger={false}
+                  showTotal={(t) => `共 ${t} 个`}
                 />
-              </List.Item>
+              </div>
             )}
-          />
+          </>
         )}
       </Card>
 
