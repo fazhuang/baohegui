@@ -36,6 +36,9 @@ const Announcements = lazy(() => import('../pages/Announcements'));
 const UserCenter = lazy(() => import('../pages/UserCenter'));
 const SystemManage = lazy(() => import('../pages/SystemManage'));
 const ComingSoonPage = lazy(() => import('../components/common/ComingSoonPage'));
+const KGGraph = lazy(() => import('../pages/KGGraph'));
+const KGCases = lazy(() => import('../pages/KGCases'));
+const KGLegal = lazy(() => import('../pages/KGLegal'));
 
 /** 全局 404 页面引用保留在 renderRoutes.tsx / AppRoutes.tsx */
 
@@ -137,12 +140,11 @@ export const routeConfig: RouteConfig[] = [
     element: KnowledgeBase,
     title: '知识库',
     subtitle: '招标投标知识图谱、投诉案例与法规依据',
-    menu: { key: 'kg', label: '知识库', icon: 'BookOutlined', group: 'knowledge' },
     requiredRoles: ['admin', 'user'],
     children: [
       {
         path: '/kg',
-        element: ComingSoonPage,
+        element: KGGraph,
         index: true,
         title: '知识图谱',
         menu: { key: 'kg-graph', label: '知识图谱', icon: 'NodeIndexOutlined', group: 'knowledge' },
@@ -150,14 +152,14 @@ export const routeConfig: RouteConfig[] = [
       },
       {
         path: '/kg/cases',
-        element: ComingSoonPage,
+        element: KGCases,
         title: '案例库',
         menu: { key: 'kg-cases', label: '案例库', icon: 'FolderOpenOutlined', group: 'knowledge' },
         requiredRoles: ['admin', 'user'],
       },
       {
         path: '/kg/legal',
-        element: ComingSoonPage,
+        element: KGLegal,
         title: '法规库',
         menu: { key: 'kg-legal', label: '法规库', icon: 'ReadOutlined', group: 'knowledge' },
         requiredRoles: ['admin', 'user'],
@@ -355,6 +357,8 @@ export function extractMenuItems(configs: RouteConfig[]): ExtractedMenuItem[] {
 
   for (const c of flattenRoutes(configs)) {
     if (!c.menu) continue;
+    const hasIndexChildAtSamePath = c.children?.some(child => child.index && child.path === c.path) ?? false;
+    if (hasIndexChildAtSamePath) continue;
     if (seen.has(c.menu.key)) continue;
     seen.add(c.menu.key);
     items.push({

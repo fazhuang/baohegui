@@ -205,46 +205,56 @@ async def run_compliance_check(
             ))
         t_param_bias = time.monotonic() - t0
 
-        # ── RAG 依据补充（v2: trust_level >= 0.3 过滤）──
+        # ── RAG 依据补充（v3: build_rag_context 保证 trust + audit_status 双重过滤）──
         from app.services.knowledge_graph import knowledge_graph
-        MIN_KG_TRUST = knowledge_graph.TRUST_MIN_ENRICHMENT
         kg_context: str = ""
         if rule_result.violations:
             for v in rule_result.violations:
                 if v.rule_id:
-                    regulations = knowledge_graph.find_regulation_for_rule(db, v.rule_id)
-                    if regulations:
+                    ctxs = knowledge_graph.build_rag_context(
+                        db, v.rule_id, v.description or "",
+                        max_regulations=2, max_cases=2,
+                    )
+                    if ctxs:
                         enriched = "; ".join(
-                            f"{r.get('node', {}).get('title', '')}: {r.get('node', {}).get('content', '')[:200]}"
-                            for r in regulations
-                            if r.get('node') and r.get('node', {}).get('trust_level', 0) >= MIN_KG_TRUST
+                            f"[节点#{c['node_id']}] {c['title']}: {c['content'][:200]}"
+                            for c in ctxs
                         )
                         if enriched:
-                            v.law_ref = (v.law_ref or "") + (" | " + enriched if v.law_ref else enriched)
+                            v.law_ref = (v.law_ref or "") + (" | KG " + enriched if v.law_ref else enriched)
+
+            # 构建 LLM prompt 的 KG 上下文（可追溯）
             kg_lines = []
+            seen_ids = set()
             for v in rule_result.violations[:5]:
                 if v.rule_id:
-                    regs = knowledge_graph.find_regulation_for_rule(db, v.rule_id)
-                    for r in regs:
-                        node = r.get('node', {})
-                        if node.get('title') and node.get('trust_level', 0) >= MIN_KG_TRUST:
+                    ctxs = knowledge_graph.build_rag_context(
+                        db, v.rule_id, v.description or "",
+                        max_regulations=2, max_cases=2,
+                    )
+                    for c in ctxs:
+                        nid = c.get("node_id")
+                        if nid and nid not in seen_ids:
+                            seen_ids.add(nid)
                             kg_lines.append(
-                                f"- {v.rule_id}: {node['title']} → {node.get('content', '')[:200]}"
-                                f" [可信度:{node.get('trust_level', 0):.0%}]"
+                                f"- [{c['type']}] {v.rule_id}: {c['title']}"
+                                f" (来源: {c['source']}, 节点#{nid}, 可信度:{c['trust_level']:.0%})"
                             )
             if not kg_lines:
                 sample_desc = rule_result.violations[0].description if rule_result.violations else ""
                 if sample_desc:
                     cases = knowledge_graph.find_similar_cases(db, sample_desc, limit=3)
                     for c in cases:
-                        if c.get('trust_level', 0) >= MIN_KG_TRUST:
+                        nid = c.get("id")
+                        if nid and nid not in seen_ids:
+                            seen_ids.add(nid)
                             kg_lines.append(
-                                f"- 相关案例: {c.get('title', '')}: {c.get('content', '')[:200]}"
-                                f" [可信度:{c.get('trust_level', 0):.0%}]"
+                                f"- [case] 相关案例: {c.get('title', '')}"
+                                f" (来源: {c.get('source', '')}, 节点#{nid}, 可信度:{c.get('trust_level', 0):.0%})"
                             )
             if kg_lines:
                 kg_context = "\n".join(kg_lines)
-                logger.info("RAG 补充: %d 条法规/案例上下文 (min_trust=%.0f%%)", len(kg_lines), MIN_KG_TRUST * 100)
+                logger.info("RAG 补充: %d 条法规/案例上下文 (min_trust=%.0f%%)", len(kg_lines), knowledge_graph.TRUST_MIN_ENRICHMENT * 100)
 
         # ── 第3层：LLM语义审查 ──
         t0 = time.monotonic()

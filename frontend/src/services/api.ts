@@ -321,3 +321,149 @@ export async function listAnnouncements(params?: { limit?: number }): Promise<Ar
   const { data } = await http.get('/announcements', { params });
   return data;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Knowledge Graph
+// ═══════════════════════════════════════════════════════════════
+
+export interface KGNode {
+  id: number;
+  node_type: 'regulation' | 'case' | 'rule' | 'template';
+  title: string;
+  content: string;
+  source: string;
+  source_url?: string;
+  tags: string;
+  rule_id?: string | null;
+  jurisdiction?: string;
+  effective_date?: string | null;
+  publish_date?: string | null;
+  trust_level: number;
+  audit_status: 'unreviewed' | 'verified' | 'flagged' | 'rejected';
+  created_at?: string;
+}
+
+export interface KGRelatedNode {
+  relation: string;
+  weight: number;
+  node: {
+    id: number;
+    node_type: string;
+    title: string;
+    content: string;
+    source: string;
+    rule_id?: string | null;
+    tags: string;
+    trust_level: number;
+    audit_status: string;
+  };
+}
+
+export interface KGRagContext {
+  type: 'regulation' | 'case';
+  rule_id: string;
+  title: string;
+  content: string;
+  source: string;
+  node_id: number;
+  trust_level: number;
+}
+
+export interface KGStats {
+  total_nodes: number;
+  by_type: Record<string, number>;
+  by_audit_status: Record<string, number>;
+  total_edges: number;
+}
+
+export interface KGSearchResult {
+  query: string;
+  results: KGNode[];
+  total: number;
+}
+
+export async function searchKG(params: {
+  q?: string;
+  node_type?: string;
+  min_trust?: number;
+  audit_status?: string;
+  tags?: string;
+  rule_id?: string;
+  jurisdiction?: string;
+  limit?: number;
+}): Promise<KGSearchResult> {
+  const { data } = await http.get('/kg/search', { params });
+  return data;
+}
+
+export async function getRelatedNodes(nodeId: number, relation?: string): Promise<{ related: KGRelatedNode[] }> {
+  const { data } = await http.get(`/kg/related/${nodeId}`, { params: relation ? { relation } : {} });
+  return data;
+}
+
+export async function getRegulationForRule(ruleId: string): Promise<{ regulations: KGRelatedNode[] }> {
+  const { data } = await http.get(`/kg/regulation/${ruleId}`);
+  return data;
+}
+
+export async function getCasesForRule(ruleId: string): Promise<{ cases: KGRelatedNode[] }> {
+  const { data } = await http.get(`/kg/cases/${ruleId}`);
+  return data;
+}
+
+export async function getSimilarCases(desc: string, limit?: number): Promise<{ cases: KGNode[] }> {
+  const { data } = await http.get('/kg/similar-cases', { params: { desc, limit: limit ?? 5 } });
+  return data;
+}
+
+export async function getRagContext(ruleId: string, violationDesc?: string): Promise<{ contexts: KGRagContext[]; context_count: number }> {
+  const { data } = await http.get('/kg/rag-context', { params: { rule_id: ruleId, violation_desc: violationDesc ?? '' } });
+  return data;
+}
+
+export async function getKGStats(): Promise<KGStats> {
+  const { data } = await http.get('/kg/stats');
+  return data;
+}
+
+// Admin-only KG APIs
+export async function seedKG(): Promise<{ status: string; count: number }> {
+  const { data } = await http.post('/kg/seed');
+  return data;
+}
+
+export async function createKGNode(node: {
+  node_type: string;
+  title: string;
+  content: string;
+  source?: string;
+  source_url?: string;
+  tags?: string;
+  rule_id?: string | null;
+  jurisdiction?: string;
+  trust_level?: number;
+  audit_status?: string;
+}): Promise<{ id: number; title: string; node_type: string }> {
+  const { data } = await http.post('/kg/node', node);
+  return data;
+}
+
+export async function updateKGNode(nodeId: number, updates: Record<string, unknown>): Promise<{ id: number; updated_fields: string[] }> {
+  const { data } = await http.put(`/kg/node/${nodeId}`, updates);
+  return data;
+}
+
+export async function auditKGNode(nodeId: number, trustLevel: number, auditStatus: string): Promise<{ id: number; trust_level: number; audit_status: string }> {
+  const { data } = await http.put(`/kg/node/${nodeId}/audit`, null, { params: { trust_level: trustLevel, audit_status: auditStatus } });
+  return data;
+}
+
+export async function deleteKGNode(nodeId: number): Promise<{ status: string; id: number }> {
+  const { data } = await http.delete(`/kg/node/${nodeId}`);
+  return data;
+}
+
+export async function getNodesNeedingReview(): Promise<{ nodes: Array<{ id: number; node_type: string; title: string; source: string; rule_id?: string; trust_level: number; audit_status: string; content_preview: string }> }> {
+  const { data } = await http.get('/kg/nodes/needing-review');
+  return data;
+}
