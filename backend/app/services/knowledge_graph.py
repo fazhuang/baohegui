@@ -47,14 +47,15 @@ class KnowledgeGraphService:
         query: str,
         node_type: Optional[str] = None,
         limit: int = 20,
+        offset: int = 0,
         min_trust: float = 0.0,
         audit_status: Optional[str] = None,
         tags: Optional[str] = None,
         rule_id: Optional[str] = None,
         jurisdiction: Optional[str] = None,
         is_admin: bool = False,
-    ) -> list[dict]:
-        """搜索知识图谱节点（多维度过滤）
+    ) -> tuple:
+        """搜索知识图谱节点（多维度过滤），返回 (results, total)。
 
         安全规则:
         - 所有用户默认排除 rejected（包括 admin）。rejected 节点只能在显式传 audit_status=rejected 时查看。
@@ -63,6 +64,7 @@ class KnowledgeGraphService:
         """
         # 硬限制
         limit = min(max(1, limit), KnowledgeGraphService.SEARCH_MAX_LIMIT)
+        offset = max(0, offset)
 
         q = db.query(KGNode)
         if node_type:
@@ -98,9 +100,13 @@ class KnowledgeGraphService:
                 )
             )
 
-        q = q.order_by(KGNode.trust_level.desc(), KGNode.created_at.desc()).limit(limit)
+        # 先取总数（分页前，不受 offset/limit 影响）
+        total = q.count()
 
-        return [
+        q = q.order_by(KGNode.trust_level.desc(), KGNode.created_at.desc())
+        q = q.offset(offset).limit(limit)
+
+        results = [
             {
                 "id": n.id,
                 "node_type": n.node_type,
@@ -119,6 +125,7 @@ class KnowledgeGraphService:
             }
             for n in q.all()
         ]
+        return results, total
 
     @staticmethod
     def get_related(
@@ -189,12 +196,14 @@ class KnowledgeGraphService:
 
         规则：
         - 仅返回 audit_status == "verified" 且 trust_level >= TRUST_MIN_ENRICHMENT 的节点
-        - 先按 rule_id 精确匹配，再按标题模糊匹配（fallback）
+        - 精确 rule_id 匹配时，优先选择有 references 或 demonstrated_by 出边的节点
+        - 其次按 trust_level desc、出边数量 desc、created_at desc 排序
+        - 标题模糊匹配仅作为 fallback
         - 如果发现匹配节点但不满足可信条件，返回 None（不允许绕过）
         """
         TRUST = KnowledgeGraphService.TRUST_MIN_ENRICHMENT
 
-        # 精确 rule_id 匹配
+        # 精确 rule_id 匹配 — 可信节点
         candidates = db.query(KGNode).filter(
             KGNode.node_type == "rule",
             KGNode.rule_id == rule_id,
@@ -203,9 +212,19 @@ class KnowledgeGraphService:
         ).all()
 
         if candidates:
-            return candidates[0]
+            # 按优先级排序：有出边 > 无出边，trust 高的优先，边数多的优先
+            scored = []
+            for node in candidates:
+                ref_count = db.query(KGEdge).filter(
+                    KGEdge.source_id == node.id,
+                    KGEdge.relation.in_(["references", "demonstrated_by"]),
+                ).count()
+                scored.append((node, ref_count))
+            # 排序：ref_count desc, trust_level desc, created_at desc (created_at 越大越新)
+            scored.sort(key=lambda x: (-x[1], -x[0].trust_level, -(x[0].created_at.timestamp() if x[0].created_at else 0)))
+            return scored[0][0]
 
-        # 标题模糊匹配（向后兼容）
+        # 标题模糊匹配（向后兼容）— 同样需要可信 + 排序
         candidates = db.query(KGNode).filter(
             KGNode.node_type == "rule",
             KGNode.title.ilike(f"%{rule_id}%"),
@@ -213,7 +232,18 @@ class KnowledgeGraphService:
             KGNode.trust_level >= TRUST,
         ).all()
 
-        return candidates[0] if candidates else None
+        if candidates:
+            scored = []
+            for node in candidates:
+                ref_count = db.query(KGEdge).filter(
+                    KGEdge.source_id == node.id,
+                    KGEdge.relation.in_(["references", "demonstrated_by"]),
+                ).count()
+                scored.append((node, ref_count))
+            scored.sort(key=lambda x: (-x[1], -x[0].trust_level, -(x[0].created_at.timestamp() if x[0].created_at else 0)))
+            return scored[0][0]
+
+        return None
 
     @staticmethod
     def find_regulation_for_rule(db: Session, rule_id: str) -> list[dict]:
@@ -240,7 +270,7 @@ class KnowledgeGraphService:
     @staticmethod
     def find_similar_cases(db: Session, violation_desc: str, limit: int = 5) -> list[dict]:
         """查找与违规描述相似的案例（仅 verified, trust >= TRUST_MIN_ENRICHMENT）"""
-        return KnowledgeGraphService.search(
+        results, _ = KnowledgeGraphService.search(
             db,
             violation_desc,
             node_type="case",
@@ -248,6 +278,7 @@ class KnowledgeGraphService:
             min_trust=KnowledgeGraphService.TRUST_MIN_ENRICHMENT,
             audit_status="verified",
         )
+        return results
 
     @staticmethod
     def find_template_for_rule(db: Session, rule_id: str) -> list[dict]:
@@ -273,9 +304,11 @@ class KnowledgeGraphService:
         返回格式：
         [
           {"type": "regulation", "rule_id": "R001", "title": "...", "content": "...",
-           "source": "...", "node_id": 12, "trust_level": 0.8},
+           "source": "...", "source_url": "...", "node_id": 12, "trust_level": 0.8,
+           "relation": "references", "edge_weight": 1.0},
           {"type": "case", "rule_id": "R001", "title": "...", "content": "...",
-           "source": "...", "node_id": 15, "trust_level": 0.6},
+           "source": "...", "source_url": "...", "node_id": 15, "trust_level": 0.6,
+           "relation": "demonstrated_by", "edge_weight": 1.0},
         ]
         """
         contexts: list[dict] = []
@@ -291,8 +324,13 @@ class KnowledgeGraphService:
                     "title": node.get("title", ""),
                     "content": node.get("content", "")[:500],
                     "source": node.get("source", ""),
+                    "source_url": node.get("source_url", ""),
                     "node_id": node.get("id"),
                     "trust_level": node.get("trust_level", 0),
+                    "effective_date": node.get("effective_date", ""),
+                    "publish_date": node.get("publish_date", ""),
+                    "relation": r.get("relation", ""),
+                    "edge_weight": r.get("weight", 1.0),
                 })
 
         # 2. 相关案例
@@ -310,8 +348,13 @@ class KnowledgeGraphService:
                     "title": node.get("title", ""),
                     "content": node.get("content", "")[:500],
                     "source": node.get("source", ""),
+                    "source_url": node.get("source_url", ""),
                     "node_id": node.get("id"),
                     "trust_level": node.get("trust_level", 0),
+                    "effective_date": node.get("effective_date", ""),
+                    "publish_date": node.get("publish_date", ""),
+                    "relation": c.get("relation", ""),
+                    "edge_weight": c.get("weight", 1.0),
                 })
 
         return contexts
@@ -960,6 +1003,7 @@ class KnowledgeGraphService:
                     count += 1
 
         # ── Phase 12: 概念节点 — project_categories.json 项目分类 (NEW) ──
+        # 使用 node_type="concept" 避免污染法规库
         proj_cat = KnowledgeGraphService._load_json(
             _RULES_DIR / "project_categories.json"
         )
@@ -967,9 +1011,9 @@ class KnowledgeGraphService:
             # 导入分类组
             for cg in proj_cat.get("category_groups", []):
                 cg_id = f"CAT-GROUP-{cg.get('id', '')}"
-                if not KnowledgeGraphService._node_exists_by_rule_id(db, cg_id, "regulation"):
+                if not KnowledgeGraphService._node_exists_by_rule_id(db, cg_id, "concept"):
                     n = KGNode(
-                        node_type="regulation",
+                        node_type="concept",
                         title=f"项目分类组: {cg.get('name', '')}",
                         content=f"分类组: {cg.get('name', '')}\n"
                                 f"图标: {cg.get('icon', '')}\n排序: {cg.get('order', '')}",
@@ -985,10 +1029,10 @@ class KnowledgeGraphService:
             # 导入子分类
             for cat in proj_cat.get("categories", []):
                 cat_id = f"CAT-{cat.get('id', '')}"
-                if not KnowledgeGraphService._node_exists_by_rule_id(db, cat_id, "regulation"):
+                if not KnowledgeGraphService._node_exists_by_rule_id(db, cat_id, "concept"):
                     recommended = "推荐" if cat.get("recommended") else ""
                     n = KGNode(
-                        node_type="regulation",
+                        node_type="concept",
                         title=f"项目分类: {cat.get('name', '')}",
                         content=f"分类: {cat.get('name', '')}\n"
                                 f"父分类: {cat.get('parent', '')}\n"

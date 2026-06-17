@@ -236,9 +236,12 @@ async def run_compliance_check(
                         nid = c.get("node_id")
                         if nid and nid not in seen_ids:
                             seen_ids.add(nid)
+                            # 包含法规条款摘要，节点ID/source/trust 可追溯
+                            content_preview = (c.get("content", "") or "")[:120]
                             kg_lines.append(
                                 f"- [{c['type']}] {v.rule_id}: {c['title']}"
-                                f" (来源: {c['source']}, 节点#{nid}, 可信度:{c['trust_level']:.0%})"
+                                f" ({content_preview}...)"
+                                f" [来源: {c.get('source', '')}, 节点#{nid}, 可信度:{c.get('trust_level', 0):.0%}]"
                             )
             if not kg_lines:
                 sample_desc = rule_result.violations[0].description if rule_result.violations else ""

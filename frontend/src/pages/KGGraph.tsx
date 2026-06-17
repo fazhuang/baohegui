@@ -30,6 +30,7 @@ const NODE_TYPE_OPTIONS = [
   { label: '案例', value: 'case' },
   { label: '规则', value: 'rule' },
   { label: '模板', value: 'template' },
+  { label: '概念', value: 'concept' },
 ];
 
 const AUDIT_STATUS_OPTIONS = [
@@ -44,6 +45,7 @@ const NODE_TYPE_COLORS: Record<string, string> = {
   case: 'orange',
   rule: 'green',
   template: 'purple',
+  concept: 'cyan',
 };
 
 const NODE_TYPE_ICONS: Record<string, React.ReactNode> = {

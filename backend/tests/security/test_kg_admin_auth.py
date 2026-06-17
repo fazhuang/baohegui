@@ -53,7 +53,13 @@ class TestKnowledgeGraphAuth:
     def test_admin_can_seed_kg(self, client: TestClient, db_session):
         admin = _create_user(db_session, "kg_admin", role="admin")
         resp = client.post("/api/kg/seed", headers=_headers(admin))
-        assert resp.status_code in (200, 500), f"Expected 200/500, got {resp.status_code}"
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert isinstance(data["count"], int)
+        assert data["count"] >= 0, f"Seed count should be >= 0, got {data['count']}"
+        # In test DB without rules/ dir, count may be 0 which is acceptable
+        # In production with rules/, count should be > 0
 
     # ── Node CRUD ─────────────────────────────────────
 

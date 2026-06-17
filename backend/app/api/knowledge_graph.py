@@ -31,13 +31,14 @@ class PaginatedResult(BaseModel):
 @router.get("/search")
 async def search_kg(
     q: str = Query(default="", description="搜索关键词"),
-    node_type: str | None = Query(None, description="节点类型: regulation/case/rule/template"),
+    node_type: str | None = Query(None, description="节点类型: regulation/case/rule/template/concept"),
     min_trust: float = Query(0.0, ge=0.0, le=1.0, description="最低可信度"),
     audit_status: str | None = Query(None, description="审核状态: unreviewed/verified/flagged/rejected"),
     tags: str | None = Query(None, description="标签过滤"),
     rule_id: str | None = Query(None, description="规则 ID 过滤"),
     jurisdiction: str | None = Query(None, description="管辖范围/平台过滤"),
     limit: int = Query(20, ge=1, le=100, description="返回数量上限"),
+    offset: int = Query(0, ge=0, description="偏移量（分页）"),
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -57,11 +58,12 @@ async def search_kg(
             detail="无权查看已拒绝的节点",
         )
 
-    results = knowledge_graph.search(
+    results, total = knowledge_graph.search(
         db,
         query=q,
         node_type=node_type,
         limit=limit,
+        offset=offset,
         min_trust=min_trust,
         audit_status=audit_status,
         tags=tags,
@@ -69,7 +71,7 @@ async def search_kg(
         jurisdiction=jurisdiction,
         is_admin=is_admin,
     )
-    return {"query": q, "results": results, "total": len(results)}
+    return {"query": q, "results": results, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/related/{node_id}")
@@ -245,7 +247,7 @@ async def nodes_needing_review(
 
 
 class NodeCreate(BaseModel):
-    node_type: str = Field(..., pattern="^(regulation|case|rule|template)$")
+    node_type: str = Field(..., pattern="^(regulation|case|rule|template|concept)$")
     title: str = Field(..., min_length=1, max_length=512)
     content: str = Field(..., min_length=1)
     source: str = Field(default="")
@@ -402,17 +404,32 @@ async def delete_kg_node(
 async def create_kg_edge(
     source_id: int = Query(..., description="源节点 ID"),
     target_id: int = Query(..., description="目标节点 ID"),
-    relation: str = Query(..., description="关系类型: references/demonstrated_by/mitigated_by"),
+    relation: str = Query(..., pattern="^(references|demonstrated_by|mitigated_by|cites|related_to)$",
+                          description="关系类型: references/demonstrated_by/mitigated_by/cites/related_to"),
     weight: float = Query(1.0, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
     admin: dict = Depends(require_admin),
 ):
-    """创建 KG 边 — 仅管理员"""
+    """创建 KG 边 — 仅管理员，重复边返回已有边不重复插入"""
     # 验证两端节点存在
     src = db.query(KGNode).filter(KGNode.id == source_id).first()
     tgt = db.query(KGNode).filter(KGNode.id == target_id).first()
     if not src or not tgt:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="源节点或目标节点不存在")
+
+    # 检查是否已存在（去重）
+    existing = db.query(KGEdge).filter(
+        KGEdge.source_id == source_id,
+        KGEdge.target_id == target_id,
+        KGEdge.relation == relation,
+    ).first()
+    if existing:
+        return {
+            "id": existing.id,
+            "relation": existing.relation,
+            "duplicate": True,
+            "message": "边已存在，未重复创建",
+        }
 
     edge = KGEdge(
         source_id=source_id,
