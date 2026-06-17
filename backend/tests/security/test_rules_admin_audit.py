@@ -4,9 +4,13 @@
 - admin POST /api/rules/platform 真实返回 200
 - 写操作后在 audit_logs 表中有对应记录
 - 普通用户写规则被拒绝且无日志产生
+
+重要：本测试 monkeypatch rule_sync_service._save() 为空操作，
+防止 UUID 测试规则写入正式 rules/platform_rules.json。
 """
 
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,6 +18,26 @@ from fastapi.testclient import TestClient
 from app.core.security import create_access_token, hash_password
 from app.models.user import User
 from app.core.audit import audit_service
+
+
+@pytest.fixture(autouse=True)
+def _isolate_rules_dir(monkeypatch):
+    """将 rule_sync_service._save() 替换为空操作，防止测试规则持久化到磁盘"""
+    from app.services.rule_sync import rule_sync_service
+
+    # 保存原始方法引用
+    original_save = rule_sync_service._save
+
+    # 替换为空操作 — 内存缓存仍正常，但不写文件
+    def _noop_save():
+        pass
+
+    monkeypatch.setattr(rule_sync_service, "_save", _noop_save)
+
+    yield
+
+    # 恢复原始方法（以防后续测试需要）
+    monkeypatch.setattr(rule_sync_service, "_save", original_save)
 
 
 def _create_user(db, username: str, role: str = "user") -> User:

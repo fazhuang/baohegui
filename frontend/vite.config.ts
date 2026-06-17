@@ -6,6 +6,7 @@ import { visualizer } from 'rollup-plugin-visualizer'
 
 export default defineConfig(() => {
   const isAnalyze = process.env.ANALYZE === 'true';
+  const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://backend:8000';
 
   return {
     plugins: [
@@ -28,7 +29,7 @@ export default defineConfig(() => {
       allowedHosts: true,
       proxy: {
         '/api': {
-          target: 'http://backend:8000',
+          target: apiProxyTarget,
           changeOrigin: true,
         },
       },
@@ -38,6 +39,7 @@ export default defineConfig(() => {
       environment: 'jsdom',
       setupFiles: './src/test/setup.ts',
       css: false,
+      exclude: ['scripts/**', 'node_modules/**'],
     },
     build: {
       rollupOptions: {
