@@ -1,11 +1,12 @@
 """知识图谱服务 — 关联检索、推理与种子数据管理
 
-v3 增强：
-- 种子数据从真实 rule assets 抽取（compliance_rules / base_rules / forbidden_words / platform_rules / case_study_reports）
+v4 增强：
+- 全面种子数据填充：base_rules / compliance_rules / industry_rules / platform_rules / parameter_bias / forbidden_words / complaint_cases / project_categories
 - 幂等 seed（基于 rule_id/title 去重）
 - 高级检索：rule_id, tags, jurisdiction, platform, min_trust, audit_status, limit
 - RAG 上下文构建：rule→法规、rule→案例、违规→RAG context
 - 仅 verified + trust≥阈值节点参与 RAG
+- 增强边创建：法规条文号匹配、关键词匹配、case→regulation
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re as _re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -21,6 +23,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.models.knowledge_graph import KGNode, KGEdge
+from app.models.complaint_case import ComplaintCase
 
 logger = logging.getLogger(__name__)
 
@@ -342,10 +345,26 @@ class KnowledgeGraphService:
 
     @staticmethod
     def seed_builtin_knowledge(db: Session) -> int:
-        """初始化知识图谱种子数据（幂等）。"""
+        """初始化知识图谱种子数据（幂等）。
+
+        数据来源（按导入顺序）：
+        1. base_rules.json law_ref → regulation 节点
+        2. 核心法规（6 部硬编码）
+        3. compliance_rules.json → rule 节点
+        4. base_rules.json rules → rule 节点（NEW）
+        5. industry/*.json → rule 节点（NEW）
+        6. platforms/*.json additional_rules → rule 节点（NEW）
+        7. parameter_bias_rules.json → rule 节点（NEW）
+        8. 硬编码案例（12 个真实案例）
+        9. complaint_cases 表同步 → case 节点（NEW）
+        10. platform_rules.json → regulation 节点
+        11. forbidden_words.json → rule 节点
+        12. project_categories.json → concept 节点（NEW）
+        13. 边创建：rule→regulation / rule→case / case→regulation
+        """
         count = 0
 
-        # ── 法规节点 — 从 base_rules.json 抽取 law_ref ──
+        # ── Phase 1: 法规节点 — 从 base_rules.json 抽取 law_ref ──
         base_rules = KnowledgeGraphService._load_json(
             _RULES_DIR / "base_rules.json"
         )
@@ -355,7 +374,6 @@ class KnowledgeGraphService:
                 law_ref = rule.get("law_ref", "")
                 if law_ref and law_ref not in seen_laws:
                     seen_laws.add(law_ref)
-                    # 解析法律来源
                     title = KnowledgeGraphService._extract_law_title(law_ref)
                     if not KnowledgeGraphService._node_exists(db, title=title, node_type="regulation"):
                         n = KGNode(
@@ -371,7 +389,7 @@ class KnowledgeGraphService:
                         db.add(n)
                         count += 1
 
-        # ── 法规模块：核心法规 ──
+        # ── Phase 2: 核心法规 ──
         core_regulations = [
             {
                 "title": "中华人民共和国招标投标法（2017年修订）",
@@ -431,7 +449,7 @@ class KnowledgeGraphService:
                 db.add(n)
                 count += 1
 
-        # ── 规则节点 — 从 compliance_rules.json 抽取 ──
+        # ── Phase 3: 规则节点 — compliance_rules.json ──
         compliance_rules = KnowledgeGraphService._load_json(
             _RULES_DIR / "compliance_rules.json"
         )
@@ -442,7 +460,6 @@ class KnowledgeGraphService:
                     continue
                 title = f"{rule_id}: {rule.get('rule_name', '')}"
                 if not KnowledgeGraphService._node_exists(db, title=title, node_type="rule"):
-                    # 收集法规依据
                     regulation_basis = rule.get("regulation_basis", [])
                     law_refs = []
                     if isinstance(regulation_basis, list):
@@ -470,7 +487,193 @@ class KnowledgeGraphService:
                     db.add(n)
                     count += 1
 
-        # ── 案例节点 — 从 case_study_reports 和投诉分析抽取真实案例 ──
+        # ── Phase 4: 规则节点 — base_rules.json 57条基础规则 (NEW) ──
+        if base_rules:
+            _prefix_category = {
+                "SEC": "章节完整性", "KEY": "关键字检测",
+                "FORB": "禁用词", "FMT": "格式要求",
+            }
+            for rule in base_rules.get("rules", []):
+                rule_id = rule.get("id", "")
+                if not rule_id:
+                    continue
+                if KnowledgeGraphService._node_exists_by_rule_id(db, rule_id, "rule"):
+                    continue
+
+                prefix = rule_id.split("-")[0] if "-" in rule_id else ""
+                category_tag = _prefix_category.get(prefix, "基础规则")
+
+                content_parts = [
+                    f"类型: {rule.get('type', '')}",
+                    f"目标: {rule.get('target', '')}",
+                    f"权重: {rule.get('weight', '')}",
+                    f"描述: {rule.get('description', '')}",
+                ]
+                if rule.get("law_ref"):
+                    content_parts.append(f"法规依据: {rule.get('law_ref', '')}")
+                if rule.get("suggestion"):
+                    content_parts.append(f"修改建议: {rule.get('suggestion', '')}")
+                if rule.get("pattern"):
+                    content_parts.append(f"匹配模式: {rule.get('pattern', '')}")
+                if rule.get("keyword"):
+                    content_parts.append(f"关键词: {rule.get('keyword', '')}")
+
+                n = KGNode(
+                    node_type="rule",
+                    title=f"{rule_id}: {rule.get('description', '')[:80]}",
+                    content="\n".join(content_parts),
+                    source="包合规基础规则库",
+                    tags=f"规则,基础规则,{category_tag},{rule.get('type', '')},{rule.get('severity', '')}",
+                    rule_id=rule_id,
+                    jurisdiction="全国",
+                    trust_level=0.75,
+                    audit_status="verified",
+                )
+                db.add(n)
+                count += 1
+
+        # ── Phase 5: 规则节点 — industry/*.json 行业细分规则 (NEW) ──
+        industry_dir = _RULES_DIR / "industry"
+        _industry_names = {
+            "construction": "房屋建筑工程", "gov": "政府采购", "municipal": "市政工程",
+            "highway": "公路工程", "railway": "铁路工程", "water": "水利水电工程",
+            "electric_power": "电力工程", "communication": "通信工程",
+            "petrochemical": "石油化工工程", "port_waterway": "港口与航道工程",
+            "mine": "矿山工程", "env_protection": "环保工程", "landscaping": "园林绿化工程",
+            "agriculture": "农林牧渔业", "medical_health": "医疗卫生",
+            "education_culture": "教育文体", "it": "信息技术", "healthcare": "医疗采购",
+        }
+        if industry_dir.exists():
+            for fname in sorted(os.listdir(industry_dir)):
+                if not fname.endswith(".json"):
+                    continue
+                ind_data = KnowledgeGraphService._load_json(industry_dir / fname)
+                if not ind_data:
+                    continue
+                ind_name = ind_data.get("industry",
+                    _industry_names.get(fname.replace(".json", ""), fname))
+                for rule in ind_data.get("rules", []):
+                    rule_id = rule.get("id", "")
+                    if not rule_id:
+                        continue
+                    if KnowledgeGraphService._node_exists_by_rule_id(db, rule_id, "rule"):
+                        continue
+
+                    content_parts = [
+                        f"行业: {ind_name}",
+                        f"类型: {rule.get('type', '')}",
+                        f"描述: {rule.get('description', '')}",
+                    ]
+                    if rule.get("law_ref"):
+                        content_parts.append(f"法规依据: {rule.get('law_ref', '')}")
+                    if rule.get("suggestion"):
+                        content_parts.append(f"修改建议: {rule.get('suggestion', '')}")
+                    if rule.get("keyword"):
+                        content_parts.append(f"关键词: {rule.get('keyword', '')}")
+
+                    n = KGNode(
+                        node_type="rule",
+                        title=f"[{ind_name}] {rule_id}: {rule.get('description', '')[:60]}",
+                        content="\n".join(content_parts),
+                        source="包合规行业规则库",
+                        tags=f"规则,行业规则,{ind_name},{rule.get('type', '')},{rule.get('category', '')}",
+                        rule_id=rule_id,
+                        jurisdiction="全国",
+                        trust_level=0.65,
+                        audit_status="verified",
+                    )
+                    db.add(n)
+                    count += 1
+
+        # ── Phase 6: 规则节点 — platforms/*.json 平台特定规则 (NEW) ──
+        platforms_dir = _RULES_DIR / "platforms"
+        if platforms_dir.exists():
+            for fname in sorted(os.listdir(platforms_dir)):
+                if not fname.endswith(".json"):
+                    continue
+                plat_data = KnowledgeGraphService._load_json(platforms_dir / fname)
+                if not plat_data:
+                    continue
+                plat_name = plat_data.get("name", fname)
+                plat_id = plat_data.get("platform", "")
+                for rule in plat_data.get("additional_rules", []):
+                    rule_id = rule.get("rule_id", "")
+                    if not rule_id:
+                        continue
+                    if KnowledgeGraphService._node_exists_by_rule_id(db, rule_id, "rule"):
+                        continue
+
+                    reg_basis = rule.get("regulation_basis", [])
+                    law_ref_text = "; ".join(
+                        f"{r.get('title', '')} {r.get('article', '')}"
+                        for r in reg_basis
+                    ) if isinstance(reg_basis, list) else ""
+
+                    content_parts = [
+                        f"平台: {plat_name}",
+                        f"类型: {rule.get('rule_type', '')}",
+                        f"描述: {rule.get('description', '')}",
+                        f"风险等级: {rule.get('risk_level', '')}",
+                    ]
+                    if law_ref_text:
+                        content_parts.append(f"法规依据: {law_ref_text}")
+                    if rule.get("suggestion"):
+                        content_parts.append(f"修改建议: {rule.get('suggestion', '')}")
+
+                    n = KGNode(
+                        node_type="rule",
+                        title=f"[{plat_name}] {rule_id}: {rule.get('rule_name', '')}",
+                        content="\n".join(content_parts),
+                        source=plat_name,
+                        tags=f"规则,平台规则,{plat_name},{rule.get('category', '')},{rule.get('rule_type', '')}",
+                        rule_id=rule_id,
+                        jurisdiction=plat_id or plat_name,
+                        trust_level=0.70,
+                        audit_status="verified",
+                    )
+                    db.add(n)
+                    count += 1
+
+        # ── Phase 7: 规则节点 — parameter_bias_rules.json 参数倾向检测 (NEW) ──
+        param_bias = KnowledgeGraphService._load_json(
+            _RULES_DIR / "parameter_bias_rules.json"
+        )
+        if param_bias:
+            for pattern_key, pattern in param_bias.get("violation_patterns", {}).items():
+                rule_id = pattern.get("rule_id", "")
+                if not rule_id:
+                    continue
+                if KnowledgeGraphService._node_exists_by_rule_id(db, rule_id, "rule"):
+                    continue
+
+                content_parts = [
+                    f"检测模式: {pattern_key}",
+                    f"严重度: {pattern.get('severity', '')} ({pattern.get('risk_level', '')})",
+                    f"描述: {pattern.get('description', '')}",
+                    f"检测逻辑: {pattern.get('check_logic', '')}",
+                    f"修改建议: {pattern.get('suggestion', '')}",
+                    f"检测字段: {', '.join(pattern.get('check_fields', []))}",
+                ]
+                if pattern.get("keywords"):
+                    content_parts.append(
+                        f"关键词: {', '.join(pattern['keywords'][:15])}"
+                    )
+
+                n = KGNode(
+                    node_type="rule",
+                    title=f"参数倾向检测 {rule_id}: {pattern.get('description', '')[:70]}",
+                    content="\n".join(content_parts),
+                    source="包合规参数倾向检测规则库",
+                    tags=f"规则,参数倾向检测,{pattern.get('severity', '')},{pattern.get('risk_level', '')}",
+                    rule_id=rule_id,
+                    jurisdiction="全国",
+                    trust_level=0.70,
+                    audit_status="verified",
+                )
+                db.add(n)
+                count += 1
+
+        # ── Phase 8: 案例节点 — 硬编码真实案例 ──
         real_cases = [
             {
                 "title": "宁夏人民医院手术麻醉设备 — 参数排他指向日本 Hadeco",
@@ -556,6 +759,66 @@ class KnowledgeGraphService:
                 "tags": "参数排斥,独家指标,行政处罚",
                 "jurisdiction": "四川",
             },
+            # ── 陕西典型案例 ──
+            {
+                "title": "陕西铜川陈炉镇非遗保护设备 — 内部型号锁定+原厂授权",
+                "content": "铜川陈炉镇非遗保护设备采购，14项投诉中9项成立：品牌指向+内部型号+原厂授权。3D陶瓷打印机参数锁定微瓷科技，构成实质性品牌锁定。处理结果：成立，中标无效。",
+                "source": "陕西政府采购网",
+                "tags": "品牌锁定,内部型号,厂家授权,投诉成立",
+                "jurisdiction": "陕西",
+            },
+            {
+                "title": "陕西神木水质提升工程 — 参数排他+歧视中小企业",
+                "content": "神木水质提升工程招标文件参数量身定做，且有授权要求，对企业规模和本地服务提出不合理门槛，歧视中小企业。处理结果：成立，重新采购。",
+                "source": "陕西政府采购网",
+                "tags": "参数排斥,中小企业歧视,授权锁定,投诉成立",
+                "jurisdiction": "陕西",
+            },
+            {
+                "title": "陕西西安市第三医院机器人手术系统 — 参数倾向+评审未量化",
+                "content": "西安市第三医院机器人手术系统采购，技术参数具有品牌倾向，且评审标准主观性过强、未细化量化。处理结果：成立，已修改招标文件。",
+                "source": "陕西政府采购网",
+                "tags": "参数倾向,评分标准,评审未量化,投诉成立",
+                "jurisdiction": "陕西",
+            },
+            # ── 青海典型案例 ──
+            {
+                "title": "青海职业技术大学语言文字基地 — 废止标准+评分未量化",
+                "content": "青海职业技术大学语言文字基地设备采购，引用已废止标准GB18584-2001和不存在的标准GB2423.6-1995，且评分标准未量化。处理结果：全部成立，重新采购。",
+                "source": "青海政府采购网",
+                "tags": "废止标准,评分未量化,投诉成立",
+                "jurisdiction": "青海",
+            },
+            {
+                "title": "青海生态环境监测专用设备 — 评分与参数扣分不匹配",
+                "content": "青海省生态环境监测专用设备采购，参数满分45分，但△项119项×扣3分=357分，○项20项×1分=20分，扣分总额377分远超45分。处理结果：成立，中标无效。",
+                "source": "青海政府采购网",
+                "tags": "评分标准,参数扣分,不匹配,投诉成立",
+                "jurisdiction": "青海",
+            },
+            # ── 四川典型案例 ──
+            {
+                "title": "四川成都 — 供应商变造检测报告参数",
+                "content": "成都市某机械设备采购项目，供应商中标后被发现修改检测报告技术参数，谋取中标。处罚：罚款+列入黑名单+2年内禁止参与政府采购。",
+                "source": "四川财政厅",
+                "tags": "虚假材料,检测报告,行政处罚",
+                "jurisdiction": "四川",
+            },
+            {
+                "title": "四川教学实训中心 — 评审专家未按规定扣分",
+                "content": "四川省某教学实训中心项目，供应商对技术参数做出负偏离响应，评审专家未按采购文件规定扣分。处罚：警告+罚款。",
+                "source": "四川财政厅",
+                "tags": "评审违规,参数扣分,行政处罚",
+                "jurisdiction": "四川",
+            },
+            # ── 其他省 ──
+            {
+                "title": "甘肃食品安全监测平台 — 符合性审查程序错误",
+                "content": "甘肃省食品安全风险监测信息化平台，评标委员会将非实质性条款缺失（产地信息未填写）错误认定为符合性审查不通过。处理结果：成立，中标无效，责令重新采购。",
+                "source": "甘肃政府采购网",
+                "tags": "程序违规,符合性审查,投诉成立",
+                "jurisdiction": "甘肃",
+            },
         ]
         for c in real_cases:
             if not KnowledgeGraphService._node_exists(db, title=c["title"], node_type="case"):
@@ -572,7 +835,70 @@ class KnowledgeGraphService:
                 db.add(n)
                 count += 1
 
-        # ── 平台规则节点 — 从 platform_rules.json 抽取 ──
+        # ── Phase 9: 案例节点 — 从 complaint_cases 表同步 (NEW) ──
+        _decision_tag_map = {
+            "upheld": "投诉成立", "rejected": "投诉驳回",
+            "partial": "部分成立", "dismissed": "驳回",
+        }
+        try:
+            db_cases = db.query(ComplaintCase).filter(
+                ComplaintCase.is_analyzed >= 0
+            ).all()
+            for case in db_cases:
+                # 使用 DB id 作为 rule_id 前缀确保幂等
+                cc_rule_id = f"CC-{case.id}"
+                if KnowledgeGraphService._node_exists_by_rule_id(db, cc_rule_id, "case"):
+                    continue
+
+                # 解析投诉类型标签
+                complaint_types = []
+                if case.complaint_types:
+                    try:
+                        complaint_types = json.loads(case.complaint_types)
+                    except (json.JSONDecodeError, TypeError):
+                        complaint_types = [case.complaint_types] if case.complaint_types else []
+
+                tags_parts = ["案例", "投诉案例",
+                    _decision_tag_map.get(case.decision_type, case.decision_type)]
+                if isinstance(complaint_types, list):
+                    tags_parts.extend(ct for ct in complaint_types if ct)
+
+                content_parts = []
+                if case.project_name:
+                    content_parts.append(f"项目名称: {case.project_name}")
+                if case.project_number:
+                    content_parts.append(f"项目编号: {case.project_number}")
+                if case.complainant:
+                    content_parts.append(f"投诉人: {case.complainant}")
+                if case.respondent:
+                    content_parts.append(f"被投诉人: {case.respondent}")
+                content_parts.append(f"处理结果: {_decision_tag_map.get(case.decision_type, case.decision_type)}")
+                if isinstance(complaint_types, list) and complaint_types:
+                    content_parts.append(f"投诉类型: {', '.join(complaint_types)}")
+                if case.legal_basis:
+                    content_parts.append(f"法规依据: {case.legal_basis}")
+                if case.summary:
+                    content_parts.append(f"摘要: {case.summary}")
+
+                title_prefix = f"[{case.province}] " if case.province != "全国" else ""
+                n = KGNode(
+                    node_type="case",
+                    title=f"{title_prefix}{case.title}",
+                    content="\n".join(content_parts)[:2000],
+                    source=f"{case.province}政府采购网",
+                    source_url=case.source_url or "",
+                    tags=",".join(filter(None, tags_parts)),
+                    jurisdiction=case.province,
+                    rule_id=cc_rule_id,
+                    trust_level=0.55,
+                    audit_status="unreviewed",  # 爬虫数据需人工审核
+                )
+                db.add(n)
+                count += 1
+        except Exception as e:
+            logger.warning("从 complaint_cases 表同步案例节点失败: %s", e)
+
+        # ── Phase 10: 平台规则 → regulation 节点 — platform_rules.json ──
         platform_rules = KnowledgeGraphService._load_json(
             _RULES_DIR / "platform_rules.json"
         )
@@ -602,7 +928,7 @@ class KnowledgeGraphService:
                     db.add(n)
                     count += 1
 
-        # ── 从 forbidden_words.json 抽取禁用词模式作为规则关联 ──
+        # ── Phase 11: 规则节点 — forbidden_words.json 禁用词模式 ──
         forbidden_words = KnowledgeGraphService._load_json(
             _RULES_DIR / "forbidden_words.json"
         )
@@ -633,20 +959,89 @@ class KnowledgeGraphService:
                     db.add(n)
                     count += 1
 
+        # ── Phase 12: 概念节点 — project_categories.json 项目分类 (NEW) ──
+        proj_cat = KnowledgeGraphService._load_json(
+            _RULES_DIR / "project_categories.json"
+        )
+        if proj_cat:
+            # 导入分类组
+            for cg in proj_cat.get("category_groups", []):
+                cg_id = f"CAT-GROUP-{cg.get('id', '')}"
+                if not KnowledgeGraphService._node_exists_by_rule_id(db, cg_id, "regulation"):
+                    n = KGNode(
+                        node_type="regulation",
+                        title=f"项目分类组: {cg.get('name', '')}",
+                        content=f"分类组: {cg.get('name', '')}\n"
+                                f"图标: {cg.get('icon', '')}\n排序: {cg.get('order', '')}",
+                        source="包合规项目分类体系",
+                        tags="分类体系,项目分类,分类组",
+                        rule_id=cg_id,
+                        jurisdiction="全国",
+                        trust_level=0.60,
+                        audit_status="verified",
+                    )
+                    db.add(n)
+                    count += 1
+            # 导入子分类
+            for cat in proj_cat.get("categories", []):
+                cat_id = f"CAT-{cat.get('id', '')}"
+                if not KnowledgeGraphService._node_exists_by_rule_id(db, cat_id, "regulation"):
+                    recommended = "推荐" if cat.get("recommended") else ""
+                    n = KGNode(
+                        node_type="regulation",
+                        title=f"项目分类: {cat.get('name', '')}",
+                        content=f"分类: {cat.get('name', '')}\n"
+                                f"父分类: {cat.get('parent', '')}\n"
+                                f"图标: {cat.get('icon', '')}\n"
+                                f"{'推荐分类' if recommended else '可选分类'}",
+                        source="包合规项目分类体系",
+                        tags=f"分类体系,项目分类,{cat.get('parent', '')},{recommended}".rstrip(","),
+                        rule_id=cat_id,
+                        jurisdiction="全国",
+                        trust_level=0.60,
+                        audit_status="verified",
+                    )
+                    db.add(n)
+                    count += 1
+
         db.flush()
 
-        # ── 创建 edges: rule → regulation (引用) ──
+        # ═══════════════════════════════════════════════════════════════
+        # Phase 13: 边创建 — 增强版
+        # ═══════════════════════════════════════════════════════════════
+
         all_rules = db.query(KGNode).filter(KGNode.node_type == "rule").all()
-        all_regulations = db.query(KGNode).filter(KGNode.node_type == "regulation").all()
+        all_regulations = db.query(KGNode).filter(
+            KGNode.node_type.in_(["regulation", "concept"])
+        ).all()
+        all_cases = db.query(KGNode).filter(KGNode.node_type == "case").all()
         edges_created = 0
 
+        # 构建索引加速匹配
+        reg_title_index = {}  # title → [reg_node, ...]
+        for reg_node in all_regulations:
+            if reg_node.title:
+                t = reg_node.title
+                reg_title_index.setdefault(t, []).append(reg_node)
+
+        # ── edges A: rule → regulation (references) ──
+        # 改进：检查法规标题、法规条文号（如"第二十条"）是否出现在规则内容中
         for rule_node in all_rules:
             for reg_node in all_regulations:
-                # 规则内容包含法规标题
-                if reg_node.title and rule_node.content and (
-                    reg_node.title in rule_node.content
-                    or (reg_node.title[:10] in rule_node.content)
-                ):
+                if not reg_node.title or not rule_node.content:
+                    continue
+                matched = False
+                # 完整标题匹配
+                if len(reg_node.title) >= 8 and reg_node.title in rule_node.content:
+                    matched = True
+                # 标题前 10 字（处理缩写/简化）
+                elif len(reg_node.title) >= 6 and reg_node.title[:10] in rule_node.content:
+                    matched = True
+                # 法规条文号匹配（如"第二十条"、"第三十二条"）
+                elif _RE_ARTICLE_PAT.search(reg_node.content) and \
+                     any(a in rule_node.content for a in _re.findall(r'第[一二三四五六七八九十百千]+条', reg_node.content)):
+                    matched = True
+                if matched:
                     if not KnowledgeGraphService._edge_exists(
                         db, rule_node.id, reg_node.id, "references"
                     ):
@@ -659,16 +1054,21 @@ class KnowledgeGraphService:
                         db.add(e)
                         edges_created += 1
 
-        # ── 创建 edges: rule → case (被案例证实) ──
-        all_cases = db.query(KGNode).filter(KGNode.node_type == "case").all()
+        # ── edges B: rule → case (demonstrated_by) ──
+        # 改进：标签交集 + 关键词匹配
         for rule_node in all_rules:
-            rule_tags = (rule_node.tags or "").split(",")
+            rule_tags = set(t.strip().lower() for t in (rule_node.tags or "").split(","))
+            rule_content_lower = (rule_node.content or "").lower()
             for case_node in all_cases:
-                case_tags = (case_node.tags or "").split(",")
-                common_tags = set(t.strip() for t in rule_tags) & set(
-                    t.strip() for t in case_tags
-                )
-                if common_tags and common_tags != {"规则"}:
+                case_tags = set(t.strip().lower() for t in (case_node.tags or "").split(","))
+                common_tags = rule_tags & case_tags
+                # 排除仅因"规则"这通用标签匹配的
+                meaningful = common_tags - {"规则", "rule", ""}
+                if not meaningful:
+                    continue
+                # 至少需要 2 个共同标签，或者有特定关键词匹配
+                if len(meaningful) >= 2 or \
+                   any(kw in rule_content_lower for kw in meaningful):
                     if not KnowledgeGraphService._edge_exists(
                         db, rule_node.id, case_node.id, "demonstrated_by"
                     ):
@@ -681,11 +1081,35 @@ class KnowledgeGraphService:
                         db.add(e)
                         edges_created += 1
 
+        # ── edges C: case → regulation (cites) — 从案例的法律依据匹配法规 (NEW) ──
+        for case_node in all_cases:
+            case_content = (case_node.content or "").lower()
+            for reg_node in all_regulations:
+                if not reg_node.title:
+                    continue
+                reg_title_lower = reg_node.title.lower()
+                # 案例内容包含法规标题
+                if len(reg_node.title) >= 6 and reg_title_lower in case_content:
+                    if not KnowledgeGraphService._edge_exists(
+                        db, case_node.id, reg_node.id, "cites"
+                    ):
+                        e = KGEdge(
+                            source_id=case_node.id,
+                            target_id=reg_node.id,
+                            relation="cites",
+                            weight=0.8,
+                        )
+                        db.add(e)
+                        edges_created += 1
+
         db.commit()
         logger.info(
-            "知识图谱种子完成: %d 节点 + %d 边",
+            "知识图谱种子完成: %d 节点 + %d 边 (类型分布: reg=%d, rule=%d, case=%d)",
             count,
             edges_created,
+            len(all_regulations),
+            len(all_rules),
+            len(all_cases),
         )
         return count + edges_created
 
@@ -696,6 +1120,13 @@ class KnowledgeGraphService:
         """检查节点是否已存在（幂等）"""
         return db.query(KGNode).filter(
             KGNode.title == title, KGNode.node_type == node_type
+        ).first() is not None
+
+    @staticmethod
+    def _node_exists_by_rule_id(db: Session, rule_id: str, node_type: str = "rule") -> bool:
+        """通过 rule_id + node_type 检查节点是否已存在（幂等）"""
+        return db.query(KGNode).filter(
+            KGNode.rule_id == rule_id, KGNode.node_type == node_type
         ).first() is not None
 
     @staticmethod
@@ -723,9 +1154,7 @@ class KnowledgeGraphService:
     @staticmethod
     def _extract_law_title(law_ref: str) -> str:
         """从法律引用文字中提取法律标题"""
-        # 常见格式：《政府采购法实施条例》第三十四条
-        import re
-        m = re.match(r'[《「]([^》」]+)[》」]', law_ref)
+        m = _re.match(r'[《「]([^》」]+)[》」]', law_ref)
         if m:
             return m.group(1)
         return law_ref[:50]
@@ -744,16 +1173,18 @@ class KnowledgeGraphService:
     @staticmethod
     def _parse_date(date_str: str) -> Optional[date]:
         """安全解析日期字符串"""
-        import re
         if not date_str:
             return None
         try:
             return date.fromisoformat(date_str)
         except (ValueError, TypeError):
-            m = re.match(r"(\d{4})-(\d{2})-(\d{2})", date_str)
+            m = _re.match(r"(\d{4})-(\d{2})-(\d{2})", date_str)
             if m:
                 return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         return None
 
+
+# 预编译正则（模块级）
+_RE_ARTICLE_PAT = _re.compile(r'第[一二三四五六七八九十百千]+条')
 
 knowledge_graph = KnowledgeGraphService()
