@@ -82,7 +82,8 @@ const KGLegal: React.FC = () => {
     setSelectedNode(node);
     setRelatedLoading(true);
     try {
-      const rel = await getRelatedNodes(node.id);
+      // 法规节点是边上的 target，用 incoming 查询以找到引用它的 rule
+      const rel = await getRelatedNodes(node.id, undefined, "incoming");
       setRelatedNodes(rel.related);
     } catch {
       setRelatedNodes([]);

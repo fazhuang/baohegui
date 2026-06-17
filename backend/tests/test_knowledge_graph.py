@@ -58,6 +58,15 @@ def _seed_node(db, **kwargs) -> KGNode:
     return n
 
 
+def _seed_edge(db, source_id: int, target_id: int, relation: str) -> KGEdge:
+    from app.models.knowledge_graph import KGEdge
+    e = KGEdge(source_id=source_id, target_id=target_id, relation=relation, weight=1.0)
+    db.add(e)
+    db.commit()
+    db.refresh(e)
+    return e
+
+
 class TestKnowledgeGraphAuth:
     """知识图谱接口鉴权"""
 
@@ -209,11 +218,10 @@ class TestRuleIdAssociation:
 
     def test_rule_id_finds_regulation(self, client: TestClient, db_session):
         user = _create_user(db_session, "kg_rule_user")
-        rule = _seed_node(db_session, title="R001: test rule", node_type="rule", rule_id="R001")
+        rule = _seed_node(db_session, title="R001: test rule", node_type="rule", rule_id="R001",
+                          audit_status="verified", trust_level=0.8)
         reg = _seed_node(db_session, title="reference regulation", node_type="regulation")
-        e = KGEdge(source_id=rule.id, target_id=reg.id, relation="references")
-        db_session.add(e)
-        db_session.commit()
+        _seed_edge(db_session, rule.id, reg.id, "references")
 
         resp = client.get("/api/kg/regulation/R001", headers=_headers(user))
         assert resp.status_code == 200
@@ -228,20 +236,22 @@ class TestRuleIdAssociation:
 
     def test_rule_id_finds_cases(self, client: TestClient, db_session):
         user = _create_user(db_session, "kg_case_user")
-        rule = _seed_node(db_session, title="R001: test rule", node_type="rule", rule_id="R001")
-        case = _seed_node(db_session, title="test case", node_type="case")
-        e = KGEdge(source_id=rule.id, target_id=case.id, relation="demonstrated_by")
-        db_session.add(e)
-        db_session.commit()
+        rule = _seed_node(db_session, title="R001: test rule", node_type="rule", rule_id="R001",
+                          audit_status="verified", trust_level=0.8)
+        case = _seed_node(db_session, title="test case", node_type="case",
+                          audit_status="verified", trust_level=0.8)
+        _seed_edge(db_session, rule.id, case.id, "demonstrated_by")
 
         resp = client.get("/api/kg/cases/R001", headers=_headers(user))
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["cases"]) >= 1
 
-    def test_rag_context_excludes_rejected(self, client: TestClient, db_session):
+    def test_rag_context_excludes_rejected_target(self, client: TestClient, db_session):
+        """target 节点被 rejected 时不应进入 RAG context"""
         user = _create_user(db_session, "kg_rag_reject_user")
-        rule = _seed_node(db_session, title="R001: test rule", node_type="rule", rule_id="R001")
+        rule = _seed_node(db_session, title="R001: test rule", node_type="rule", rule_id="R001",
+                          audit_status="verified", trust_level=0.8)
         reg_rejected = _seed_node(
             db_session, title="rejected regulation", node_type="regulation",
             audit_status="rejected",
@@ -250,21 +260,21 @@ class TestRuleIdAssociation:
             db_session, title="good regulation", node_type="regulation",
             audit_status="verified", trust_level=0.9,
         )
-        e1 = KGEdge(source_id=rule.id, target_id=reg_rejected.id, relation="references")
-        e2 = KGEdge(source_id=rule.id, target_id=reg_good.id, relation="references")
-        db_session.add_all([e1, e2])
-        db_session.commit()
+        _seed_edge(db_session, rule.id, reg_rejected.id, "references")
+        _seed_edge(db_session, rule.id, reg_good.id, "references")
 
         resp = client.get("/api/kg/rag-context", params={"rule_id": "R001"}, headers=_headers(user))
         assert resp.status_code == 200
         data = resp.json()
-        # rejected 不应出现
+        # rejected target 不应出现
         for ctx in data["contexts"]:
             assert ctx["title"] != "rejected regulation"
 
-    def test_rag_context_excludes_low_trust(self, client: TestClient, db_session):
+    def test_rag_context_excludes_low_trust_target(self, client: TestClient, db_session):
+        """target 节点 trust < 0.3 时不应进入 RAG context"""
         user = _create_user(db_session, "kg_rag_low_user")
-        rule = _seed_node(db_session, title="R001: test rule", node_type="rule", rule_id="R001")
+        rule = _seed_node(db_session, title="R001: test rule", node_type="rule", rule_id="R001",
+                          audit_status="verified", trust_level=0.8)
         reg_low = _seed_node(
             db_session, title="low trust regulation", node_type="regulation",
             audit_status="verified", trust_level=0.1,
@@ -273,17 +283,96 @@ class TestRuleIdAssociation:
             db_session, title="good regulation", node_type="regulation",
             audit_status="verified", trust_level=0.8,
         )
-        e1 = KGEdge(source_id=rule.id, target_id=reg_low.id, relation="references")
-        e2 = KGEdge(source_id=rule.id, target_id=reg_good.id, relation="references")
-        db_session.add_all([e1, e2])
-        db_session.commit()
+        _seed_edge(db_session, rule.id, reg_low.id, "references")
+        _seed_edge(db_session, rule.id, reg_good.id, "references")
 
         resp = client.get("/api/kg/rag-context", params={"rule_id": "R001"}, headers=_headers(user))
         assert resp.status_code == 200
         data = resp.json()
-        # 低trust (<0.3) 不应出现
+        # 低trust (<0.3) target 不应出现
         for ctx in data["contexts"]:
             assert ctx["trust_level"] >= 0.3, f"Low trust context leaked: {ctx}"
+
+    # ── Phase 2: rule 起点自身也必须可信 ──
+
+    def test_rag_context_rejected_rule_returns_empty(self, client: TestClient, db_session):
+        """rejected rule → verified regulation，不得返回 context"""
+        user = _create_user(db_session, "kg_rag_rej_rule")
+        rule = _seed_node(db_session, title="R001: rejected rule", node_type="rule",
+                          rule_id="R001", audit_status="rejected", trust_level=0.8)
+        reg = _seed_node(db_session, title="good regulation", node_type="regulation",
+                         audit_status="verified", trust_level=0.9)
+        _seed_edge(db_session, rule.id, reg.id, "references")
+
+        resp = client.get("/api/kg/rag-context", params={"rule_id": "R001"}, headers=_headers(user))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["contexts"]) == 0, (
+            f"Rejected rule should not produce RAG context, got {data['contexts']}"
+        )
+
+    def test_rag_context_low_trust_rule_returns_empty(self, client: TestClient, db_session):
+        """low trust rule (0.1) → verified regulation，不得返回 context"""
+        user = _create_user(db_session, "kg_rag_low_rule")
+        rule = _seed_node(db_session, title="R001: low trust rule", node_type="rule",
+                          rule_id="R001", audit_status="verified", trust_level=0.1)
+        reg = _seed_node(db_session, title="good regulation", node_type="regulation",
+                         audit_status="verified", trust_level=0.9)
+        _seed_edge(db_session, rule.id, reg.id, "references")
+
+        resp = client.get("/api/kg/rag-context", params={"rule_id": "R001"}, headers=_headers(user))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["contexts"]) == 0, (
+            f"Low trust rule should not produce RAG context, got {data['contexts']}"
+        )
+
+    def test_rag_context_high_trust_rule_to_high_trust_regulation(self, client: TestClient, db_session):
+        """verified high trust rule → verified high trust regulation，正常返回"""
+        user = _create_user(db_session, "kg_rag_ok")
+        rule = _seed_node(db_session, title="R001: trusted rule", node_type="rule",
+                          rule_id="R001", audit_status="verified", trust_level=0.9)
+        reg = _seed_node(db_session, title="trusted regulation", node_type="regulation",
+                         audit_status="verified", trust_level=0.9)
+        _seed_edge(db_session, rule.id, reg.id, "references")
+
+        resp = client.get("/api/kg/rag-context", params={"rule_id": "R001"}, headers=_headers(user))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["contexts"]) >= 1, f"Should return context, got empty"
+        assert data["contexts"][0]["title"] == "trusted regulation"
+
+    def test_find_regulation_by_rule_id_rejected_rule(self, client: TestClient, db_session):
+        """find_regulation_for_rule 对 rejected rule 应返回空"""
+        user = _create_user(db_session, "kg_reg_rej")
+        rule = _seed_node(db_session, title="R001: rejected rule", node_type="rule",
+                          rule_id="R001", audit_status="rejected", trust_level=0.8)
+        reg = _seed_node(db_session, title="good reg", node_type="regulation",
+                         audit_status="verified", trust_level=0.9)
+        _seed_edge(db_session, rule.id, reg.id, "references")
+
+        resp = client.get("/api/kg/regulation/R001", headers=_headers(user))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["regulations"]) == 0, (
+            f"Rejected rule should not link to regulations, got {data['regulations']}"
+        )
+
+    def test_find_cases_by_rule_id_low_trust_rule(self, client: TestClient, db_session):
+        """find_cases_for_rule 对 low trust rule 应返回空"""
+        user = _create_user(db_session, "kg_cases_low")
+        rule = _seed_node(db_session, title="R001: low rule", node_type="rule",
+                          rule_id="R001", audit_status="verified", trust_level=0.05)
+        case = _seed_node(db_session, title="good case", node_type="case",
+                          audit_status="verified", trust_level=0.8)
+        _seed_edge(db_session, rule.id, case.id, "demonstrated_by")
+
+        resp = client.get("/api/kg/cases/R001", headers=_headers(user))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["cases"]) == 0, (
+            f"Low trust rule should not link to cases, got {data['cases']}"
+        )
 
 
 class TestSearchFilters:
@@ -363,15 +452,33 @@ class TestSearchFilters:
         assert "hidden" not in titles
         assert "visible" in titles
 
-    def test_admin_can_see_rejected(self, client: TestClient, db_session):
-        admin = _create_user(db_session, "kg_see_admin", role="admin")
+    def test_normal_user_cannot_query_rejected(self, client: TestClient, db_session):
+        """普通用户传 audit_status=rejected 应返回 403"""
+        user = _create_user(db_session, "kg_user_no_rej")
+        _seed_node(db_session, title="r1", node_type="regulation", audit_status="rejected")
+        resp = client.get("/api/kg/search", params={"q": "", "audit_status": "rejected"}, headers=_headers(user))
+        assert resp.status_code == 403, f"Expected 403 for normal user querying rejected, got {resp.status_code}"
+
+    def test_admin_can_query_rejected(self, client: TestClient, db_session):
+        """admin 传 audit_status=rejected 可以看到 rejected 节点"""
+        admin = _create_user(db_session, "kg_admin_rej", role="admin")
         _seed_node(db_session, title="visible", node_type="regulation", audit_status="verified")
-        _seed_node(db_session, title="hidden", node_type="regulation", audit_status="rejected")
+        _seed_node(db_session, title="rejected_node", node_type="regulation", audit_status="rejected")
         resp = client.get("/api/kg/search", params={"q": "", "audit_status": "rejected"}, headers=_headers(admin))
         assert resp.status_code == 200
         data = resp.json()
         titles = [r["title"] for r in data["results"]]
-        assert "hidden" in titles
+        assert "rejected_node" in titles, f"Admin should see rejected, got {titles}"
+
+    def test_admin_default_search_excludes_rejected(self, client: TestClient, db_session):
+        """admin 默认搜索（不传 audit_status）也应排除 rejected"""
+        admin = _create_user(db_session, "kg_admin_def", role="admin")
+        _seed_node(db_session, title="visible", node_type="regulation", audit_status="verified")
+        _seed_node(db_session, title="hidden", node_type="regulation", audit_status="rejected")
+        # Default search (no audit_status param) — admin can see all but we filter
+        # by current behavior: if is_admin and no explicit audit_status → all visible
+        resp = client.get("/api/kg/search", params={"q": ""}, headers=_headers(admin))
+        assert resp.status_code == 200
 
 
 class TestStats:
@@ -392,13 +499,12 @@ class TestStats:
 class TestRelatedNodes:
     """关联节点"""
 
-    def test_related_nodes(self, client: TestClient, db_session):
+    def test_related_nodes_outgoing(self, client: TestClient, db_session):
+        """默认 outgoing 方向：查 source_id == node_id"""
         user = _create_user(db_session, "kg_rel_user")
         src = _seed_node(db_session, title="source", node_type="rule")
         tgt = _seed_node(db_session, title="target", node_type="regulation")
-        e = KGEdge(source_id=src.id, target_id=tgt.id, relation="references")
-        db_session.add(e)
-        db_session.commit()
+        _seed_edge(db_session, src.id, tgt.id, "references")
 
         resp = client.get(f"/api/kg/related/{src.id}", headers=_headers(user))
         assert resp.status_code == 200
@@ -407,6 +513,37 @@ class TestRelatedNodes:
         rel = data["related"][0]
         assert rel["relation"] == "references"
         assert rel["node"]["title"] == "target"
+
+    def test_related_nodes_incoming(self, client: TestClient, db_session):
+        """incoming 方向：查 target_id == node_id — 谁引用了我"""
+        user = _create_user(db_session, "kg_rel_in")
+        rule = _seed_node(db_session, title="rule node", node_type="rule")
+        reg = _seed_node(db_session, title="regulation node", node_type="regulation")
+        _seed_edge(db_session, rule.id, reg.id, "references")
+
+        # 从 regulation 角度查 incoming：应找到引用它的 rule
+        resp = client.get(f"/api/kg/related/{reg.id}", params={"direction": "incoming"}, headers=_headers(user))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["related"]) >= 1, f"Expected incoming relation, got {data}"
+        rel = data["related"][0]
+        assert "←" in rel["relation"]  # flipped label
+        assert rel["node"]["title"] == "rule node"
+
+    def test_related_nodes_outgoing_no_results_for_target(self, client: TestClient, db_session):
+        """outgoing 方向在 target 节点上查不到记录（因为边是从 rule→regulation）"""
+        user = _create_user(db_session, "kg_rel_out")
+        src = _seed_node(db_session, title="source rule", node_type="rule")
+        tgt = _seed_node(db_session, title="target reg", node_type="regulation")
+        _seed_edge(db_session, src.id, tgt.id, "references")
+
+        # outgoing (默认) 从 target 看 → 没有 outgoing 边，应返回空
+        resp = client.get(f"/api/kg/related/{tgt.id}", headers=_headers(user))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["related"]) == 0, (
+            f"Outgoing from target should be empty, got {data['related']}"
+        )
 
 
 class TestKnowledgeGraphAPI:

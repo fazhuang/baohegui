@@ -396,8 +396,8 @@ export async function searchKG(params: {
   return data;
 }
 
-export async function getRelatedNodes(nodeId: number, relation?: string): Promise<{ related: KGRelatedNode[] }> {
-  const { data } = await http.get(`/kg/related/${nodeId}`, { params: relation ? { relation } : {} });
+export async function getRelatedNodes(nodeId: number, relation?: string, direction?: string): Promise<{ related: KGRelatedNode[] }> {
+  const { data } = await http.get(`/kg/related/${nodeId}`, { params: { ...(relation ? { relation } : {}), ...(direction ? { direction } : {}) } });
   return data;
 }
 

@@ -49,8 +49,15 @@ class KnowledgeGraphService:
         tags: Optional[str] = None,
         rule_id: Optional[str] = None,
         jurisdiction: Optional[str] = None,
+        is_admin: bool = False,
     ) -> list[dict]:
-        """搜索知识图谱节点（多维度过滤）"""
+        """搜索知识图谱节点（多维度过滤）
+
+        安全规则:
+        - 非 admin 调用时，audit_status=rejected 在前端 API 层面已被拦截（403）。
+          此处 is_admin=False 时，搜索默认排除 rejected（防御层）。
+        - admin 可以显式传入 audit_status 查看任何状态（包括 rejected）。
+        """
         # 硬限制
         limit = min(max(1, limit), KnowledgeGraphService.SEARCH_MAX_LIMIT)
 
@@ -61,8 +68,9 @@ class KnowledgeGraphService:
         # 审核状态过滤
         if audit_status is not None:
             q = q.filter(KGNode.audit_status == audit_status)
-        else:
+        elif not is_admin:
             q = q.filter(KGNode.audit_status != "rejected")
+        # admin + no explicit audit_status: show all (including rejected) — admin can see everything
 
         if min_trust > 0:
             q = q.filter(KGNode.trust_level >= min_trust)
@@ -115,16 +123,40 @@ class KnowledgeGraphService:
         node_id: int,
         relation: Optional[str] = None,
         min_trust: float = 0.0,
+        direction: str = "outgoing",
     ) -> list[dict]:
-        """获取与指定节点相关的所有节点"""
-        edges = db.query(KGEdge).filter(KGEdge.source_id == node_id)
+        """获取与指定节点相关的所有节点。
+
+        direction:
+          - "outgoing": edges where source_id == node_id (默认，向后兼容)
+          - "incoming": edges where target_id == node_id (谁引用了此节点)
+          - "both": 双向
+        """
+        if direction == "incoming":
+            edges = db.query(KGEdge).filter(KGEdge.target_id == node_id)
+        elif direction == "both":
+            from sqlalchemy import or_
+            edges = db.query(KGEdge).filter(
+                or_(KGEdge.source_id == node_id, KGEdge.target_id == node_id)
+            )
+        else:
+            edges = db.query(KGEdge).filter(KGEdge.source_id == node_id)
+
         if relation:
             edges = edges.filter(KGEdge.relation == relation)
 
         result = []
         for e in edges.all():
+            # For incoming edges, the "target" we want to show is actually the source of the edge
+            if direction == "incoming":
+                target_id = e.source_id
+                actual_relation = f"← {e.relation}"  # flip label for clarity
+            else:
+                target_id = e.target_id
+                actual_relation = e.relation
+
             target = db.query(KGNode).filter(
-                KGNode.id == e.target_id,
+                KGNode.id == target_id,
                 KGNode.audit_status != "rejected",
             )
             if min_trust > 0:
@@ -132,7 +164,7 @@ class KnowledgeGraphService:
             target = target.first()
             if target:
                 result.append({
-                    "relation": e.relation,
+                    "relation": actual_relation,
                     "weight": e.weight,
                     "node": {
                         "id": target.id,
@@ -149,19 +181,41 @@ class KnowledgeGraphService:
         return result
 
     @staticmethod
+    def _find_trusted_rule_node(db: Session, rule_id: str) -> KGNode | None:
+        """查找可信的 rule 节点（起点也必须满足 trust + audit 要求）。
+
+        规则：
+        - 仅返回 audit_status == "verified" 且 trust_level >= TRUST_MIN_ENRICHMENT 的节点
+        - 先按 rule_id 精确匹配，再按标题模糊匹配（fallback）
+        - 如果发现匹配节点但不满足可信条件，返回 None（不允许绕过）
+        """
+        TRUST = KnowledgeGraphService.TRUST_MIN_ENRICHMENT
+
+        # 精确 rule_id 匹配
+        candidates = db.query(KGNode).filter(
+            KGNode.node_type == "rule",
+            KGNode.rule_id == rule_id,
+            KGNode.audit_status == "verified",
+            KGNode.trust_level >= TRUST,
+        ).all()
+
+        if candidates:
+            return candidates[0]
+
+        # 标题模糊匹配（向后兼容）
+        candidates = db.query(KGNode).filter(
+            KGNode.node_type == "rule",
+            KGNode.title.ilike(f"%{rule_id}%"),
+            KGNode.audit_status == "verified",
+            KGNode.trust_level >= TRUST,
+        ).all()
+
+        return candidates[0] if candidates else None
+
+    @staticmethod
     def find_regulation_for_rule(db: Session, rule_id: str) -> list[dict]:
-        """查找与某规则相关的法规依据（通过 rule_id 匹配 + edges 关联）"""
-        # 先尝试精确 rule_id 匹配
-        rule_node = db.query(KGNode).filter(
-            KGNode.node_type == "rule", KGNode.rule_id == rule_id
-        ).first()
-
-        # 如果没有精确匹配，尝试标题模糊匹配（向后兼容）
-        if not rule_node:
-            rule_node = db.query(KGNode).filter(
-                KGNode.node_type == "rule", KGNode.title.ilike(f"%{rule_id}%")
-            ).first()
-
+        """查找与某规则相关的法规依据（仅可信 rule 起点 → 可信 target）"""
+        rule_node = KnowledgeGraphService._find_trusted_rule_node(db, rule_id)
         if not rule_node:
             return []
         return KnowledgeGraphService.get_related(
@@ -171,14 +225,8 @@ class KnowledgeGraphService:
 
     @staticmethod
     def find_cases_for_rule(db: Session, rule_id: str) -> list[dict]:
-        """查找与某规则相关的案例"""
-        rule_node = db.query(KGNode).filter(
-            KGNode.node_type == "rule", KGNode.rule_id == rule_id
-        ).first()
-        if not rule_node:
-            rule_node = db.query(KGNode).filter(
-                KGNode.node_type == "rule", KGNode.title.ilike(f"%{rule_id}%")
-            ).first()
+        """查找与某规则相关的案例（仅可信 rule 起点 → 可信 target）"""
+        rule_node = KnowledgeGraphService._find_trusted_rule_node(db, rule_id)
         if not rule_node:
             return []
         return KnowledgeGraphService.get_related(
@@ -200,14 +248,8 @@ class KnowledgeGraphService:
 
     @staticmethod
     def find_template_for_rule(db: Session, rule_id: str) -> list[dict]:
-        """查找满足某规则的合规模板"""
-        rule_node = db.query(KGNode).filter(
-            KGNode.node_type == "rule", KGNode.rule_id == rule_id
-        ).first()
-        if not rule_node:
-            rule_node = db.query(KGNode).filter(
-                KGNode.node_type == "rule", KGNode.title.ilike(f"%{rule_id}%")
-            ).first()
+        """查找满足某规则的合规模板（仅可信 rule 起点）"""
+        rule_node = KnowledgeGraphService._find_trusted_rule_node(db, rule_id)
         if not rule_node:
             return []
         return KnowledgeGraphService.get_related(

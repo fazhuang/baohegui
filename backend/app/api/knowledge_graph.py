@@ -41,7 +41,22 @@ async def search_kg(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """搜索知识图谱节点（多维度过滤）"""
+    """搜索知识图谱节点（多维度过滤）
+
+    安全规则:
+    - 普通用户不允许查看 rejected 节点。传 audit_status=rejected 返回 403。
+    - admin 可以查看所有审核状态。
+    - 默认情况下 (audit_status=None)，自动排除 rejected。
+    """
+    is_admin = user.get("role") == "admin"
+
+    # 普通用户不允许查看 rejected
+    if audit_status == "rejected" and not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权查看已拒绝的节点",
+        )
+
     results = knowledge_graph.search(
         db,
         query=q,
@@ -52,6 +67,7 @@ async def search_kg(
         tags=tags,
         rule_id=rule_id,
         jurisdiction=jurisdiction,
+        is_admin=is_admin,
     )
     return {"query": q, "results": results, "total": len(results)}
 
@@ -61,12 +77,14 @@ async def related_nodes(
     node_id: int,
     relation: str | None = Query(None),
     min_trust: float = Query(0.0, ge=0.0, le=1.0),
+    direction: str = Query("outgoing", pattern="^(outgoing|incoming|both)$",
+                           description="outgoing=source_id==node_id, incoming=target_id==node_id, both=双向"),
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """获取关联节点"""
+    """获取关联节点（支持方向过滤）"""
     return {
-        "related": knowledge_graph.get_related(db, node_id, relation, min_trust=min_trust)
+        "related": knowledge_graph.get_related(db, node_id, relation, min_trust=min_trust, direction=direction)
     }
 
 
