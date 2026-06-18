@@ -28,8 +28,19 @@ from app.models.complaint_case import ComplaintCase
 logger = logging.getLogger(__name__)
 
 # ── 种子数据路径 ─────────────────────────────────────
-_RULES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "rules"
-_BACKEND_RULES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "backend" / "rules"
+def _resolve_rules_dir() -> Path:
+    configured = os.environ.get("BHG_RULES_DIR")
+    if configured:
+        return Path(configured)
+
+    container_rules = Path("/app/rules")
+    if container_rules.exists():
+        return container_rules
+
+    return Path(__file__).resolve().parent.parent.parent.parent / "rules"
+
+
+_RULES_DIR = _resolve_rules_dir()
 
 
 class KnowledgeGraphService:
@@ -426,12 +437,14 @@ class KnowledgeGraphService:
             _RULES_DIR / "base_rules.json"
         )
         if base_rules:
-            seen_laws = set()
+            seen_law_titles = set()
             for rule in base_rules.get("rules", []):
                 law_ref = rule.get("law_ref", "")
-                if law_ref and law_ref not in seen_laws:
-                    seen_laws.add(law_ref)
+                if law_ref:
                     title = KnowledgeGraphService._extract_law_title(law_ref)
+                    if title in seen_law_titles:
+                        continue
+                    seen_law_titles.add(title)
                     if not KnowledgeGraphService._node_exists(db, title=title, node_type="regulation"):
                         n = KGNode(
                             node_type="regulation",
@@ -445,6 +458,8 @@ class KnowledgeGraphService:
                         )
                         db.add(n)
                         count += 1
+
+        db.flush()
 
         # ── Phase 2: 核心法规 ──
         core_regulations = [
@@ -506,6 +521,8 @@ class KnowledgeGraphService:
                 db.add(n)
                 count += 1
 
+        db.flush()
+
         # ── Phase 3: 规则节点 — compliance_rules.json ──
         compliance_rules = KnowledgeGraphService._load_json(
             _RULES_DIR / "compliance_rules.json"
@@ -543,6 +560,8 @@ class KnowledgeGraphService:
                     )
                     db.add(n)
                     count += 1
+
+        db.flush()
 
         # ── Phase 4: 规则节点 — base_rules.json 57条基础规则 (NEW) ──
         if base_rules:
@@ -588,6 +607,8 @@ class KnowledgeGraphService:
                 )
                 db.add(n)
                 count += 1
+
+        db.flush()
 
         # ── Phase 5: 规则节点 — industry/*.json 行业细分规则 (NEW) ──
         industry_dir = _RULES_DIR / "industry"
@@ -642,6 +663,8 @@ class KnowledgeGraphService:
                     db.add(n)
                     count += 1
 
+        db.flush()
+
         # ── Phase 6: 规则节点 — platforms/*.json 平台特定规则 (NEW) ──
         platforms_dir = _RULES_DIR / "platforms"
         if platforms_dir.exists():
@@ -691,6 +714,8 @@ class KnowledgeGraphService:
                     db.add(n)
                     count += 1
 
+        db.flush()
+
         # ── Phase 7: 规则节点 — parameter_bias_rules.json 参数倾向检测 (NEW) ──
         param_bias = KnowledgeGraphService._load_json(
             _RULES_DIR / "parameter_bias_rules.json"
@@ -729,6 +754,8 @@ class KnowledgeGraphService:
                 )
                 db.add(n)
                 count += 1
+
+        db.flush()
 
         # ── Phase 8: 案例节点 — 硬编码真实案例 ──
         real_cases = [
@@ -892,6 +919,8 @@ class KnowledgeGraphService:
                 db.add(n)
                 count += 1
 
+        db.flush()
+
         # ── Phase 9: 案例节点 — 从 complaint_cases 表同步 (NEW) ──
         _decision_tag_map = {
             "upheld": "投诉成立", "rejected": "投诉驳回",
@@ -955,6 +984,8 @@ class KnowledgeGraphService:
         except Exception as e:
             logger.warning("从 complaint_cases 表同步案例节点失败: %s", e)
 
+        db.flush()
+
         # ── Phase 10: 平台规则 → regulation 节点 — platform_rules.json ──
         platform_rules = KnowledgeGraphService._load_json(
             _RULES_DIR / "platform_rules.json"
@@ -985,11 +1016,14 @@ class KnowledgeGraphService:
                     db.add(n)
                     count += 1
 
+        db.flush()
+
         # ── Phase 11: 规则节点 — forbidden_words.json 禁用词模式 ──
         forbidden_words = KnowledgeGraphService._load_json(
             _RULES_DIR / "forbidden_words.json"
         )
         if forbidden_words:
+            seen_forbidden_rule_ids = set()
             for category_key, patterns in forbidden_words.get("patterns", {}).items():
                 if not isinstance(patterns, dict):
                     continue
@@ -999,8 +1033,11 @@ class KnowledgeGraphService:
                     pattern_id = item.get("id", "")
                     if not pattern_id:
                         continue
+                    if pattern_id in seen_forbidden_rule_ids:
+                        continue
+                    seen_forbidden_rule_ids.add(pattern_id)
                     title = f"禁用词模式 {pattern_id}: {item.get('message', '')}"
-                    if KnowledgeGraphService._node_exists(db, title=title, node_type="rule"):
+                    if KnowledgeGraphService._node_exists_by_rule_id(db, pattern_id, "rule"):
                         continue
                     n = KGNode(
                         node_type="rule",
@@ -1015,6 +1052,8 @@ class KnowledgeGraphService:
                     )
                     db.add(n)
                     count += 1
+
+        db.flush()
 
         # ── Phase 12: 概念节点 — project_categories.json 项目分类 (NEW) ──
         # 使用 node_type="concept" 避免污染法规库

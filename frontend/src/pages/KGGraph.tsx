@@ -8,7 +8,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Input, Select, Slider, Row, Col, Card, List, Tag, Statistic,
-  Drawer, Button, Space, Typography, Tooltip, Spin, Empty, message, Pagination,
+  Alert, Drawer, Button, Space, Typography, Tooltip, Spin, Empty, message, Pagination,
 } from 'antd';
 import {
   SearchOutlined, NodeIndexOutlined, FolderOpenOutlined,
@@ -16,6 +16,7 @@ import {
   ReloadOutlined, SettingOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../stores/authStore';
+import { getErrorMessage } from '../utils/error';
 import {
   searchKG, getRelatedNodes, getKGStats,
   seedKG, getNodesNeedingReview,
@@ -82,6 +83,7 @@ const KGGraph: React.FC = () => {
 
   // Admin
   const [seeding, setSeeding] = useState(false);
+  const [seedError, setSeedError] = useState('');
   const [needingReviewCount, setNeedingReviewCount] = useState(0);
 
   // ── Search ──
@@ -149,13 +151,16 @@ const KGGraph: React.FC = () => {
   const handleSeed = useCallback(async () => {
     if (!isAdmin) return;
     setSeeding(true);
+    setSeedError('');
     try {
       const res = await seedKG();
       message.success(`知识库种子完成: ${res.count} 条记录`);
       handleSearch();
       loadStats();
-    } catch {
-      message.error('种子数据失败');
+    } catch (error: unknown) {
+      const detail = getErrorMessage(error, '初始化失败，请检查后端服务');
+      setSeedError(detail);
+      message.error(`知识库初始化失败：${detail}`);
     } finally {
       setSeeding(false);
     }
@@ -194,6 +199,18 @@ const KGGraph: React.FC = () => {
             </Card>
           </Col>
         </Row>
+      )}
+
+      {seedError && (
+        <Alert
+          type="error"
+          showIcon
+          closable
+          message="知识库初始化失败"
+          description={seedError}
+          onClose={() => setSeedError('')}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
       {/* ── Filters ── */}

@@ -202,15 +202,12 @@ class TestSeedIdempotent:
         assert resp1.status_code == 200
         count1 = resp1.json()["count"]
 
-        # 第二次 seed — 应返回 0 或较小计数（因为已存在）
+        # 第二次 seed — 节点和边均已存在，必须完全幂等
         resp2 = client.post("/api/kg/seed", headers=_headers(admin))
         assert resp2.status_code == 200
         count2 = resp2.json()["count"]
 
-        # 幂等：第二次不应增加相同节点
-        assert count2 <= count1 or count1 == 0, (
-            f"Seed not idempotent: first={count1}, second={count2}"
-        )
+        assert count2 == 0, f"Seed not idempotent: first={count1}, second={count2}"
 
 
 class TestRuleIdAssociation:

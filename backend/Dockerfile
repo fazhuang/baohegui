@@ -40,10 +40,11 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # 复制代码
 COPY backend/app ./app
 COPY backend/api ./api
+COPY backend/alembic.ini ./alembic.ini
 
 # 复制规则文件
 COPY rules ./rules
 
 EXPOSE 8000
 
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1
+CMD alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1
