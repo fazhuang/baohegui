@@ -23,6 +23,37 @@ from app.core.security import create_access_token
 from app.engine.fusion import ComplianceReport
 from app.engine.rule_engine import RuleEngineResult, rule_engine
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _isolate_e2e_rules_writes(monkeypatch):
+    """monkeypatch 所有写入 rules/versions 的路径，防止 E2E 测试规则持久化到磁盘。
+
+    test_update_platform_rule 和 test_toggle_platform_rule 通过 TestClient
+    调用真实 API，会触发 rule_sync_service._save() 和 snapshot() 写入磁盘。
+    本 fixture 将它们全部替换为空操作。
+    """
+    from app.services.rule_sync import rule_sync_service, RuleVersionManager
+
+    # 保存原始实现
+    _orig_save = rule_sync_service._save
+    _orig_snapshot = RuleVersionManager.snapshot
+    _orig_save_manifest = getattr(rule_sync_service, '_save_manifest', None)
+
+    monkeypatch.setattr(rule_sync_service, "_save", lambda: None)
+    monkeypatch.setattr(
+        RuleVersionManager, "snapshot",
+        lambda self, change_log="": "mock-e2e-version"
+    )
+    if _orig_save_manifest is not None:
+        monkeypatch.setattr(rule_sync_service, "_save_manifest", lambda: None)
+
+    yield
+
+    monkeypatch.setattr(rule_sync_service, "_save", _orig_save)
+    monkeypatch.setattr(RuleVersionManager, "snapshot", _orig_snapshot)
+    if _orig_save_manifest is not None:
+        monkeypatch.setattr(rule_sync_service, "_save_manifest", _orig_save_manifest)
 from app.services.parser import parser
 
 # ── 工具函数 ────────────────────────────────────────────────

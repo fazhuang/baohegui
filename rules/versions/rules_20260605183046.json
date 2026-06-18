@@ -1,7 +1,9 @@
 {
-  "version": "20260617111739",
-  "last_updated": "2026-06-17",
-  "mappings": [
+  "version": "20260605183046",
+  "timestamp": "2026-06-05 18:30:46",
+  "rule_count": 26,
+  "change_log": "同步 重庆市公共资源交易平台 — 新增0 更新4",
+  "rules": [
     {
       "rule_id": "NATL-001",
       "platform": "全国公共资源交易平台",
@@ -12,7 +14,7 @@
       "description": "缺少规定章节",
       "version": "1.0",
       "effective_date": "2026-01-01",
-      "enabled": true,
+      "enabled": false,
       "category": "platform"
     },
     {
@@ -154,7 +156,7 @@
       "mandatory": true,
       "description": "招标文件缺少必备章节",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -167,7 +169,7 @@
       "mandatory": true,
       "description": "未明确采购方式",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -180,7 +182,7 @@
       "mandatory": true,
       "description": "评标办法中缺少评分标准",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -193,7 +195,7 @@
       "mandatory": true,
       "description": "检测到指定品牌特征",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -206,7 +208,7 @@
       "mandatory": false,
       "description": "地域限制条款",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -219,7 +221,7 @@
       "mandatory": true,
       "description": "检测到排他性语义",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -232,7 +234,7 @@
       "mandatory": true,
       "description": "缺少规定章节",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -245,7 +247,7 @@
       "mandatory": true,
       "description": "采购方式缺失",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -258,7 +260,7 @@
       "mandatory": true,
       "description": "地域歧视条款",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -271,7 +273,7 @@
       "mandatory": false,
       "description": "注册资金作为资格条件",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -284,7 +286,7 @@
       "mandatory": false,
       "description": "评分标准需符合公平原则",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -297,7 +299,7 @@
       "mandatory": true,
       "description": "章节缺失或为空",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -310,7 +312,7 @@
       "mandatory": true,
       "description": "评审标准缺失",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -323,7 +325,7 @@
       "mandatory": true,
       "description": "排他性条款",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },
@@ -336,7 +338,7 @@
       "mandatory": false,
       "description": "独家授权排他性",
       "version": "1.0",
-      "effective_date": "2026-06-16",
+      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     }

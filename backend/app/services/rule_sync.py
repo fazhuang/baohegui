@@ -675,6 +675,7 @@ class RuleVersionManager:
             json.dump({
                 "version": version,
                 "timestamp": snap.timestamp,
+                "rule_count": snap.rule_count,
                 "change_log": snap.change_log,
                 "rules": [r.model_dump() for r in snap.rules],
             }, f, ensure_ascii=False, indent=2)
