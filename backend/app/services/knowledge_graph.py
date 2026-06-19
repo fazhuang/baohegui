@@ -71,7 +71,8 @@ class KnowledgeGraphService:
 
         安全规则:
         - 所有用户默认排除 rejected（包括 admin）。rejected 节点只能在显式传 audit_status=rejected 时查看。
-        - 非 admin 调用时，API 层面 audit_status=rejected 返回 403。
+        - Phase 1: 非 admin 调用时，服务层默认只显示 audit_status='verified' 的节点。
+          非 admin 显式传 unreviewed/flagged 由 API 层 403 拒绝，本层收到时按请求值过滤。
         - admin 可以显式传 audit_status=rejected 查看已拒绝节点。
         """
         # 硬限制
@@ -86,8 +87,12 @@ class KnowledgeGraphService:
         if audit_status is not None:
             q = q.filter(KGNode.audit_status == audit_status)
         else:
-            # 所有用户默认排除 rejected（admin 也一样，避免审核视图被污染）
-            q = q.filter(KGNode.audit_status != "rejected")
+            # 默认：非管理员只能看到 verified
+            if not is_admin:
+                q = q.filter(KGNode.audit_status == "verified")
+            else:
+                # 所有用户（包括 admin）默认排除 rejected
+                q = q.filter(KGNode.audit_status != "rejected")
 
         if min_trust > 0:
             q = q.filter(KGNode.trust_level >= min_trust)
@@ -156,6 +161,8 @@ class KnowledgeGraphService:
           - "both": 双向
 
         target_type: 可选，过滤目标节点类型（如 "regulation" 确保 RAG 只返回法规）
+
+        Phase 1 可见性：仅返回 target audit_status='verified' 的节点（除非是管理员）。
         """
         if direction == "incoming":
             edges = db.query(KGEdge).filter(KGEdge.target_id == node_id)
@@ -182,7 +189,7 @@ class KnowledgeGraphService:
 
             target = db.query(KGNode).filter(
                 KGNode.id == target_id,
-                KGNode.audit_status != "rejected",
+                KGNode.audit_status == "verified",  # Phase 1: 仅已审核
             )
             if target_type:
                 target = target.filter(KGNode.node_type == target_type)
@@ -225,7 +232,7 @@ class KnowledgeGraphService:
         """
         TRUST = KnowledgeGraphService.TRUST_MIN_ENRICHMENT
 
-        # 精确 rule_id 匹配 — 可信节点
+        # 精确 rule_id 匹配 — 已审核 + 高信任
         candidates = db.query(KGNode).filter(
             KGNode.node_type == "rule",
             KGNode.rule_id == rule_id,

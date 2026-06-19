@@ -18,48 +18,41 @@ from app.services.crawler_service import (
 
 logger = logging.getLogger(__name__)
 
+# Phase 1 安全基线：只允许 HTTPS。HTTP fallback 已移除。
 MOF_GK_LISTS = [
     "https://gks.mof.gov.cn/ztztz/zhengfucaigouguanli/",
-    "http://gks.mof.gov.cn/ztztz/zhengfucaigouguanli/",
 ]
 MOF_GK_BASE = "https://gks.mof.gov.cn"
 
 
-async def fetch_gks_list(client: httpx.AsyncClient) -> list[dict]:
-    """获取财政部国库司政府采购管理页面最新公告列表"""
+async def fetch_gks_list(fetcher) -> list[dict]:
+    """获取财政部国库司政府采购管理页面最新公告列表
+    Phase 1：HTTPS-only；使用 SafeFetcher（TLS + 域名白名单 + DNS 私网校验）。
+    """
     items: list[dict] = []
-    r = None
-    last_error: Exception | None = None
     for list_url in MOF_GK_LISTS:
         try:
-            r = await client.get(list_url, timeout=30,
-                                 headers={"User-Agent": "Mozilla/5.0"})
-            r.raise_for_status()
-            break
+            html = await fetcher.get(list_url, source="mof")
+            soup = BeautifulSoup(html, "lxml")
+            for a_tag in soup.find_all("a", href=True):
+                title = a_tag.get_text(strip=True)
+                if "政府采购信息公告" not in title:
+                    continue
+                href = a_tag["href"]
+                if href.startswith("./"):
+                    href = MOF_GK_BASE + href[1:]
+                elif href.startswith("/"):
+                    href = MOF_GK_BASE + href
+                elif not href.startswith("http"):
+                    href = MOF_GK_BASE + "/" + href.lstrip("/")
+                items.append({"title": title, "url": href})
+            break  # 成功则退出循环
         except Exception as e:
-            last_error = e
-    if r is None:
-        logger.warning("财政部列表抓取失败: %s", last_error)
-        return items
-
-    soup = BeautifulSoup(r.text, "lxml")
-    # 查找所有包含"政府采购信息公告"的链接
-    for a_tag in soup.find_all("a", href=True):
-        title = a_tag.get_text(strip=True)
-        if "政府采购信息公告" not in title:
-            continue
-        href = a_tag["href"]
-        if href.startswith("./"):
-            href = MOF_GK_BASE + href[1:]
-        elif href.startswith("/"):
-            href = MOF_GK_BASE + href
-        elif not href.startswith("http"):
-            href = MOF_GK_BASE + "/" + href.lstrip("/")
-        items.append({"title": title, "url": href})
+            logger.warning("财政部列表抓取失败 %s: %s", list_url, e)
     return items
 
 
-async def fetch_ccgp_gg_list(client: httpx.AsyncClient) -> list[dict]:
+async def fetch_ccgp_gg_list(fetcher) -> list[dict]:
     """通过 ccgp.gov.cn/gg/ 获取财政部信息公告（较完整的列表）"""
     items: list[dict] = []
     for page in range(1, 6):  # 前5页

@@ -63,25 +63,28 @@ async def crawl_shaanxi_with_playwright() -> list[dict]:
 
 
 async def crawl_shaanxi() -> int:
-    """陕西采集入口"""
+    """陕西采集入口 — Phase 1：使用 SafeFetcher（HTTPS-only + TLS 校验 + 域名白名单）"""
     items = await crawl_shaanxi_with_playwright()
     if not items:
         return 0
     saved = 0
-    async with httpx.AsyncClient(verify=False) as client:
+    from app.services.safe_fetcher import fetcher_for_source
+
+    async with fetcher_for_source("shaanxi") as fetcher:
         for item in items[:10]:
-            d = await crawl_ccgp_detail(item["url"], client)
-            if d:
-                d["province"] = "陕西"
-                if _save_case(d):
-                    saved += 1
+            try:
+                d = await crawl_ccgp_detail(item["url"], fetcher)
+                if d:
+                    d["province"] = "陕西"
+                    if _save_case(d):
+                        saved += 1
+            except Exception as e:
+                logger.error("陕西详情采集失败 %s: %s", item["url"], e)
             await asyncio.sleep(0.5)
     return saved
 
 
 import httpx  # noqa: E402
-
-
 # ── 陕西/青海/新疆 Scrapling 入口（fallback）───────────────
 
 

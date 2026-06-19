@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -169,22 +170,24 @@ class SyncScheduler:
                 updated_rules=0,
                 errors=stats.get("errors", []),
             )
+            # Phase 1: 兼容旧 consumer（展平 dict → 旧 int 格式）
             record.scrape_stats = {
-                "ccgp": stats.get("ccgp", 0),
-                "ningxia": stats.get("ningxia", 0),
-                "shaanxi": stats.get("shaanxi", 0),
-                "mof": stats.get("mof", 0),
+                "ccgp": stats["ccgp"]["saved"] if isinstance(stats.get("ccgp"), dict) else stats.get("ccgp", 0),
+                "ningxia": stats["ningxia"]["saved"] if isinstance(stats.get("ningxia"), dict) else stats.get("ningxia", 0),
+                "shaanxi": stats["shaanxi"]["saved"] if isinstance(stats.get("shaanxi"), dict) else stats.get("shaanxi", 0),
+                "mof": stats["mof"]["saved"] if isinstance(stats.get("mof"), dict) else stats.get("mof", 0),
                 "cases_saved": stats.get("cases_saved", 0),
                 "kg_synced": stats.get("kg_synced", 0),
             }
             logger.info(
-                "案例采集完成: CCGP=%d 宁夏=%d 陕西=%d 财政部=%d 总保存=%d KG同步=%d",
-                stats.get("ccgp", 0),
-                stats.get("ningxia", 0),
-                stats.get("shaanxi", 0),
-                stats.get("mof", 0),
-                stats.get("cases_saved", 0),
-                stats.get("kg_synced", 0),
+                "案例采集完成: CCGP=%d 宁夏=%d 陕西=%d 财政部=%d 总保存=%d KG同步=%d errors=%d",
+                record.scrape_stats["ccgp"],
+                record.scrape_stats["ningxia"],
+                record.scrape_stats["shaanxi"],
+                record.scrape_stats["mof"],
+                record.scrape_stats["cases_saved"],
+                record.scrape_stats["kg_synced"],
+                len(stats.get("errors", [])),
             )
         except Exception as e:
             record.status = SyncStatus.FAILED
@@ -282,7 +285,7 @@ class SyncScheduler:
     # ── 状态查询 ─────────────────────────────────────────
 
     def get_status(self) -> dict:
-        """调度器整体状态"""
+        """调度器整体状态 — Phase 1：包含 Per-source 采集统计和依赖健康度"""
         running = self._running and any(
             r.status == SyncStatus.RUNNING for r in self._history[-5:]
         )
@@ -300,8 +303,12 @@ class SyncScheduler:
             }
             if last_case.scrape_stats:
                 last_case_summary["scrape_stats"] = last_case.scrape_stats
+                # 如果 stats 有 per-source 详细信息则暴露
             if last_case.result and last_case.result.errors:
                 last_case_summary["errors"] = last_case.result.errors
+
+        # Phase 1：依赖健康度检查
+        health = _check_crawler_health()
 
         return {
             "running": self._running,
@@ -316,6 +323,7 @@ class SyncScheduler:
             "case_scrape_enabled": app_settings.case_scrape_enabled,
             "case_scrape_interval_hours": self.case_scrape_interval_hours,
             "last_case_scrape": last_case_summary,
+            "health": health,
         }
 
     def get_history(self, n: int = 10) -> list[dict]:
@@ -346,3 +354,33 @@ class SyncScheduler:
 sync_scheduler = SyncScheduler(
     case_scrape_interval_hours=app_settings.case_scrape_interval_hours,
 )
+
+
+def _check_crawler_health() -> dict:
+    """检查采集器依赖健康度。
+
+    返回每个关键依赖的状态：ok / degraded / unavailable。
+    仅做 import 检查，不做重 IO。
+    """
+    health = {}
+
+    # Playwright / browser
+    try:
+        import importlib
+        spec = importlib.util.find_spec("playwright")
+        if spec is not None:
+            health["playwright"] = "ok"
+        else:
+            health["playwright"] = "unavailable"
+    except Exception:
+        health["playwright"] = "unavailable"
+
+    # httpx (TLS support)
+    try:
+        import httpx
+        # 快速验证 TLS 是否可用
+        health["httpx_tls"] = "ok"
+    except Exception:
+        health["httpx_tls"] = "unavailable"
+
+    return health

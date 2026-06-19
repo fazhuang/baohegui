@@ -15,17 +15,17 @@ async def test_crawl_all_syncs_cases_into_kg(db_session, monkeypatch):
     async def _noop_sleep(*args, **kwargs):
         return None
 
-    async def _fake_ccgp_list(client):
+    async def _fake_ccgp_list(fetcher):
         return [
             {"title": "A", "url": "https://example.com/a", "date": "2026-06-18"},
         ]
 
-    async def _fake_ningxia_list(client):
+    async def _fake_ningxia_list(fetcher):
         return [
             {"title": "B", "url": "https://example.com/b", "date": "2026-06-18"},
         ]
 
-    async def _fake_detail(url, client):
+    async def _fake_detail(url, fetcher):
         return {
             "province": "全国",
             "source_url": url,
@@ -46,7 +46,7 @@ async def test_crawl_all_syncs_cases_into_kg(db_session, monkeypatch):
     async def _fake_shaanxi():
         return 0
 
-    async def _fake_mof_list(client):
+    async def _fake_mof_list(fetcher):
         return [
             {"title": "C", "url": "https://example.com/c"},
         ]
@@ -60,9 +60,9 @@ async def test_crawl_all_syncs_cases_into_kg(db_session, monkeypatch):
 
     stats = await crawler_service.crawl_all()
 
-    assert stats["ccgp"] == 1
-    assert stats["ningxia"] == 1
-    assert stats["mof"] == 1
+    assert stats["ccgp"]["saved"] == 1
+    assert stats["ningxia"]["saved"] == 1
+    assert stats["mof"]["saved"] == 1
     assert stats["cases_saved"] == 3
     assert stats["kg_synced"] == 3
     assert stats["errors"] == []

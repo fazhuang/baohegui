@@ -2,6 +2,11 @@
 
 安全基线：管理操作（trigger/analyze）仅管理员可访问。
 读取端点（cases/stats）仍需要认证但普通用户可用。
+
+Phase 1：案例数据分级
+- 普通用户案例列表不返回敏感字段（complainant、respondent）。
+- 普通用户案例详情不返回 raw_content、complainant、respondent。
+- 管理员案例详情返回完整信息并写入审计日志。
 """
 
 from fastapi import APIRouter, Depends, Query
@@ -102,7 +107,11 @@ async def list_cases(
 
 @router.get("/cases/{case_id}")
 async def get_case_detail(case_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
-    """单条案例详情"""
+    """单条案例详情 — Phase 1 数据分级：
+
+    - 管理员：返回完整信息（含 raw_content、complainant、respondent），记录审计日志。
+    - 普通用户：不返回 raw_content、complainant、respondent。
+    """
     from app.models.complaint_case import ComplaintCase
 
     case = db.query(ComplaintCase).filter(ComplaintCase.id == case_id).first()
@@ -110,24 +119,38 @@ async def get_case_detail(case_id: int, db: Session = Depends(get_db), user: dic
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="案例不存在")
-    return {
+
+    is_admin = user.get("role") == "admin"
+
+    if is_admin:
+        audit_service.log(
+            user_id=int(user["sub"]),
+            action="crawler_case_detail_admin",
+            resource="complaint_case",
+            resource_id=str(case_id),
+            detail={"title": case.title, "province": case.province},
+        )
+
+    base = {
         "id": case.id,
         "province": case.province,
         "source_url": case.source_url,
         "title": case.title,
         "project_name": case.project_name,
         "project_number": case.project_number,
-        "complainant": case.complainant,
-        "respondent": case.respondent,
         "decision_date": case.decision_date,
         "decision_type": case.decision_type,
         "complaint_types": case.complaint_types,
         "legal_basis": case.legal_basis,
         "summary": case.summary,
-        "raw_content": case.raw_content,
         "is_analyzed": case.is_analyzed,
         "created_at": str(case.created_at),
     }
+    if is_admin:
+        base["complainant"] = case.complainant
+        base["respondent"] = case.respondent
+        base["raw_content"] = case.raw_content
+    return base
 
 
 @router.post("/analyze")

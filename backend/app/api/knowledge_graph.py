@@ -46,18 +46,23 @@ async def search_kg(
     """搜索知识图谱节点（多维度过滤）
 
     安全规则:
-    - 普通用户不允许查看 rejected 节点。传 audit_status=rejected 返回 403。
+    - Phase 1 发布边界：普通用户默认只能看到 verified 节点。
+      传 audit_status=rejected/unreviewed/flagged 返 403。
     - admin 可以查看所有审核状态。
-    - 默认情况下 (audit_status=None)，自动排除 rejected。
+    - 默认情况下 (audit_status=None)，普通用户仅见 verified，admin 排除 rejected。
     """
     is_admin = user.get("role") == "admin"
 
-    # 普通用户不允许查看 rejected
-    if audit_status == "rejected" and not is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="无权查看已拒绝的节点",
-        )
+    # 普通用户不允许查看 rejected/unreviewed/flagged
+    if not is_admin:
+        if audit_status in ("rejected", "unreviewed", "flagged"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"无权查看审核状态为 {audit_status} 的节点",
+            )
+        # 默认过滤：普通用户仅见 verified
+        if audit_status is None:
+            audit_status = "verified"
 
     results, total = knowledge_graph.search(
         db,
@@ -450,8 +455,12 @@ async def create_kg_edge(
 ):
     """创建 KG 边 — 仅管理员，重复边返回已有边不重复插入
 
-    安全约束:
-    - relation="references" 且 target node_type="concept" → 422（concept 不是法规，不得作为法规依据进入 RAG）
+    安全约束（relation 类型矩阵）：
+    - references：rule → regulation
+    - demonstrated_by：rule → case
+    - cites：case → regulation
+    - mitigated_by：rule → template
+    - related_to：仅允许明确支持的类型组合（同类型 / regulation↔case）
     """
     # 验证两端节点存在
     src = db.query(KGNode).filter(KGNode.id == source_id).first()
@@ -459,12 +468,26 @@ async def create_kg_edge(
     if not src or not tgt:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="源节点或目标节点不存在")
 
-    # 安全约束: references 边只能指向 regulation
-    if relation == "references" and tgt.node_type != "regulation":
+    # ── relation 类型矩阵校验 ────────────────────────────
+    _RELATION_MATRIX = {
+        "references":      (("rule", "regulation"),),
+        "demonstrated_by": (("rule", "case"),),
+        "cites":           (("case", "regulation"),),
+        "mitigated_by":    (("rule", "template"),),
+        "related_to":      (
+            ("regulation", "regulation"),
+            ("case", "case"),
+            ("rule", "rule"),
+            ("regulation", "case"),
+            ("case", "regulation"),
+        ),
+    }
+    allowed_pairs = _RELATION_MATRIX.get(relation, ())
+    if allowed_pairs and (src.node_type, tgt.node_type) not in allowed_pairs:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"references 关系只能指向 regulation 节点，而目标节点类型为 {tgt.node_type}。"
-                   f"concept 节点不得作为法规依据进入 RAG。",
+            detail=f"类型矩阵拒绝 relation={relation} src={src.node_type} tgt={tgt.node_type}。"
+                   f"允许的组合: {allowed_pairs}",
         )
 
     # 检查是否已存在（去重）

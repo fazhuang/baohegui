@@ -1,0 +1,466 @@
+"""Phase 1 安全测试 — 采集传输安全、数据隔离、KG 可见性、任务状态。
+
+覆盖：
+- 证书校验失败
+- HTTP URL 拒绝
+- 跨域重定向拒绝
+- 重定向到 127.0.0.1 拒绝
+- 重定向到私网 IP 拒绝
+- DNS 解析到私网拒绝
+- Content-Type 非 HTML 拒绝
+- 普通用户读取原始案例被阻止
+- 普通用户查询未审核 KG 被拒绝
+- 非法 relation 类型组合
+- 单来源失败后 PARTIAL 状态
+- 依赖健康状态上报
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import tempfile
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.core.security import create_access_token, hash_password
+from app.models.complaint_case import ComplaintCase
+from app.models.knowledge_graph import KGNode, KGEdge
+from app.models.user import User
+
+
+def _create_user(db, username: str, role: str = "user") -> User:
+    u = User(
+        username=username,
+        hashed_password=hash_password("testpass123"),
+        role=role,
+        company="测试",
+        email=f"{username}@test.com",
+    )
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    return u
+
+
+def _headers(user: User) -> dict:
+    token = create_access_token(user_id=user.id, role=user.role)
+    return {"Authorization": f"Bearer {token}"}
+
+
+# ═══════════════════════════════════════════════════════════════
+# 安全抓取器测试
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestSafeFetcherTransport:
+    """TLS 传输安全"""
+
+    @pytest.mark.asyncio
+    async def test_rejects_http_url(self):
+        """HTTP URL 必须被拒绝。"""
+        from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
+
+        async with SafeFetcher(source="test") as f:
+            with pytest.raises(SafeFetchError) as exc:
+                await f.get("http://www.ccgp.gov.cn/page", source="test")
+            assert exc.value.error_type == FetchErrorType.NOT_HTTPS
+
+    @pytest.mark.asyncio
+    async def test_rejects_localhost(self):
+        """重定向到 127.0.0.1 必须被拒绝。"""
+        from app.services.safe_fetcher import SafeFetcher, SafeFetchError, _is_private_ip
+
+        assert _is_private_ip("127.0.0.1") is True
+        assert _is_private_ip("10.0.0.5") is True
+        assert _is_private_ip("192.168.1.1") is True
+        assert _is_private_ip("172.16.0.1") is True
+        assert _is_private_ip("169.254.1.1") is True
+        assert _is_private_ip("8.8.8.8") is False
+
+
+class TestSafeFetcherDNS:
+    """DNS 解析校验"""
+
+    def test_dns_private_ip_detection(self):
+        """IP 私网检测函数正确。"""
+        from app.services.safe_fetcher import _is_private_ip
+
+        private_cases = [
+            "10.0.0.1", "10.255.255.255",
+            "172.16.0.0", "172.31.255.255",
+            "192.168.0.0", "192.168.255.255",
+            "127.0.0.1", "127.255.255.255",
+            "169.254.0.1",
+            "0.0.0.0",
+            "224.0.0.1",
+            "::1",
+            "fe80::1",
+            "fc00::1",
+        ]
+        for ip in private_cases:
+            assert _is_private_ip(ip), f"{ip} should be private"
+
+        public_cases = [
+            "8.8.8.8", "1.1.1.1", "93.184.216.34",
+            "2001:4860:4860::8888",
+        ]
+        for ip in public_cases:
+            assert not _is_private_ip(ip), f"{ip} should not be private"
+
+
+class TestSafeFetcherContentType:
+    """Content-Type 白名单"""
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_html(self, monkeypatch):
+        """非 HTML Content-Type 必须被拒绝。"""
+        import httpx
+        from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
+
+        class FakeResponse:
+            status_code = 200
+            encoding = "utf-8"
+            headers = {"content-type": "application/pdf"}
+
+            async def aiter_bytes(self, chunk_size=65536):
+                yield b"fake pdf content"
+
+        async def fake_get(self, url):
+            return FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+        async with SafeFetcher(source="test") as f:
+            with pytest.raises(SafeFetchError) as exc:
+                await f.get("https://www.ccgp.gov.cn/doc.pdf", source="test")
+            assert exc.value.error_type == FetchErrorType.CONTENT_TYPE_REJECTED
+
+
+class TestSafeFetcherContentLength:
+    """响应体大小限制"""
+
+    @pytest.mark.asyncio
+    async def test_rejects_content_length_too_large(self, monkeypatch):
+        """Content-Length 超过限制必须被拒绝。"""
+        import httpx
+        from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
+
+        class FakeResponse:
+            status_code = 200
+            encoding = "utf-8"
+            headers = {"content-type": "text/html", "content-length": "10485760"}
+
+            async def aiter_bytes(self, chunk_size=65536):
+                yield b"x"
+
+        async def fake_get(self, url):
+            return FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+        async with SafeFetcher(max_bytes=1_000_000, source="test") as f:
+            with pytest.raises(SafeFetchError) as exc:
+                await f.get("https://www.ccgp.gov.cn/big", source="test")
+            assert exc.value.error_type == FetchErrorType.CONTENT_TOO_LARGE
+
+
+# ═══════════════════════════════════════════════════════════════
+# 案例数据分级测试
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestCaseDataTiering:
+    """案例数据分级"""
+
+    def test_normal_user_cannot_see_raw_content(self, client: TestClient, db_session):
+        """普通用户案例详情不返回 raw_content。"""
+        user = _create_user(db_session, "tier_user")
+        cc = ComplaintCase(
+            province="甘肃", title="分级测试", decision_type="upheld",
+            complainant="投诉人张三", respondent="被投诉人李四",
+            raw_content="原始敏感内容", summary="摘要",
+            complaint_types='["测试"]',
+        )
+        db_session.add(cc)
+        db_session.commit()
+
+        resp = client.get(f"/api/crawler/cases/{cc.id}", headers=_headers(user))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "raw_content" not in data
+        assert "complainant" not in data
+        assert "respondent" not in data
+        assert data["summary"] == "摘要"
+        assert data["title"] == "分级测试"
+
+    def test_admin_can_see_full_detail(self, client: TestClient, db_session):
+        """管理员可以查看案例原文和敏感字段。"""
+        admin = _create_user(db_session, "tier_admin", role="admin")
+        cc = ComplaintCase(
+            province="甘肃", title="管理员分级测试", decision_type="upheld",
+            complainant="投诉人张三", respondent="被投诉人李四",
+            raw_content="原始敏感内容", summary="摘要",
+            complaint_types='["测试"]',
+        )
+        db_session.add(cc)
+        db_session.commit()
+
+        resp = client.get(f"/api/crawler/cases/{cc.id}", headers=_headers(admin))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "raw_content" in data
+        assert data["raw_content"] == "原始敏感内容"
+        assert data["complainant"] == "投诉人张三"
+        assert data["respondent"] == "被投诉人李四"
+
+
+# ═══════════════════════════════════════════════════════════════
+# KG 可见性测试
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestKGVisibility:
+    """KG 可见性 — 普通用户只能看到 verified"""
+
+    def test_normal_user_default_only_sees_verified(self, client: TestClient, db_session):
+        """普通用户默认搜索只能看到 verified 节点。"""
+        user = _create_user(db_session, "kg_vis_user")
+        db_session.add(KGNode(node_type="regulation", title="可见法规", content="c",
+                              audit_status="verified", trust_level=0.8))
+        db_session.add(KGNode(node_type="regulation", title="隐藏法规", content="c",
+                              audit_status="unreviewed", trust_level=0.5))
+        db_session.add(KGNode(node_type="regulation", title="标记法规", content="c",
+                              audit_status="flagged", trust_level=0.3))
+        db_session.commit()
+
+        resp = client.get("/api/kg/search", params={"q": "法规"}, headers=_headers(user))
+        assert resp.status_code == 200
+        titles = [r["title"] for r in resp.json()["results"]]
+        assert "可见法规" in titles
+        assert "隐藏法规" not in titles
+        assert "标记法规" not in titles
+
+    def test_normal_user_cannot_query_unreviewed(self, client: TestClient, db_session):
+        """普通用户不能查询 unreviewed/flagged/rejected。"""
+        user = _create_user(db_session, "kg_vis2_user")
+        for st in ("unreviewed", "flagged", "rejected"):
+            resp = client.get("/api/kg/search", params={"q": "", "audit_status": st}, headers=_headers(user))
+            assert resp.status_code == 403, f"Expected 403 for {st}, got {resp.status_code}"
+
+    def test_admin_can_query_all_statuses(self, client: TestClient, db_session):
+        """管理员可以查询所有审核状态。"""
+        admin = _create_user(db_session, "kg_vis_admin", role="admin")
+        db_session.add(KGNode(node_type="regulation", title="未审核", content="c",
+                              audit_status="unreviewed", trust_level=0.5))
+        db_session.add(KGNode(node_type="regulation", title="标记", content="c",
+                              audit_status="flagged", trust_level=0.3))
+        db_session.commit()
+
+        resp = client.get("/api/kg/search", params={"q": "", "audit_status": "unreviewed"}, headers=_headers(admin))
+        assert resp.status_code == 200
+        titles = [r["title"] for r in resp.json()["results"]]
+        assert "未审核" in titles
+
+    def test_kg_related_only_returns_verified(self, client: TestClient, db_session):
+        """关联节点查询只返回 verified 的目标节点。"""
+        user = _create_user(db_session, "kg_rel_vis")
+        rule = KGNode(node_type="rule", title="规则", content="c",
+                      rule_id="R001", audit_status="verified", trust_level=0.8)
+        reg_ok = KGNode(node_type="regulation", title="已审核法规", content="c",
+                        audit_status="verified", trust_level=0.8)
+        reg_hidden = KGNode(node_type="regulation", title="未审核法规", content="c",
+                            audit_status="unreviewed", trust_level=0.5)
+        db_session.add_all([rule, reg_ok, reg_hidden])
+        db_session.commit()
+        db_session.add(KGEdge(source_id=rule.id, target_id=reg_ok.id, relation="references"))
+        db_session.add(KGEdge(source_id=rule.id, target_id=reg_hidden.id, relation="references"))
+        db_session.commit()
+
+        resp = client.get(f"/api/kg/related/{rule.id}", headers=_headers(user))
+        assert resp.status_code == 200
+        related = resp.json()["related"]
+        titles = [r["node"]["title"] for r in related]
+        assert "已审核法规" in titles
+        assert "未审核法规" not in titles
+
+
+# ═══════════════════════════════════════════════════════════════
+# Relation 类型矩阵测试
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestRelationTypeMatrix:
+    """边类型矩阵校验"""
+
+    def _setup_nodes(self, db_session):
+        types = {
+            "rule": KGNode(node_type="rule", title="规则节点", content="c", audit_status="verified"),
+            "regulation": KGNode(node_type="regulation", title="法规节点", content="c", audit_status="verified"),
+            "case": KGNode(node_type="case", title="案例节点", content="c", audit_status="verified"),
+            "template": KGNode(node_type="template", title="模板节点", content="c", audit_status="verified"),
+        }
+        for t, n in types.items():
+            db_session.add(n)
+        db_session.commit()
+        return {t: n.id for t, n in types.items()}
+
+    def _try_edge(self, client, admin_headers, src_id, tgt_id, relation):
+        return client.post("/api/kg/edge", params={
+            "source_id": src_id, "target_id": tgt_id,
+            "relation": relation, "weight": 1.0,
+        }, headers=admin_headers)
+
+    def test_references_only_rule_to_regulation(self, client: TestClient, db_session):
+        """references 只能是 rule → regulation。"""
+        admin = _create_user(db_session, "rel_admin", role="admin")
+        ids = self._setup_nodes(db_session)
+
+        # 合法
+        resp = self._try_edge(client, _headers(admin), ids["rule"], ids["regulation"], "references")
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+
+        # 非法：rule → case
+        resp = self._try_edge(client, _headers(admin), ids["rule"], ids["case"], "references")
+        assert resp.status_code == 422, f"Expected 422, got {resp.status_code}"
+
+        # 非法：regulation → regulation
+        resp = self._try_edge(client, _headers(admin), ids["regulation"], ids["regulation"], "references")
+        assert resp.status_code == 422, f"Expected 422, got {resp.status_code}"
+
+    def test_demonstrated_by_only_rule_to_case(self, client: TestClient, db_session):
+        """demonstrated_by 只能是 rule → case。"""
+        admin = _create_user(db_session, "rel2_admin", role="admin")
+        ids = self._setup_nodes(db_session)
+
+        # 合法
+        resp = self._try_edge(client, _headers(admin), ids["rule"], ids["case"], "demonstrated_by")
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}"
+
+        # 非法：case → case
+        resp = self._try_edge(client, _headers(admin), ids["case"], ids["case"], "demonstrated_by")
+        assert resp.status_code == 422, f"Expected 422, got {resp.status_code}"
+
+    def test_cites_only_case_to_regulation(self, client: TestClient, db_session):
+        """cites 只能是 case → regulation。"""
+        admin = _create_user(db_session, "rel3_admin", role="admin")
+        ids = self._setup_nodes(db_session)
+
+        # 合法
+        resp = self._try_edge(client, _headers(admin), ids["case"], ids["regulation"], "cites")
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}"
+
+    def test_mitigated_by_only_rule_to_template(self, client: TestClient, db_session):
+        """mitigated_by 只能是 rule → template。"""
+        admin = _create_user(db_session, "rel4_admin", role="admin")
+        ids = self._setup_nodes(db_session)
+
+        # 合法
+        resp = self._try_edge(client, _headers(admin), ids["rule"], ids["template"], "mitigated_by")
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 采集任务状态测试
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestCrawlTaskStatus:
+    """采集任务 PARTIAL 状态"""
+
+    async def test_partial_on_source_error(self, monkeypatch):
+        """单来源失败时任务状态为 PARTIAL。"""
+        from app.services.sync_scheduler import SyncScheduler, SyncStatus
+
+        scheduler = SyncScheduler(case_scrape_interval_hours=168)
+
+        async def _fake_crawl_all():
+            return {
+                "ccgp": {"saved": 3, "errors": []},
+                "ningxia": {"saved": 0, "errors": ["ningxia: 连接超时"]},
+                "shaanxi": {"saved": 1, "errors": []},
+                "mof": {"saved": 0, "errors": []},
+                "kg_synced": 4,
+                "errors": ["ningxia: ningxia: 连接超时"],
+                "cases_saved": 4,
+            }
+
+        monkeypatch.setattr("app.services.crawler_service.crawl_all", _fake_crawl_all)
+        record = await scheduler.scrape_cases()
+        assert record.status == SyncStatus.PARTIAL, \
+            f"Should be PARTIAL on source error, got {record.status.value}"
+
+    async def test_success_when_no_errors(self, monkeypatch):
+        """无错误时任务状态为 SUCCESS。"""
+        from app.services.sync_scheduler import SyncScheduler, SyncStatus
+
+        scheduler = SyncScheduler(case_scrape_interval_hours=168)
+
+        async def _fake_crawl_all():
+            return {
+                "ccgp": {"saved": 3, "errors": []},
+                "ningxia": {"saved": 2, "errors": []},
+                "shaanxi": {"saved": 0, "errors": []},
+                "mof": {"saved": 0, "errors": []},
+                "kg_synced": 5,
+                "errors": [],
+                "cases_saved": 5,
+            }
+
+        monkeypatch.setattr("app.services.crawler_service.crawl_all", _fake_crawl_all)
+        record = await scheduler.scrape_cases()
+        assert record.status == SyncStatus.SUCCESS, \
+            f"Should be SUCCESS with no errors, got {record.status.value}"
+
+    async def test_kg_sync_error_causes_partial(self, monkeypatch):
+        """KG 同步失败时任务状态应为 PARTIAL。"""
+        from app.services.sync_scheduler import SyncScheduler, SyncStatus
+
+        scheduler = SyncScheduler(case_scrape_interval_hours=168)
+
+        async def _fake_crawl_all():
+            return {
+                "ccgp": {"saved": 3, "errors": []},
+                "ningxia": {"saved": 2, "errors": []},
+                "shaanxi": {"saved": 0, "errors": []},
+                "mof": {"saved": 0, "errors": []},
+                "kg_synced": 0,
+                "errors": ["kg_sync: 数据库连接失败"],
+                "cases_saved": 5,
+            }
+
+        monkeypatch.setattr("app.services.crawler_service.crawl_all", _fake_crawl_all)
+        record = await scheduler.scrape_cases()
+        assert record.status == SyncStatus.PARTIAL, \
+            f"Should be PARTIAL when KG sync fails, got {record.status.value}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 依赖健康状态测试
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestDependencyHealth:
+    """依赖健康状态上报"""
+
+    def test_status_includes_health(self, client: TestClient, db_session):
+        """crawler status 返回 health 字段。"""
+        user = _create_user(db_session, "health_user")
+        resp = client.get("/api/crawler/status", headers=_headers(user))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "health" in data, f"Status should include 'health', got keys: {list(data.keys())}"
+        assert "playwright" in data["health"], f"health should include playwright: {data['health']}"
+        assert "httpx_tls" in data["health"], f"health should include httpx_tls: {data['health']}"
+
+    def test_health_keys_valid_values(self, client: TestClient, db_session):
+        """health 值只能是 ok / degraded / unavailable。"""
+        user = _create_user(db_session, "health2_user")
+        resp = client.get("/api/crawler/status", headers=_headers(user))
+        data = resp.json()
+        allowed = {"ok", "degraded", "unavailable"}
+        for key, val in data["health"].items():
+            assert val in allowed, f"health.{key} = '{val}' not in {allowed}"

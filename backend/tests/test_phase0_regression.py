@@ -440,10 +440,10 @@ class TestScrapePartialStatus:
 
         async def _fake_crawl_all():
             return {
-                "ccgp": 0,
-                "ningxia": 0,
-                "shaanxi": 0,
-                "mof": 0,
+                "ccgp": {"saved": 0, "errors": []},
+                "ningxia": {"saved": 0, "errors": []},
+                "shaanxi": {"saved": 0, "errors": []},
+                "mof": {"saved": 0, "errors": []},
                 "kg_synced": 0,
                 "errors": ["ningxia: 连接超时", "mof: 403 Forbidden"],
                 "cases_saved": 0,
@@ -466,10 +466,10 @@ class TestScrapePartialStatus:
 
         async def _fake_crawl_all():
             return {
-                "ccgp": 1,
-                "ningxia": 2,
-                "shaanxi": 0,
-                "mof": 0,
+                "ccgp": {"saved": 1, "errors": []},
+                "ningxia": {"saved": 2, "errors": []},
+                "shaanxi": {"saved": 0, "errors": []},
+                "mof": {"saved": 0, "errors": []},
                 "kg_synced": 3,
                 "errors": [],
                 "cases_saved": 3,

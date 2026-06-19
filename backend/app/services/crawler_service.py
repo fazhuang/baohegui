@@ -98,16 +98,19 @@ def _extract_field(text: str, label: str, max_chars: int = 500) -> str:
 # ── CCGP 爬虫 ────────────────────────────────────────────────
 
 
-async def _fetch_text(url: str, client: httpx.AsyncClient) -> str:
-    """抓取URL内容（带重试）"""
+async def _fetch_text(url: str, fetcher) -> str:
+    """使用 SafeFetcher 抓取 URL 内容（带重试）
+
+    fetcher 必须是 SafeFetcher 实例（已配置域名白名单 + TLS）。
+    """
+    from app.services.safe_fetcher import SafeFetchError, SafeFetcher
+
     for attempt in range(3):
         try:
-            resp = await client.get(url, headers=HEADERS, follow_redirects=True, timeout=30)
-            resp.raise_for_status()
-            return resp.text
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 403:
-                logger.warning("CCGP 403 Forbidden（需要 Cloudflare 绕过）: %s", url)
+            return await fetcher.get(url)
+        except SafeFetchError as e:
+            if e.error_type.value == "http_error" and e.status_code == 403:
+                logger.warning("403 Forbidden: %s", url)
                 return ""
             if attempt < 2:
                 await asyncio.sleep(1)
@@ -123,12 +126,12 @@ async def _fetch_text(url: str, client: httpx.AsyncClient) -> str:
     return ""
 
 
-async def crawl_ccgp_list(client: httpx.AsyncClient) -> list[dict]:
+async def crawl_ccgp_list(fetcher) -> list[dict]:
     """爬取 ccgp.gov.cn 监督处罚列表页"""
     items: list[dict] = []
     seen_hrefs: set = set()
     for page_url in CCGP_JDJC_PAGES:
-        html = await _fetch_text(page_url, client)
+        html = await _fetch_text(page_url, fetcher)
         if not html:
             continue
         soup = BeautifulSoup(html, "lxml")
@@ -154,9 +157,9 @@ async def crawl_ccgp_list(client: httpx.AsyncClient) -> list[dict]:
     return items
 
 
-async def crawl_ccgp_detail(url: str, client: httpx.AsyncClient) -> Optional[dict]:
+async def crawl_ccgp_detail(url: str, fetcher) -> Optional[dict]:
     """爬取单条投诉详情并结构化提取"""
-    html = await _fetch_text(url, client)
+    html = await _fetch_text(url, fetcher)
     if not html:
         return None
     soup = BeautifulSoup(html, "lxml")
@@ -247,12 +250,12 @@ async def crawl_ccgp_detail(url: str, client: httpx.AsyncClient) -> Optional[dic
 # ── 宁夏爬虫 ──────────────────────────────────────────────────
 
 
-async def crawl_ningxia_list(client: httpx.AsyncClient) -> list[dict]:
+async def crawl_ningxia_list(fetcher) -> list[dict]:
     """爬取宁夏投诉处理列表页"""
     items: list[dict] = []
     seen_urls: set = set()
     for page_url in NINGXIA_TS_PAGES:
-        html = await _fetch_text(page_url, client)
+        html = await _fetch_text(page_url, fetcher)
         if not html:
             continue
         soup = BeautifulSoup(html, "lxml")
@@ -275,78 +278,114 @@ async def crawl_ningxia_list(client: httpx.AsyncClient) -> list[dict]:
 
 
 async def crawl_all() -> dict:
-    """执行全部可爬取数据源的采集"""
+    """执行全部可爬取数据源的采集（Phase 1：全 TLS，每来源独立错误，partial 状态）
+
+    每个来源使用独立的 SafeFetcher（自带域名白名单 + DNS 校验）。
+    来源失败时，记录具体错误但继续采集其他来源。
+    """
+    from app.services.safe_fetcher import SafeFetchError, fetcher_for_source
+
     stats = {
-        "ccgp": 0,
-        "ningxia": 0,
-        "shaanxi": 0,
-        "mof": 0,
+        "ccgp": {"saved": 0, "errors": []},
+        "ningxia": {"saved": 0, "errors": []},
+        "shaanxi": {"saved": 0, "errors": []},
+        "mof": {"saved": 0, "errors": []},
         "kg_synced": 0,
         "errors": [],
         "cases_saved": 0,
     }
 
-    async with httpx.AsyncClient(verify=False) as client:
-        # ── CCGP 全国 ──
-        try:
-            ccgp_items = await crawl_ccgp_list(client)
+    # ── CCGP 全国 ──────────────────────────────────────
+    try:
+        async with fetcher_for_source("ccgp") as fetcher:
+            ccgp_items = await crawl_ccgp_list(fetcher)
             logger.info("CCGP 列表: %d 条", len(ccgp_items))
             saved = 0
             for item in ccgp_items:
-                d = await crawl_ccgp_detail(item["url"], client)
-                if d and _save_case(d):
-                    saved += 1
+                try:
+                    d = await crawl_ccgp_detail(item["url"], fetcher)
+                    if d and _save_case(d):
+                        saved += 1
+                except SafeFetchError as e:
+                    stats["ccgp"]["errors"].append(f"{item['url']}: {e.error_type.value}={e.message}")
                 await asyncio.sleep(0.3)
-            stats["ccgp"] = saved
-        except Exception as e:
-            logger.error("CCGP 异常: %s", e)
-            stats["errors"].append(f"ccgp: {e}")
+            stats["ccgp"]["saved"] = saved
+    except SafeFetchError as e:
+        logger.error("CCGP 安全抓取错误: %s", e)
+        stats["ccgp"]["errors"].append(f"{e.error_type.value}: {e.message}")
+    except Exception as e:
+        logger.error("CCGP 异常: %s", e)
+        stats["ccgp"]["errors"].append(f"exception: {e}")
 
-        # ── 宁夏 ──
-        try:
-            nx_items = await crawl_ningxia_list(client)
+    # ── 宁夏 ────────────────────────────────────────────
+    try:
+        async with fetcher_for_source("ningxia") as fetcher:
+            nx_items = await crawl_ningxia_list(fetcher)
             logger.info("宁夏列表: %d 条", len(nx_items))
             saved = 0
             for item in nx_items:
-                d = await crawl_ccgp_detail(item["url"], client)
-                if d:
-                    d["province"] = "宁夏"
-                    if _save_case(d):
-                        saved += 1
+                try:
+                    d = await crawl_ccgp_detail(item["url"], fetcher)
+                    if d:
+                        d["province"] = "宁夏"
+                        if _save_case(d):
+                            saved += 1
+                except SafeFetchError as e:
+                    stats["ningxia"]["errors"].append(f"{item['url']}: {e.error_type.value}={e.message}")
                 await asyncio.sleep(0.3)
-            stats["ningxia"] = saved
-        except Exception as e:
-            logger.error("宁夏异常: %s", e)
-            stats["errors"].append(f"ningxia: {e}")
+            stats["ningxia"]["saved"] = saved
+    except SafeFetchError as e:
+        logger.error("宁夏 安全抓取错误: %s", e)
+        stats["ningxia"]["errors"].append(f"{e.error_type.value}: {e.message}")
+    except Exception as e:
+        logger.error("宁夏 异常: %s", e)
+        stats["ningxia"]["errors"].append(f"exception: {e}")
 
-        # ── 陕西（Playwright，单独处理） ──
-        try:
-            from app.services.browser_crawler import crawl_shaanxi
-            stats["shaanxi"] = await crawl_shaanxi()
-        except Exception as e:
-            logger.error("陕西异常: %s", e)
-            stats["errors"].append(f"shaanxi: {e}")
+    # ── 陕西（Playwright，独立 client） ──────────────────
+    try:
+        from app.services.browser_crawler import crawl_shaanxi
+        stats["shaanxi"]["saved"] = await crawl_shaanxi()
+    except Exception as e:
+        logger.error("陕西 异常: %s", e)
+        stats["shaanxi"]["errors"].append(f"exception: {e}")
 
-        # ── 财政部信息公告（独立处理） ──
-        try:
-            from app.services.mof_crawler import fetch_gks_list
+    # ── 财政部信息公告（独立处理） ───────────────────────
+    try:
+        from app.services.mof_crawler import fetch_gks_list
 
-            mof_items = await fetch_gks_list(client)
+        async with fetcher_for_source("mof") as fetcher:
+            mof_items = await fetch_gks_list(fetcher)
             logger.info("财政部列表: %d 条", len(mof_items))
             saved = 0
-            for item in mof_items[:20]:  # 限20条
-                d = await crawl_ccgp_detail(item["url"], client)
-                if d:
-                    d["province"] = "全国"
-                    if _save_case(d):
-                        saved += 1
+            for item in mof_items[:20]:
+                try:
+                    d = await crawl_ccgp_detail(item["url"], fetcher)
+                    if d:
+                        d["province"] = "全国"
+                        if _save_case(d):
+                            saved += 1
+                except SafeFetchError as e:
+                    stats["mof"]["errors"].append(f"{item['url']}: {e.error_type.value}={e.message}")
                 await asyncio.sleep(0.3)
-            stats["mof"] = saved
-        except Exception as e:
-            logger.error("财政部异常: %s", e)
-            stats["errors"].append(f"mof: {e}")
+            stats["mof"]["saved"] = saved
+    except SafeFetchError as e:
+        logger.error("财政部 安全抓取错误: %s", e)
+        stats["mof"]["errors"].append(f"{e.error_type.value}: {e.message}")
+    except Exception as e:
+        logger.error("财政部 异常: %s", e)
+        stats["mof"]["errors"].append(f"exception: {e}")
 
-    stats["cases_saved"] = stats["ccgp"] + stats["ningxia"] + stats["shaanxi"] + stats["mof"]
+    # ── 汇总 ───────────────────────────────────────────
+    stats["cases_saved"] = (
+        stats["ccgp"]["saved"] +
+        stats["ningxia"]["saved"] +
+        stats["shaanxi"]["saved"] +
+        stats["mof"]["saved"]
+    )
+    # 展平 errors 用于兼容旧 consumer
+    for src_key in ("ccgp", "ningxia", "shaanxi", "mof"):
+        for err in stats[src_key]["errors"]:
+            stats["errors"].append(f"{src_key}: {err}")
 
     # ── 同步到 KG ───────────────────────────────────────
     try:
