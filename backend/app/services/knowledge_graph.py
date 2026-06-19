@@ -1053,7 +1053,14 @@ class KnowledgeGraphService:
 
         # ═══════════════════════════════════════════════════════════════
         # Phase 13: 边创建 — 增强版
+        # 每条边创建前通过 RELATION_MATRIX 校验类型组合。
         # ═══════════════════════════════════════════════════════════════
+
+        def _validate_relation(rel: str, src_type: str, tgt_type: str) -> bool:
+            allowed = RELATION_MATRIX.get(rel)
+            if allowed is None:
+                return False
+            return (src_type, tgt_type) in allowed
 
         all_rules = db.query(KGNode).filter(KGNode.node_type == "rule").all()
         all_regulations = db.query(KGNode).filter(
@@ -1087,6 +1094,8 @@ class KnowledgeGraphService:
                      any(a in rule_node.content for a in _re.findall(r'第[一二三四五六七八九十百千]+条', reg_node.content)):
                     matched = True
                 if matched:
+                    if not _validate_relation("references", rule_node.node_type, reg_node.node_type):
+                        continue
                     if not KnowledgeGraphService._edge_exists(
                         db, rule_node.id, reg_node.id, "references"
                     ):
@@ -1114,6 +1123,8 @@ class KnowledgeGraphService:
                 # 至少需要 2 个共同标签，或者有特定关键词匹配
                 if len(meaningful) >= 2 or \
                    any(kw in rule_content_lower for kw in meaningful):
+                    if not _validate_relation("demonstrated_by", rule_node.node_type, case_node.node_type):
+                        continue
                     if not KnowledgeGraphService._edge_exists(
                         db, rule_node.id, case_node.id, "demonstrated_by"
                     ):
@@ -1135,6 +1146,8 @@ class KnowledgeGraphService:
                 reg_title_lower = reg_node.title.lower()
                 # 案例内容包含法规标题
                 if len(reg_node.title) >= 6 and reg_title_lower in case_content:
+                    if not _validate_relation("cites", case_node.node_type, reg_node.node_type):
+                        continue
                     if not KnowledgeGraphService._edge_exists(
                         db, case_node.id, reg_node.id, "cites"
                     ):
@@ -1366,6 +1379,24 @@ class KnowledgeGraphService:
             if m:
                 return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         return None
+
+
+# ── relation 类型矩阵（服务层单一事实源）─────────────
+# 定义每条边合法的 (source_node_type, target_node_type) 组合。
+# API 层复用此矩阵做请求校验，服务端所有 KGEdge 写入路径也须遵循。
+RELATION_MATRIX: dict[str, tuple[tuple[str, str], ...]] = {
+    "references":      (("rule", "regulation"),),
+    "demonstrated_by": (("rule", "case"),),
+    "cites":           (("case", "regulation"),),
+    "mitigated_by":    (("rule", "template"),),
+    "related_to":      (
+        ("regulation", "regulation"),
+        ("case", "case"),
+        ("rule", "rule"),
+        ("regulation", "case"),
+        ("case", "regulation"),
+    ),
+}
 
 
 # 预编译正则（模块级）

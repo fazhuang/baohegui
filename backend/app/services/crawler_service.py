@@ -99,9 +99,10 @@ def _extract_field(text: str, label: str, max_chars: int = 500) -> str:
 
 
 async def _fetch_text(url: str, fetcher) -> str:
-    """使用 SafeFetcher 抓取 URL 内容（带重试）
+    """使用 SafeFetcher 抓取 URL 内容。
 
     fetcher 必须是 SafeFetcher 实例（已配置域名白名单 + TLS）。
+    一旦失败抛出异常，由上游捕获并记录，不得静默返回空字符串。
     """
     from app.services.safe_fetcher import SafeFetchError, SafeFetcher
 
@@ -111,19 +112,22 @@ async def _fetch_text(url: str, fetcher) -> str:
         except SafeFetchError as e:
             if e.error_type.value == "http_error" and e.status_code == 403:
                 logger.warning("403 Forbidden: %s", url)
-                return ""
+                raise
             if attempt < 2:
                 await asyncio.sleep(1)
             else:
-                logger.warning("抓取失败 %s: %s", url, e)
-                return ""
+                raise
         except Exception as e:
             if attempt < 2:
                 await asyncio.sleep(1)
             else:
-                logger.warning("抓取失败 %s: %s", url, e)
-                return ""
-    return ""
+                raise
+    raise SafeFetchError(
+        error_type="network",
+        message=f"重试耗尽: {url}",
+        url=url,
+        source=str(getattr(fetcher, '_source', '')),
+    )
 
 
 async def crawl_ccgp_list(fetcher) -> list[dict]:

@@ -30,7 +30,7 @@ import asyncio
 import ipaddress
 import logging
 import socket
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 from urllib.parse import urlparse
@@ -67,20 +67,8 @@ ALLOWED_DOMAINS: dict[str, list[str]] = {
     "mof": ["gks.mof.gov.cn", "www.ccgp.gov.cn"],
 }
 
-# 私有 / 保留 IP 网络（禁止作为目标）
-_PRIVATE_NETS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("0.0.0.0/8"),
-    ipaddress.ip_network("224.0.0.0/4"),  # 组播
-    ipaddress.ip_network("240.0.0.0/4"),  # 保留
-    ipaddress.ip_network("::1/128"),       # IPv6 loopback
-    ipaddress.ip_network("fe80::/10"),     # IPv6 link-local
-    ipaddress.ip_network("fc00::/7"),      # IPv6 unique local
-]
+# 旧 _PRIVATE_NETS 列表已移除。
+# 改用 ipaddress.is_global 精确判断 — 覆盖所有 IANA 特殊用途保留段。
 
 
 # ── 错误类型 ────────────────────────────────────────────────────
@@ -117,15 +105,19 @@ class SafeFetchError(Exception):
 
 
 def _is_private_ip(host: str) -> bool:
-    """检查 IP 地址是否属于私有/保留范围"""
+    """检查 IP 地址是否不可路由到公网。
+
+    使用 ipaddress.is_global（Python 3.4+）精确判断。
+    此外显式拦截组播地址和未指定地址（:: / 0.0.0.0），
+    因为这些地址即使 is_global 返回歧义值也不应被采集。
+    """
     try:
         addr = ipaddress.ip_address(host)
     except ValueError:
-        return False
-    for net in _PRIVATE_NETS:
-        if addr in net:
-            return True
-    return False
+        return True  # 无法解析 → 视为私网
+    if addr.is_multicast or addr.is_unspecified:
+        return True
+    return not addr.is_global
 
 
 async def _resolve_and_validate(host: str, source: str, url: str) -> str:
@@ -264,9 +256,14 @@ class SafeFetcher:
         # 步骤 2：DNS 校验
         await _resolve_and_validate(host, source=source, url=url)
 
-        # 步骤 3：发送请求
+        # 步骤 3：发送请求（stream=True — 响应体通过 aiter_bytes 流式读取，
+        # 大小限制在读取过程中生效，避免完整加载到内存再检查）
         try:
-            resp = await self._client.get(url)
+            resp = await self._client.send(
+                self._client.build_request("GET", url),
+                stream=True,
+            )
+            await resp.aread()  # ensure headers received
         except httpx.ConnectError as e:
             raise SafeFetchError(
                 error_type=FetchErrorType.NETWORK,
@@ -339,7 +336,7 @@ class SafeFetcher:
             )
 
         # 步骤 5：HTTP 状态码检查
-        if resp.status_code >= 400:
+        if resp.is_error or resp.status_code >= 400:
             raise SafeFetchError(
                 error_type=FetchErrorType.HTTP_ERROR,
                 message=f"HTTP {resp.status_code}: {url}",

@@ -60,9 +60,13 @@ class TestSafeFetcherTransport:
     """TLS 传输安全"""
 
     @pytest.mark.asyncio
-    async def test_rejects_http_url(self):
-        """HTTP URL 必须被拒绝。"""
+    async def test_rejects_http_url(self, monkeypatch):
+        """HTTP URL 必须被拒绝（DNS 被 mock 隔离）。"""
         from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
+
+        async def _fake_resolve(*args, **kwargs):
+            return "www.ccgp.gov.cn"
+        monkeypatch.setattr("app.services.safe_fetcher._resolve_and_validate", _fake_resolve)
 
         async with SafeFetcher(source="test") as f:
             with pytest.raises(SafeFetchError) as exc:
@@ -71,44 +75,60 @@ class TestSafeFetcherTransport:
 
     @pytest.mark.asyncio
     async def test_rejects_localhost(self):
-        """重定向到 127.0.0.1 必须被拒绝。"""
+        """重定向到 127.0.0.1 / 私网 / 保留地址全部被拒绝。"""
         from app.services.safe_fetcher import SafeFetcher, SafeFetchError, _is_private_ip
 
-        assert _is_private_ip("127.0.0.1") is True
-        assert _is_private_ip("10.0.0.5") is True
-        assert _is_private_ip("192.168.1.1") is True
-        assert _is_private_ip("172.16.0.1") is True
-        assert _is_private_ip("169.254.1.1") is True
-        assert _is_private_ip("8.8.8.8") is False
+        non_routable = [
+            "127.0.0.1", "10.0.0.5", "192.168.1.1", "172.16.0.1",
+            "169.254.1.1", "198.18.0.1", "192.0.2.1", "100.64.0.1",
+            "2001:db8::1", "ff02::1", "::",
+        ]
+        for ip in non_routable:
+            assert _is_private_ip(ip), f"{ip} should be private"
+
+        routable = ["8.8.8.8", "1.1.1.1", "2001:4860:4860::8888"]
+        for ip in routable:
+            assert not _is_private_ip(ip), f"{ip} should not be private"
 
 
 class TestSafeFetcherDNS:
     """DNS 解析校验"""
 
     def test_dns_private_ip_detection(self):
-        """IP 私网检测函数正确。"""
+        """IP 私网检测函数正确 — 使用 ipaddress.is_global（not is_global → 私网）。"""
         from app.services.safe_fetcher import _is_private_ip
 
-        private_cases = [
+        # 非公网可路由（及组播/未指定）→ _is_private_ip=True
+        non_routable = [
             "10.0.0.1", "10.255.255.255",
             "172.16.0.0", "172.31.255.255",
             "192.168.0.0", "192.168.255.255",
             "127.0.0.1", "127.255.255.255",
             "169.254.0.1",
             "0.0.0.0",
-            "224.0.0.1",
+            "224.0.0.1",          # 组播
+            "239.255.255.250",    # SSDP 组播
+            "198.18.0.1",         # IANA Benchmarking
+            "192.0.2.1",          # IANA TEST-NET-1
+            "198.51.100.1",       # IANA TEST-NET-2
+            "203.0.113.1",        # IANA TEST-NET-3
+            "100.64.0.1",         # CGNAT
             "::1",
             "fe80::1",
             "fc00::1",
+            "2001:db8::1",        # IANA 文档保留
+            "ff02::1",            # IPv6 组播
+            "::",                 # 未指定地址
         ]
-        for ip in private_cases:
+        for ip in non_routable:
             assert _is_private_ip(ip), f"{ip} should be private"
 
-        public_cases = [
+        # 可全局路由（is_global=True → _is_private_ip=False）
+        routable = [
             "8.8.8.8", "1.1.1.1", "93.184.216.34",
             "2001:4860:4860::8888",
         ]
-        for ip in public_cases:
+        for ip in routable:
             assert not _is_private_ip(ip), f"{ip} should not be private"
 
 
@@ -117,22 +137,32 @@ class TestSafeFetcherContentType:
 
     @pytest.mark.asyncio
     async def test_rejects_non_html(self, monkeypatch):
-        """非 HTML Content-Type 必须被拒绝。"""
-        import httpx
+        """非 HTML Content-Type 必须被拒绝。
+        通过 monkeypatch DNS 解析来隔离网络，然后使用 httpx send monkeypatch 验证 Content-Type 逻辑。"""
         from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
 
-        class FakeResponse:
+        async def _fake_resolve(*args, **kwargs):
+            return "www.ccgp.gov.cn"
+
+        monkeypatch.setattr("app.services.safe_fetcher._resolve_and_validate", _fake_resolve)
+
+        class FakeStreamResponse:
             status_code = 200
+            is_error = False
             encoding = "utf-8"
             headers = {"content-type": "application/pdf"}
 
+            async def aread(self):
+                pass
+
             async def aiter_bytes(self, chunk_size=65536):
-                yield b"fake pdf content"
+                yield b""
 
-        async def fake_get(self, url):
-            return FakeResponse()
+        async def fake_send(self, request, stream=False):
+            return FakeStreamResponse()
 
-        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        import httpx
+        monkeypatch.setattr(httpx.AsyncClient, "send", fake_send)
 
         async with SafeFetcher(source="test") as f:
             with pytest.raises(SafeFetchError) as exc:
@@ -146,21 +176,30 @@ class TestSafeFetcherContentLength:
     @pytest.mark.asyncio
     async def test_rejects_content_length_too_large(self, monkeypatch):
         """Content-Length 超过限制必须被拒绝。"""
-        import httpx
         from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
 
-        class FakeResponse:
+        async def _fake_resolve(*args, **kwargs):
+            return "www.ccgp.gov.cn"
+
+        monkeypatch.setattr("app.services.safe_fetcher._resolve_and_validate", _fake_resolve)
+
+        class FakeStreamResponse:
             status_code = 200
+            is_error = False
             encoding = "utf-8"
             headers = {"content-type": "text/html", "content-length": "10485760"}
 
+            async def aread(self):
+                pass
+
             async def aiter_bytes(self, chunk_size=65536):
-                yield b"x"
+                yield b"x" * 500000
 
-        async def fake_get(self, url):
-            return FakeResponse()
+        async def fake_send(self, request, stream=False):
+            return FakeStreamResponse()
 
-        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        import httpx
+        monkeypatch.setattr(httpx.AsyncClient, "send", fake_send)
 
         async with SafeFetcher(max_bytes=1_000_000, source="test") as f:
             with pytest.raises(SafeFetchError) as exc:
@@ -286,6 +325,21 @@ class TestKGVisibility:
         titles = [r["node"]["title"] for r in related]
         assert "已审核法规" in titles
         assert "未审核法规" not in titles
+
+    def test_normal_user_blocked_from_unverified_source_node(self, client: TestClient, db_session):
+        """普通用户不能通过 unreviewed 源节点枚举关联节点。"""
+        user = _create_user(db_session, "kg_rel_block")
+        unreviewed = KGNode(node_type="rule", title="未审核规则", content="c",
+                            rule_id="R_BAD", audit_status="unreviewed", trust_level=0.3)
+        reg = KGNode(node_type="regulation", title="已审核法规", content="c",
+                     audit_status="verified", trust_level=0.8)
+        db_session.add_all([unreviewed, reg])
+        db_session.commit()
+        db_session.add(KGEdge(source_id=unreviewed.id, target_id=reg.id, relation="references"))
+        db_session.commit()
+
+        resp = client.get(f"/api/kg/related/{unreviewed.id}", headers=_headers(user))
+        assert resp.status_code == 403, f"Expected 403 for unreviewed source node, got {resp.status_code}"
 
 
 # ═══════════════════════════════════════════════════════════════

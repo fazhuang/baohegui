@@ -10,7 +10,7 @@ from app.core.audit import audit_service
 from app.core.security import get_current_user, require_admin
 from app.db.database import get_db
 from app.models.knowledge_graph import KGNode, KGEdge
-from app.services.knowledge_graph import knowledge_graph
+from app.services.knowledge_graph import knowledge_graph, RELATION_MATRIX
 
 router = APIRouter(prefix="/api/kg", tags=["knowledge-graph"])
 
@@ -90,7 +90,21 @@ async def related_nodes(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """获取关联节点（支持方向过滤）"""
+    """获取关联节点（支持方向过滤）
+
+    Phase 1 可见性：非管理员先校验源节点是否可见（必须 verified），
+    避免通过 unreviewed/flagged 节点枚举其关联信息。
+    """
+    from app.models.knowledge_graph import KGNode
+
+    is_admin = user.get("role") == "admin"
+    if not is_admin:
+        node = db.query(KGNode).filter(KGNode.id == node_id).first()
+        if node and node.audit_status != "verified":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权访问该节点",
+            )
     return {
         "related": knowledge_graph.get_related(db, node_id, relation, min_trust=min_trust, direction=direction)
     }
@@ -468,21 +482,8 @@ async def create_kg_edge(
     if not src or not tgt:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="源节点或目标节点不存在")
 
-    # ── relation 类型矩阵校验 ────────────────────────────
-    _RELATION_MATRIX = {
-        "references":      (("rule", "regulation"),),
-        "demonstrated_by": (("rule", "case"),),
-        "cites":           (("case", "regulation"),),
-        "mitigated_by":    (("rule", "template"),),
-        "related_to":      (
-            ("regulation", "regulation"),
-            ("case", "case"),
-            ("rule", "rule"),
-            ("regulation", "case"),
-            ("case", "regulation"),
-        ),
-    }
-    allowed_pairs = _RELATION_MATRIX.get(relation, ())
+    # ── relation 类型矩阵校验（规则定义在知识图谱服务层，API 层复用） ──
+    allowed_pairs = RELATION_MATRIX.get(relation, ())
     if allowed_pairs and (src.node_type, tgt.node_type) not in allowed_pairs:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

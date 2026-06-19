@@ -53,18 +53,19 @@ async def fetch_gks_list(fetcher) -> list[dict]:
 
 
 async def fetch_ccgp_gg_list(fetcher) -> list[dict]:
-    """通过 ccgp.gov.cn/gg/ 获取财政部信息公告（较完整的列表）"""
+    """通过 ccgp.gov.cn/gg/ 获取财政部信息公告（较完整的列表）
+
+    Phase 1：使用 SafeFetcher（HTTPS-only + TLS 校验 + 域名白名单）。
+    """
     items: list[dict] = []
     for page in range(1, 6):  # 前5页
         url = f"https://www.ccgp.gov.cn/gg/index_{page}.htm"
         try:
-            r = await client.get(url, timeout=30,
-                                 headers={"User-Agent": "Mozilla/5.0"},
-                                 follow_redirects=True)
-            r.raise_for_status()
+            html = await fetcher.get(url, source="mof")
         except Exception:
             continue
-        soup = BeautifulSoup(r.text, "lxml")
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
         for a_tag in soup.find_all("a", href=True):
             title = a_tag.get_text(strip=True)
             if "信息公告" not in title and "投诉处理" not in title:
