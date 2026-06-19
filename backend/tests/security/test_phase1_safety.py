@@ -295,7 +295,7 @@ class TestSafeFetcherTlsFail:
 
     @pytest.mark.asyncio
     async def test_tls_error_propagates(self, monkeypatch):
-        """SSL 错误被正确分类为 TLS_ERROR"""
+        """SSL 错误被正确分类为 TLS_ERROR，resp 被释放"""
         from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
 
         async def _fake_resolve(*args, **kwargs):
@@ -303,12 +303,7 @@ class TestSafeFetcherTlsFail:
 
         monkeypatch.setattr("app.services.safe_fetcher._resolve_and_validate", _fake_resolve)
 
-        class FakeClient:
-            async def aclose(self):
-                pass
-
         import ssl
-        import httpx
         async def fake_send(self, request, stream=False):
             raise ssl.SSLCertVerificationError("certificate verify failed")
 
@@ -318,6 +313,52 @@ class TestSafeFetcherTlsFail:
             with pytest.raises(SafeFetchError) as exc:
                 await f.get("https://www.ccgp.gov.cn/bad-cert", source="test")
             assert exc.value.error_type == FetchErrorType.TLS_ERROR
+            assert exc.value.status_code is None
+
+
+class TestSafeFetcherHttpErrors:
+    """HTTP 4xx/5xx 错误被正确分类并保留状态码"""
+
+    @pytest.mark.asyncio
+    async def test_http_503_returns_http_error_with_status(self, monkeypatch):
+        """503 返回 HTTP_ERROR，status_code 被保留，响应被关闭"""
+        from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
+
+        async def _fake_resolve(*args, **kwargs):
+            return "www.ccgp.gov.cn"
+
+        monkeypatch.setattr("app.services.safe_fetcher._resolve_and_validate", _fake_resolve)
+
+        close_called = [False]
+
+        class Err503Resp:
+            status_code = 503
+            encoding = "utf-8"
+            headers = {"content-type": "text/html"}
+
+            async def aiter_bytes(self, chunk_size=65536):
+                yield b"<html>503 Service Unavailable</html>"
+                return
+
+            async def aclose(self):
+                close_called[0] = True
+
+        async def fake_send(self, request, stream=False):
+            resp = Err503Resp()
+            resp._client = type("FakeClient", (), {"aclose": lambda s: None})()
+            return resp
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", fake_send)
+
+        async with SafeFetcher(source="test") as f:
+            with pytest.raises(SafeFetchError) as exc:
+                await f.get("https://www.ccgp.gov.cn/down", source="test")
+            assert exc.value.error_type == FetchErrorType.HTTP_ERROR, \
+                f"Expected HTTP_ERROR, got {exc.value.error_type}"
+            assert exc.value.status_code == 503, \
+                f"Expected status_code=503, got {exc.value.status_code}"
+
+        assert close_called[0], "aclose() must be called for HTTP error responses"
 
 
 class TestSafeFetcherRedirect:

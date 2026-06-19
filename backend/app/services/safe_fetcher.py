@@ -307,13 +307,15 @@ class SafeFetcher:
 
                     # ── HTTP 状态码检查 ──────────────────────
                     if resp.status_code >= 400:
+                        _saved_code = resp.status_code
                         await resp.aclose()
                         resp = None
+                        label = "not_found" if _saved_code == 404 else "unavailable" if _saved_code == 503 else "error"
                         raise SafeFetchError(
                             error_type=FetchErrorType.HTTP_ERROR,
-                            message=f"HTTP {resp.status_code}: {url}",
+                            message=f"HTTP {_saved_code} ({label}): {url}",
                             url=url, source=source,
-                            status_code=resp.status_code,
+                            status_code=_saved_code,
                         )
 
                     # ── Content-Type 检查 ────────────────────
