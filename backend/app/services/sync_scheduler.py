@@ -162,7 +162,8 @@ class SyncScheduler:
         )
         try:
             stats = await crawl_all()
-            record.status = SyncStatus.SUCCESS
+            has_errors = bool(stats.get("errors"))
+            record.status = SyncStatus.PARTIAL if has_errors else SyncStatus.SUCCESS
             record.result = SyncResult(
                 new_rules=0,
                 updated_rules=0,

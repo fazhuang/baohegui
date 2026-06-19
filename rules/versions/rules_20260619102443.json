@@ -1,7 +1,8 @@
 {
   "version": "20260619102443",
-  "last_updated": "2026-06-19",
-  "mappings": [
+  "timestamp": "2026-06-19 10:24:43",
+  "change_log": "同步 重庆市公共资源交易平台 — 新增0 更新4",
+  "rules": [
     {
       "rule_id": "NATL-001",
       "platform": "全国公共资源交易平台",

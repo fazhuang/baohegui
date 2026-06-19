@@ -1,7 +1,8 @@
 {
-  "version": "20260619102443",
-  "last_updated": "2026-06-19",
-  "mappings": [
+  "version": "20260619102431",
+  "timestamp": "2026-06-19 10:24:31",
+  "change_log": "同步 广东省公共资源交易平台 — 新增0 更新6",
+  "rules": [
     {
       "rule_id": "NATL-001",
       "platform": "全国公共资源交易平台",
@@ -362,7 +363,7 @@
       "mandatory": true,
       "description": "章节缺失或为空",
       "version": "1.0",
-      "effective_date": "2026-06-19",
+      "effective_date": "2026-06-18",
       "enabled": true,
       "category": "platform"
     },
@@ -375,7 +376,7 @@
       "mandatory": true,
       "description": "评审标准缺失",
       "version": "1.0",
-      "effective_date": "2026-06-19",
+      "effective_date": "2026-06-18",
       "enabled": true,
       "category": "platform"
     },
@@ -388,7 +389,7 @@
       "mandatory": true,
       "description": "排他性条款",
       "version": "1.0",
-      "effective_date": "2026-06-19",
+      "effective_date": "2026-06-18",
       "enabled": true,
       "category": "platform"
     },
@@ -401,7 +402,7 @@
       "mandatory": false,
       "description": "独家授权排他性",
       "version": "1.0",
-      "effective_date": "2026-06-19",
+      "effective_date": "2026-06-18",
       "enabled": true,
       "category": "platform"
     },

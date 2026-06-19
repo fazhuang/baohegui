@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import audit_service
 from app.core.security import get_current_user, require_admin
 from app.db.database import get_db
-from app.services.crawler_service import count_cases, query_cases
+from app.services.crawler_service import count_cases, query_cases, count_case_stats
 from app.services.rule_miner import analyze_all_unanalyzed
 from app.services.sync_scheduler import sync_scheduler
 
@@ -77,7 +77,7 @@ async def list_cases(
         db, province=province, decision_type=decision_type,
         limit=limit, offset=offset,
     )
-    total = count_cases(db)
+    total = count_cases(db, province=province, decision_type=decision_type)
     return {
         "items": [
             {
@@ -134,13 +134,19 @@ async def get_case_detail(case_id: int, db: Session = Depends(get_db), user: dic
 async def trigger_analysis(db: Session = Depends(get_db), admin: dict = Depends(require_admin)):
     """手动触发规则分析 — 仅管理员"""
     result = analyze_all_unanalyzed(db)
+    # Compute candidate rule count from actual returned structure
+    candidate_rules = sum(
+        1 for v in result.get("new_pattern_candidates", {}).values()
+        if v.get("is_new")
+    )
     audit_service.log(
         user_id=int(admin["sub"]),
         action="crawler_analyze",
         resource="crawler",
         detail={
-            "analyzed_count": result.get("analyzed_count", 0),
-            "rules_generated": result.get("rules_generated", 0),
+            "analyzed_count": result.get("analyzed", 0),
+            "known_pattern_hits": len(result.get("known_patterns", {})),
+            "new_candidate_rules": candidate_rules,
         },
     )
     return result
@@ -148,5 +154,5 @@ async def trigger_analysis(db: Session = Depends(get_db), admin: dict = Depends(
 
 @router.get("/stats")
 async def case_stats(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
-    """案例统计"""
-    return count_cases(db)
+    """案例统计（各类型分布）"""
+    return count_case_stats(db)

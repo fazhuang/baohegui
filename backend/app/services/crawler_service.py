@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import asyncio
 import logging
 import re
@@ -235,7 +236,7 @@ async def crawl_ccgp_detail(url: str, client: httpx.AsyncClient) -> Optional[dic
         "respondent": "",
         "decision_date": decision_date,
         "decision_type": decision_type,
-        "complaint_types": str(complaint_kw) if complaint_kw else "",
+        "complaint_types": json.dumps(complaint_kw, ensure_ascii=False) if complaint_kw else "",
         "legal_basis": "",
         "summary": (result_section or "")[:500],
         "raw_content": raw_text[:5000],
@@ -396,16 +397,28 @@ def query_cases(
     offset: int = 0,
 ) -> list[ComplaintCase]:
     """查询已采集案例"""
+    q = _build_case_query(db, province=province, decision_type=decision_type)
+    return q.order_by(ComplaintCase.created_at.desc()).offset(offset).limit(limit).all()
+
+
+def count_cases(db: Session, province: str = "", decision_type: str = "") -> int:
+    """返回符合筛选条件的案例总数"""
+    q = _build_case_query(db, province=province, decision_type=decision_type)
+    return q.count()
+
+
+def _build_case_query(db: Session, province: str = "", decision_type: str = ""):
+    """构建带筛选条件的案例查询"""
     q = db.query(ComplaintCase)
     if province:
         q = q.filter(ComplaintCase.province == province)
     if decision_type:
         q = q.filter(ComplaintCase.decision_type == decision_type)
-    return q.order_by(ComplaintCase.created_at.desc()).offset(offset).limit(limit).all()
+    return q
 
 
-def count_cases(db: Session) -> dict:
-    """统计各类型案例数量"""
+def count_case_stats(db: Session) -> dict:
+    """统计各类型案例数量（用于 /api/crawler/stats）"""
     total = db.query(ComplaintCase).count()
     upheld = db.query(ComplaintCase).filter(ComplaintCase.decision_type == "upheld").count()
     rejected = db.query(ComplaintCase).filter(ComplaintCase.decision_type == "rejected").count()

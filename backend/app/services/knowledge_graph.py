@@ -11,6 +11,7 @@ v4 增强：
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
@@ -1166,15 +1167,38 @@ class KnowledgeGraphService:
         }
 
         def _parse_complaint_types(raw: str | None) -> list[str]:
-            if not raw:
+            """将 complaint_types 字段解析为清洗后的标签列表。
+
+            支持三种输入格式：
+            1. 标准 JSON 数组：'["品牌锁定", "参数排他"]'
+            2. Python repr 字符串（历史遗留）："['品牌锁定', '参数排他']" 或 "['O\\'Reilly', '品牌']"
+            3. 空值/损坏值：返回空列表
+
+            安全约束：优先 json.loads，失败后使用 ast.literal_eval 安全解析 Python 字面量。
+            """
+            if not raw or not raw.strip():
                 return []
+            raw = raw.strip()
             try:
                 parsed = json.loads(raw)
                 if isinstance(parsed, list):
-                    return [str(item) for item in parsed if item]
+                    return [str(item).strip() for item in parsed if item and str(item).strip()]
             except (json.JSONDecodeError, TypeError):
                 pass
-            return [raw] if raw else []
+            # 历史 Python repr 兼容：使用 ast.literal_eval 安全解析
+            # 相比手工引号替换，ast.literal_eval 正确处理撇号、转义、嵌套引号等边界情况
+            if raw.startswith("[") and raw.endswith("]"):
+                try:
+                    parsed = ast.literal_eval(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if item and str(item).strip()]
+                except (ValueError, SyntaxError, TypeError):
+                    pass
+            # Fallback：无法解析时，作为单个标签处理
+            cleaned = raw.strip("[]'\" \t\n\r")
+            if cleaned:
+                return [cleaned]
+            return []
 
         synced = 0
         try:

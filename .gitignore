@@ -43,3 +43,9 @@ nginx/ssl/*.pfx
 200
 completed
 backend/.test_tmp/
+
+# 测试运行时残留数据库文件（任何位置）
+*.db
+*.sqlite3
+backup_*.sql
+backup_*.dump
