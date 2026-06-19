@@ -219,7 +219,14 @@ async def nodes_needing_review(
     db: Session = Depends(get_db),
     admin: dict = Depends(require_admin),
 ):
-    """列出待审核的 KG 节点 — 仅管理员"""
+    """列出待审核的 KG 节点 — 仅管理员
+
+    返回字段包含管理员审核所需的关键信息：
+    - 来源、管辖范围、审核状态、可信度、关联规则 ID
+    - 内容预览和 metadata（含 complaint_case 关联）
+    """
+    import json as _json
+
     nodes = (
         db.query(KGNode)
         .filter(KGNode.audit_status.in_(["unreviewed", "flagged"]))
@@ -228,20 +235,50 @@ async def nodes_needing_review(
         .all()
     )
     return {
+        "total": len(nodes),
         "nodes": [
             {
                 "id": n.id,
                 "node_type": n.node_type,
                 "title": n.title,
                 "source": n.source,
+                "source_url": n.source_url,
+                "jurisdiction": n.jurisdiction,
                 "rule_id": n.rule_id,
                 "trust_level": n.trust_level,
                 "audit_status": n.audit_status,
-                "content_preview": n.content[:200] if n.content else "",
+                "tags": n.tags,
+                "content_preview": n.content[:300] if n.content else "",
+                "created_at": n.created_at.isoformat() if n.created_at else None,
+                "complaint_case_id": _safe_metadata_int(n, "complaint_case_id"),
+                "decision_type": _safe_metadata_str(n, "decision_type"),
             }
             for n in nodes
-        ]
+        ],
     }
+
+
+def _safe_metadata_str(node, key: str) -> str | None:
+    import json as _json
+
+    raw = getattr(node, "metadata_json", None) or "{}"
+    try:
+        d = _json.loads(raw) if isinstance(raw, str) else raw
+        return d.get(key)
+    except Exception:
+        return None
+
+
+def _safe_metadata_int(node, key: str) -> int | None:
+    import json as _json
+
+    raw = getattr(node, "metadata_json", None) or "{}"
+    try:
+        d = _json.loads(raw) if isinstance(raw, str) else raw
+        val = d.get(key)
+        return int(val) if val is not None else None
+    except Exception:
+        return None
 
 
 # ── v3 新增管理接口 ──────────────────────────────────

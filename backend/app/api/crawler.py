@@ -19,7 +19,10 @@ router = APIRouter(prefix="/api/crawler", tags=["crawler"])
 
 @router.post("/trigger")
 async def trigger_crawl(admin: dict = Depends(require_admin)):
-    """手动触发一轮案例采集 — 仅管理员"""
+    """手动触发一轮案例采集 — 仅管理员
+
+    返回各来源新增案例数、KG 同步数量、错误列表。
+    """
     record = await sync_scheduler.scrape_cases()
     audit_service.log(
         user_id=int(admin["sub"]),
@@ -29,19 +32,35 @@ async def trigger_crawl(admin: dict = Depends(require_admin)):
             "status": record.status.value,
             "error": record.error_message or None,
             "finished_at": str(record.finished_at) if record.finished_at else None,
+            "scrape_stats": record.scrape_stats,
         },
     )
     return {
         "status": record.status.value,
         "error": record.error_message or None,
         "finished_at": record.finished_at,
+        "scrape_stats": record.scrape_stats,
     }
 
 
 @router.get("/status")
 async def crawler_status(user: dict = Depends(get_current_user)):
-    """采集器状态"""
-    return sync_scheduler.get_status()
+    """采集器状态 — 含最后一次采集摘要和 KG 同步摘要"""
+    status = sync_scheduler.get_status()
+
+    # 从 history 中提取上次采集和 KG 同步的完整摘要
+    last_scrape = status.get("last_case_scrape")
+
+    # 构建 KG 同步摘要（从最后一次成功的采集统计中提取）
+    kg_sync_summary = None
+    if last_scrape and last_scrape.get("scrape_stats"):
+        kg_sync_summary = {
+            "last_synced_count": last_scrape["scrape_stats"].get("kg_synced", 0),
+            "last_scrape_cases_saved": last_scrape["scrape_stats"].get("cases_saved", 0),
+        }
+
+    status["kg_sync_summary"] = kg_sync_summary
+    return status
 
 
 @router.get("/cases")

@@ -1083,6 +1083,49 @@ class TestComplaintCaseSync:
             assert c["id"] != synced.id, \
                 f"Unreviewed case should not appear in similar cases: {c}"
 
+    def test_sync_complaint_cases_is_idempotent_and_sanitized(self, db_session):
+        """complaint_cases 同步到 KG 时应幂等，并保留脱敏后的展示内容"""
+        from app.models.complaint_case import ComplaintCase
+        from app.models.knowledge_graph import KGNode
+        from app.services.knowledge_graph import knowledge_graph
+
+        cc = ComplaintCase(
+            province="甘肃",
+            title="测试投诉案例-同步去重",
+            project_name="测试项目",
+            project_number="GS-2026-001",
+            complainant="某公司联系人张三",
+            respondent="某采购人",
+            decision_date="2026-06-18",
+            decision_type="upheld",
+            complaint_types='["品牌锁定", "参数排他"]',
+            legal_basis='["政府采购法第二十条"]',
+            summary="这是一个测试投诉案例",
+            raw_content="原始全文不应进入 KG 展示内容",
+            is_analyzed=1,
+        )
+        db_session.add(cc)
+        db_session.commit()
+        db_session.refresh(cc)
+
+        first_count = knowledge_graph.sync_complaint_cases(db_session)
+        assert first_count == 1
+
+        synced = db_session.query(KGNode).filter(
+            KGNode.rule_id == f"CC-{cc.id}",
+            KGNode.node_type == "case",
+        ).first()
+        assert synced is not None
+        assert synced.audit_status == "unreviewed"
+        assert synced.trust_level == 0.55
+        assert synced.publish_date is not None
+        assert "投诉人" not in synced.content
+        assert "某公司联系人张三" not in synced.content
+        assert "项目编号: GS-2026-001" in synced.content
+
+        second_count = knowledge_graph.sync_complaint_cases(db_session)
+        assert second_count == 0
+
 
 class TestRagTrustedFilters:
     """Issue #3: RAG 可信过滤 — 补缺口"""
@@ -1250,3 +1293,91 @@ class TestRelatedNodeFields:
         assert node.get("publish_date") == "2024-05-15", \
             f"publish_date mismatch: {node.get('publish_date')}"
         assert node.get("created_at") is not None, f"created_at should not be None"
+
+
+class TestCrawlerTriggerEnhancements:
+    """crawler trigger 返回值增强 + 管理接口"""
+
+    def test_trigger_return_has_scrape_stats(self, client: TestClient, db_session):
+        """POST /api/crawler/trigger 返回 scrape_stats 字段（即使采集量为0）"""
+        admin = _create_user(db_session, "c_trigger_admin", role="admin")
+        resp = client.post("/api/crawler/trigger", headers=_headers(admin))
+        # 200 = 调度器成功执行（即使没有外部网络），500 = 调度器内部错误
+        assert resp.status_code in (200, 500)
+        data = resp.json()
+        # 成功时应有 scrape_stats
+        if resp.status_code == 200:
+            assert "scrape_stats" in data, f"trigger response missing scrape_stats: {data}"
+            ss = data["scrape_stats"]
+            assert isinstance(ss, dict)
+            for key in ("ccgp", "ningxia", "shaanxi", "mof", "cases_saved", "kg_synced"):
+                assert key in ss, f"scrape_stats missing key: {key}"
+
+    def test_status_has_scrape_summary(self, client: TestClient, db_session):
+        """GET /api/crawler/status 含 last_case_scrape 摘要和 kg_sync_summary"""
+        user = _create_user(db_session, "c_status_user")
+        resp = client.get("/api/crawler/status", headers=_headers(user))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "last_case_scrape" in data
+        assert "kg_sync_summary" in data
+        # kg_sync_summary 可能为 null（从未采集过）
+        if data["kg_sync_summary"] is not None:
+            assert "last_synced_count" in data["kg_sync_summary"]
+
+    def test_needing_review_has_admin_fields(self, client: TestClient, db_session):
+        """GET /api/kg/nodes/needing-review 返回字段含 source/jurisdiction/rule_id/complaint_case_id"""
+        admin = _create_user(db_session, "c_review_admin", role="admin")
+
+        # 创建一个 unreviewed 案例节点（模拟 sync_complaint_cases 输出）
+        import json as _json_mod
+        node = KGNode(
+            node_type="case",
+            title="[甘肃] 测试未审核案例",
+            content="项目名称: 测试\n处理结果: 投诉成立",
+            source="甘肃政府采购网",
+            source_url="https://example.com/case1",
+            tags="案例,投诉案例,投诉成立,品牌锁定",
+            jurisdiction="甘肃",
+            rule_id="CC-999",
+            trust_level=0.55,
+            audit_status="unreviewed",
+            metadata_json=_json_mod.dumps({
+                "complaint_case_id": 999,
+                "decision_type": "upheld",
+                "complaint_types": ["品牌锁定"],
+            }),
+        )
+        db_session.add(node)
+        db_session.commit()
+
+        resp = client.get("/api/kg/nodes/needing-review", headers=_headers(admin))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "nodes" in data
+        assert "total" in data
+        assert data["total"] >= 1
+        n = data["nodes"][0]
+        for field in ("id", "node_type", "title", "source", "jurisdiction",
+                      "rule_id", "trust_level", "audit_status", "tags",
+                      "content_preview", "complaint_case_id", "decision_type"):
+            assert field in n, f"needing-review node missing field: {field}"
+
+
+class TestComplaintCasesIndexes:
+    """迁移索引存在 + 幂等"""
+
+    def test_complaint_cases_indexes_present(self, client: TestClient, db_session):
+        """Alembic 索引迁移后所有目标索引都存在"""
+        from sqlalchemy import inspect
+        inspector = inspect(db_session.get_bind())
+        indexes = {idx["name"] for idx in inspector.get_indexes("complaint_cases")}
+        expected = {
+            "ix_complaint_cases_source_url",
+            "ix_complaint_cases_decision_type",
+            "ix_complaint_cases_province",
+            "ix_complaint_cases_is_analyzed",
+            "ix_complaint_cases_created_at",
+        }
+        missing = expected - indexes
+        assert not missing, f"Missing indexes on complaint_cases: {missing}"

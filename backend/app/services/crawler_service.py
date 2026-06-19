@@ -275,7 +275,15 @@ async def crawl_ningxia_list(client: httpx.AsyncClient) -> list[dict]:
 
 async def crawl_all() -> dict:
     """执行全部可爬取数据源的采集"""
-    stats = {"ccgp": 0, "ningxia": 0, "shaanxi": 0, "mof": 0, "errors": [], "cases_saved": 0}
+    stats = {
+        "ccgp": 0,
+        "ningxia": 0,
+        "shaanxi": 0,
+        "mof": 0,
+        "kg_synced": 0,
+        "errors": [],
+        "cases_saved": 0,
+    }
 
     async with httpx.AsyncClient(verify=False) as client:
         # ── CCGP 全国 ──
@@ -310,34 +318,48 @@ async def crawl_all() -> dict:
             logger.error("宁夏异常: %s", e)
             stats["errors"].append(f"ningxia: {e}")
 
-    # ── 陕西（Playwright，单独处理） ──
-    try:
-        from app.services.browser_crawler import crawl_shaanxi
-        stats["shaanxi"] = await crawl_shaanxi()
-    except Exception as e:
-        logger.error("陕西异常: %s", e)
-        stats["errors"].append(f"shaanxi: {e}")
+        # ── 陕西（Playwright，单独处理） ──
+        try:
+            from app.services.browser_crawler import crawl_shaanxi
+            stats["shaanxi"] = await crawl_shaanxi()
+        except Exception as e:
+            logger.error("陕西异常: %s", e)
+            stats["errors"].append(f"shaanxi: {e}")
+
+        # ── 财政部信息公告（独立处理） ──
+        try:
+            from app.services.mof_crawler import fetch_gks_list
+
+            mof_items = await fetch_gks_list(client)
+            logger.info("财政部列表: %d 条", len(mof_items))
+            saved = 0
+            for item in mof_items[:20]:  # 限20条
+                d = await crawl_ccgp_detail(item["url"], client)
+                if d:
+                    d["province"] = "全国"
+                    if _save_case(d):
+                        saved += 1
+                await asyncio.sleep(0.3)
+            stats["mof"] = saved
+        except Exception as e:
+            logger.error("财政部异常: %s", e)
+            stats["errors"].append(f"mof: {e}")
 
     stats["cases_saved"] = stats["ccgp"] + stats["ningxia"] + stats["shaanxi"] + stats["mof"]
 
-    # ── 财政部信息公告（独立处理） ──
+    # ── 同步到 KG ───────────────────────────────────────
     try:
-        from app.services.mof_crawler import fetch_gks_list
+        from app.services.knowledge_graph import knowledge_graph
 
-        mof_items = await fetch_gks_list(client)
-        logger.info("财政部列表: %d 条", len(mof_items))
-        saved = 0
-        for item in mof_items[:20]:  # 限20条
-            d = await crawl_ccgp_detail(item["url"], client)
-            if d:
-                d["province"] = "全国"
-                if _save_case(d):
-                    saved += 1
-            await asyncio.sleep(0.3)
-        stats["mof"] = saved
+        db = SessionLocal()
+        try:
+            stats["kg_synced"] = knowledge_graph.sync_complaint_cases(db)
+            db.commit()
+        finally:
+            db.close()
     except Exception as e:
-        logger.error("财政部异常: %s", e)
-        stats["errors"].append(f"mof: {e}")
+        logger.error("案例同步 KG 失败: %s", e)
+        stats["errors"].append(f"kg_sync: {e}")
 
     return stats
 

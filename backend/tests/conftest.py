@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -20,12 +21,19 @@ import pytest
 _PROJ_TMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test_tmp")
 os.makedirs(_PROJ_TMP, exist_ok=True)
 _TEST_DB_PATH = os.path.join(_PROJ_TMP, "test.db")
+_TEST_RULES_PATH = os.path.join(_PROJ_TMP, "rules")
+
+# 所有规则写操作必须落在测试副本，不能依赖各测试文件自行 monkeypatch。
+_SOURCE_RULES_PATH = Path(__file__).resolve().parents[2] / "rules"
+shutil.rmtree(_TEST_RULES_PATH, ignore_errors=True)
+shutil.copytree(_SOURCE_RULES_PATH, _TEST_RULES_PATH)
 
 # ── 强制 mock / test 环境变量 ──────────────────────────────
 os.environ["BHG_LLM_MOCK_MODE"] = "true"
 os.environ["BHG_DEBUG"] = "true"
 os.environ["BHG_SECRET_KEY"] = "test-secret-key---overriding-default-value-for-ci"
 os.environ["BHG_DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
+os.environ["BHG_RULES_DIR"] = _TEST_RULES_PATH
 os.environ["BHG_LOG_LEVEL"] = "error"
 os.environ["BHG_MINIO_ENDPOINT"] = "localhost:9000"
 os.environ["BHG_MINIO_ACCESS_KEY"] = "mock-access-key"
@@ -116,7 +124,7 @@ _TABLES_TO_CLEAN = [
 
 
 def _ensure_tables(engine):
-    """确保所有表已创建（幂等）"""
+    """确保所有表已创建（幂等），并应用增量索引/约束迁移"""
     from app.core.audit import AuditBase
     from app.models.announcement import Base as AnnouncementBase
     from app.models.document import Base as DocumentBase
@@ -127,6 +135,9 @@ def _ensure_tables(engine):
 
     for base in [DocumentBase, RuleBase, AuditBase, AnnouncementBase, SubscriptionBase]:
         base.metadata.create_all(bind=engine, checkfirst=True)
+
+    # 应用增量迁移（索引、约束等 — 幂等，使用 IF NOT EXISTS）
+    _apply_migration_upgrades(engine)
 
 
 def _clean_all_tables(engine):
@@ -139,6 +150,39 @@ def _clean_all_tables(engine):
         for table in _TABLES_TO_CLEAN:
             conn.execute(text(f"DELETE FROM {table}"))
         conn.execute(text("PRAGMA foreign_keys=ON"))
+
+
+def _apply_migration_upgrades(engine):
+    """Apply incremental migration upgrade functions (indexes, constraints).
+
+    Each migration's upgrade() is called directly — the SQL inside each
+    migration uses IF NOT EXISTS / try-except for idempotency.
+    Table creation is already handled by Base.metadata.create_all().
+    """
+    # Import migration upgrade functions by revision
+    _MIGRATION_MODULES = [
+        "app.db.migrations.versions.20260619_1000_complaint_cases_indexes",
+    ]
+
+    for mod_name in _MIGRATION_MODULES:
+        try:
+            mod = __import__(mod_name, fromlist=["upgrade"])
+            if hasattr(mod, "upgrade"):
+                # Patch op.get_bind() to return our test engine
+                import alembic.op as alembic_op
+
+                _original_get_bind = alembic_op.get_bind
+                alembic_op.get_bind = lambda: engine
+
+                try:
+                    mod.upgrade()
+                finally:
+                    alembic_op.get_bind = _original_get_bind
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Migration %s upgrade failed (may be idempotent skip)", mod_name
+            )
 
 
 @pytest.fixture(scope="session")

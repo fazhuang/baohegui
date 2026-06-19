@@ -18,19 +18,28 @@ from app.services.crawler_service import (
 
 logger = logging.getLogger(__name__)
 
-MOF_GK_LIST = "http://gks.mof.gov.cn/ztztz/zhengfucaigouguanli/"
-MOF_GK_BASE = "http://gks.mof.gov.cn"
+MOF_GK_LISTS = [
+    "https://gks.mof.gov.cn/ztztz/zhengfucaigouguanli/",
+    "http://gks.mof.gov.cn/ztztz/zhengfucaigouguanli/",
+]
+MOF_GK_BASE = "https://gks.mof.gov.cn"
 
 
 async def fetch_gks_list(client: httpx.AsyncClient) -> list[dict]:
     """获取财政部国库司政府采购管理页面最新公告列表"""
     items: list[dict] = []
-    try:
-        r = await client.get(MOF_GK_LIST, timeout=30,
-                             headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
-    except Exception as e:
-        logger.warning("财政部列表抓取失败: %s", e)
+    r = None
+    last_error: Exception | None = None
+    for list_url in MOF_GK_LISTS:
+        try:
+            r = await client.get(list_url, timeout=30,
+                                 headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            break
+        except Exception as e:
+            last_error = e
+    if r is None:
+        logger.warning("财政部列表抓取失败: %s", last_error)
         return items
 
     soup = BeautifulSoup(r.text, "lxml")

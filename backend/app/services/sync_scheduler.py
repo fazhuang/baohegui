@@ -43,6 +43,8 @@ class SyncTaskRecord:
     error_message: str = ""
     retry_count: int = 0
     version_created: str = ""
+    # 案例采集专用摘要字段
+    scrape_stats: Optional[dict] = None  # crawl_all() 返回值
 
 
 # ── 通知回调类型 ────────────────────────────────────────────
@@ -166,11 +168,22 @@ class SyncScheduler:
                 updated_rules=0,
                 errors=stats.get("errors", []),
             )
+            record.scrape_stats = {
+                "ccgp": stats.get("ccgp", 0),
+                "ningxia": stats.get("ningxia", 0),
+                "shaanxi": stats.get("shaanxi", 0),
+                "mof": stats.get("mof", 0),
+                "cases_saved": stats.get("cases_saved", 0),
+                "kg_synced": stats.get("kg_synced", 0),
+            }
             logger.info(
-                "案例采集完成: CCGP=%d 宁夏=%d 总保存=%d",
+                "案例采集完成: CCGP=%d 宁夏=%d 陕西=%d 财政部=%d 总保存=%d KG同步=%d",
                 stats.get("ccgp", 0),
                 stats.get("ningxia", 0),
+                stats.get("shaanxi", 0),
+                stats.get("mof", 0),
                 stats.get("cases_saved", 0),
+                stats.get("kg_synced", 0),
             )
         except Exception as e:
             record.status = SyncStatus.FAILED
@@ -179,6 +192,8 @@ class SyncScheduler:
 
         record.finished_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         self._case_history.append(record)
+        if len(self._case_history) > self._max_history:
+            self._case_history.pop(0)
         return record
 
     # ── 手动同步 ─────────────────────────────────────────
@@ -272,6 +287,21 @@ class SyncScheduler:
         )
         last_sync = self._history[-1] if self._history else None
         last_case = self._case_history[-1] if self._case_history else None
+
+        # 从最后一次采集记录中构建摘要
+        last_case_summary = None
+        if last_case:
+            last_case_summary = {
+                "status": last_case.status.value,
+                "time": last_case.finished_at,
+                "error": last_case.error_message,
+                "id": last_case.id,
+            }
+            if last_case.scrape_stats:
+                last_case_summary["scrape_stats"] = last_case.scrape_stats
+            if last_case.result and last_case.result.errors:
+                last_case_summary["errors"] = last_case.result.errors
+
         return {
             "running": self._running,
             "actively_syncing": running,
@@ -284,11 +314,7 @@ class SyncScheduler:
             "sync_interval_hours": self.sync_interval_hours,
             "case_scrape_enabled": app_settings.case_scrape_enabled,
             "case_scrape_interval_hours": self.case_scrape_interval_hours,
-            "last_case_scrape": {
-                "status": last_case.status.value,
-                "time": last_case.finished_at,
-                "error": last_case.error_message,
-            } if last_case else None,
+            "last_case_scrape": last_case_summary,
         }
 
     def get_history(self, n: int = 10) -> list[dict]:

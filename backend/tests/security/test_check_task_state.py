@@ -166,9 +166,8 @@ class TestCheckTaskState:
         db_session.refresh(file)
         assert file.status == "failed", f"status should be failed, got {file.status}"
         assert file.error_message is not None, "error_message 不应为空"
-        assert "LLM分析失败" in (file.error_message or ""), (
-            f"error_message should contain 'LLM分析失败', got '{file.error_message}'"
-        )
+        assert file.error_message == "内部处理错误，请稍后重试"
+        assert "LLM分析失败" not in file.error_message
         assert file.failed_at is not None
 
     def test_fusion_engine_exception_sets_failed_status(self, client: TestClient, db_session):
@@ -190,7 +189,6 @@ class TestCheckTaskState:
         db_session.refresh(file)
         assert file.status == "failed", f"status should be failed, got {file.status}"
         assert file.error_message is not None, "error_message 不应为空"
-        assert "Fusion合并失败" in (file.error_message or ""), (
-            f"error_message should contain 'Fusion合并失败', got '{file.error_message}'"
-        )
+        assert file.error_message == "内部处理错误，请稍后重试"
+        assert "Fusion合并失败" not in file.error_message
         assert file.failed_at is not None

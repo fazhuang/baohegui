@@ -346,6 +346,16 @@ class TestAntiRegression:
         """占位测试：实际检查由 fixture teardown 完成"""
         assert self._PRE_HASH is not None, "Pre-hash should be captured"
 
+    def test_runtime_rule_service_uses_test_copy(self):
+        """pytest 运行时规则服务必须指向隔离副本，不能指向仓库 rules/。"""
+        from app.services.rule_sync import rule_sync_service
+
+        runtime_dir = rule_sync_service.rules_dir.resolve()
+        production_dir = _rules_dir().resolve()
+        assert runtime_dir != production_dir
+        assert runtime_dir.name == "rules"
+        assert runtime_dir.parent.name == ".test_tmp"
+
     def test_no_untracked_snapshots_exist(self):
         """rules/versions/ 下所有 rules_*.json 必须被 git 追踪（不限日期前缀）"""
         versions_dir = _versions_dir()

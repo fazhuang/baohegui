@@ -922,67 +922,7 @@ class KnowledgeGraphService:
         db.flush()
 
         # ── Phase 9: 案例节点 — 从 complaint_cases 表同步 (NEW) ──
-        _decision_tag_map = {
-            "upheld": "投诉成立", "rejected": "投诉驳回",
-            "partial": "部分成立", "dismissed": "驳回",
-        }
-        try:
-            db_cases = db.query(ComplaintCase).filter(
-                ComplaintCase.is_analyzed >= 0
-            ).all()
-            for case in db_cases:
-                # 使用 DB id 作为 rule_id 前缀确保幂等
-                cc_rule_id = f"CC-{case.id}"
-                if KnowledgeGraphService._node_exists_by_rule_id(db, cc_rule_id, "case"):
-                    continue
-
-                # 解析投诉类型标签
-                complaint_types = []
-                if case.complaint_types:
-                    try:
-                        complaint_types = json.loads(case.complaint_types)
-                    except (json.JSONDecodeError, TypeError):
-                        complaint_types = [case.complaint_types] if case.complaint_types else []
-
-                tags_parts = ["案例", "投诉案例",
-                    _decision_tag_map.get(case.decision_type, case.decision_type)]
-                if isinstance(complaint_types, list):
-                    tags_parts.extend(ct for ct in complaint_types if ct)
-
-                content_parts = []
-                if case.project_name:
-                    content_parts.append(f"项目名称: {case.project_name}")
-                if case.project_number:
-                    content_parts.append(f"项目编号: {case.project_number}")
-                if case.complainant:
-                    content_parts.append(f"投诉人: {case.complainant}")
-                if case.respondent:
-                    content_parts.append(f"被投诉人: {case.respondent}")
-                content_parts.append(f"处理结果: {_decision_tag_map.get(case.decision_type, case.decision_type)}")
-                if isinstance(complaint_types, list) and complaint_types:
-                    content_parts.append(f"投诉类型: {', '.join(complaint_types)}")
-                if case.legal_basis:
-                    content_parts.append(f"法规依据: {case.legal_basis}")
-                if case.summary:
-                    content_parts.append(f"摘要: {case.summary}")
-
-                title_prefix = f"[{case.province}] " if case.province != "全国" else ""
-                n = KGNode(
-                    node_type="case",
-                    title=f"{title_prefix}{case.title}",
-                    content="\n".join(content_parts)[:2000],
-                    source=f"{case.province}政府采购网",
-                    source_url=case.source_url or "",
-                    tags=",".join(filter(None, tags_parts)),
-                    jurisdiction=case.province,
-                    rule_id=cc_rule_id,
-                    trust_level=0.55,
-                    audit_status="unreviewed",  # 爬虫数据需人工审核
-                )
-                db.add(n)
-                count += 1
-        except Exception as e:
-            logger.warning("从 complaint_cases 表同步案例节点失败: %s", e)
+        count += KnowledgeGraphService.sync_complaint_cases(db)
 
         db.flush()
 
@@ -1209,6 +1149,122 @@ class KnowledgeGraphService:
             len(all_cases),
         )
         return count + edges_created
+
+    @staticmethod
+    def sync_complaint_cases(db: Session) -> int:
+        """将 `complaint_cases` 表同步为 KG case 节点。
+
+        该方法是幂等的：
+        - 已存在节点只更新基础展示字段，不会回写审核状态或可信度
+        - 新节点默认 `audit_status='unreviewed'`、`trust_level=0.55`
+        """
+        decision_tag_map = {
+            "upheld": "投诉成立",
+            "rejected": "投诉驳回",
+            "partial": "部分成立",
+            "dismissed": "驳回",
+        }
+
+        def _parse_complaint_types(raw: str | None) -> list[str]:
+            if not raw:
+                return []
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(item) for item in parsed if item]
+            except (json.JSONDecodeError, TypeError):
+                pass
+            return [raw] if raw else []
+
+        synced = 0
+        try:
+            db_cases = db.query(ComplaintCase).filter(ComplaintCase.is_analyzed >= 0).all()
+            for case in db_cases:
+                cc_rule_id = f"CC-{case.id}"
+                complaint_types = _parse_complaint_types(case.complaint_types)
+                decision_label = decision_tag_map.get(case.decision_type, case.decision_type or "unknown")
+
+                tags_parts = ["案例", "投诉案例", decision_label]
+                tags_parts.extend(complaint_types)
+
+                content_parts = []
+                if case.project_name:
+                    content_parts.append(f"项目名称: {case.project_name}")
+                if case.project_number:
+                    content_parts.append(f"项目编号: {case.project_number}")
+                if case.decision_date:
+                    content_parts.append(f"决定日期: {case.decision_date}")
+                content_parts.append(f"处理结果: {decision_label}")
+                if complaint_types:
+                    content_parts.append(f"投诉类型: {', '.join(complaint_types)}")
+                if case.legal_basis:
+                    content_parts.append(f"法规依据: {case.legal_basis}")
+                if case.summary:
+                    content_parts.append(f"摘要: {case.summary}")
+
+                title_prefix = f"[{case.province}] " if case.province and case.province != "全国" else ""
+                title = f"{title_prefix}{case.title}"
+                content = "\n".join(content_parts)[:2000]
+                source = f"{case.province}政府采购网" if case.province else "政府采购网"
+                source_url = case.source_url or ""
+                tags = ",".join(filter(None, tags_parts))
+                jurisdiction = case.province or ""
+                publish_date = KnowledgeGraphService._parse_date(case.decision_date or "")
+                metadata = {
+                    "complaint_case_id": case.id,
+                    "decision_type": case.decision_type,
+                    "complaint_types": complaint_types,
+                    "project_name": case.project_name,
+                    "project_number": case.project_number,
+                    "source_url": case.source_url,
+                }
+
+                existing = db.query(KGNode).filter(
+                    KGNode.node_type == "case",
+                    KGNode.rule_id == cc_rule_id,
+                ).first()
+                if existing:
+                    changed = False
+                    field_values = {
+                        "title": title,
+                        "content": content,
+                        "source": source,
+                        "source_url": source_url,
+                        "tags": tags,
+                        "jurisdiction": jurisdiction,
+                        "publish_date": publish_date,
+                        "metadata_json": json.dumps(metadata, ensure_ascii=False),
+                    }
+                    for field_name, value in field_values.items():
+                        if getattr(existing, field_name) != value:
+                            setattr(existing, field_name, value)
+                            changed = True
+                    if changed:
+                        synced += 1
+                    continue
+
+                node = KGNode(
+                    node_type="case",
+                    title=title,
+                    content=content,
+                    source=source,
+                    source_url=source_url,
+                    tags=tags,
+                    jurisdiction=jurisdiction,
+                    rule_id=cc_rule_id,
+                    publish_date=publish_date,
+                    metadata_json=json.dumps(metadata, ensure_ascii=False),
+                    trust_level=0.55,
+                    audit_status="unreviewed",
+                )
+                db.add(node)
+                synced += 1
+        except Exception as e:
+            logger.warning("从 complaint_cases 表同步案例节点失败: %s", e)
+        finally:
+            db.flush()
+
+        return synced
 
     # ── 内部工具方法 ─────────────────────────────────
 

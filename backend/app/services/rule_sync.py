@@ -24,6 +24,8 @@ from typing import Any, Optional
 import httpx
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -124,11 +126,18 @@ class RuleSyncService:
         if rules_dir:
             self.rules_dir = Path(rules_dir)
         else:
-            # 自动探测路径
-            self.rules_dir = (
-                Path("/app/rules") if Path("/app").exists()
-                else Path(__file__).resolve().parent.parent.parent.parent / "rules"
-            )
+            configured = Path(settings.rules_dir)
+            if configured.is_absolute():
+                self.rules_dir = configured
+            else:
+                cwd_rules_dir = Path.cwd() / configured
+                source_rules_dir = (
+                    Path(__file__).resolve().parent.parent.parent.parent
+                    / configured
+                )
+                self.rules_dir = (
+                    cwd_rules_dir if cwd_rules_dir.exists() else source_rules_dir
+                )
         self.platform_rules_file = self.rules_dir / "platform_rules.json"
         self._rules_cache: list[PlatformRule] = []
         self._load_cache()
