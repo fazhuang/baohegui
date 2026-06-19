@@ -258,6 +258,7 @@ class SafeFetcher:
         await _resolve_and_validate(host, source=source, url=url)
 
         # 步骤 3：发送请求 + 总超时 + 流式处理
+        resp = None
         try:
             async with asyncio.timeout(self._total_timeout):
                 resp = await self._client.send(
@@ -266,11 +267,11 @@ class SafeFetcher:
                 )
                 try:
                     # ── 重定向处理 ────────────────────────────
+                    # 只读响应头，不读取整个响应体 — 立即读取 Location 头后关闭
                     if resp.status_code in (301, 302, 303, 307, 308):
-                        async for _ in resp.aiter_bytes(chunk_size=65536):
-                            pass
-                        await resp.aclose()
                         location = resp.headers.get("location", "")
+                        await resp.aclose()
+                        resp = None
                         if not location:
                             raise SafeFetchError(
                                 error_type=FetchErrorType.NETWORK,
@@ -307,6 +308,7 @@ class SafeFetcher:
                     # ── HTTP 状态码检查 ──────────────────────
                     if resp.status_code >= 400:
                         await resp.aclose()
+                        resp = None
                         raise SafeFetchError(
                             error_type=FetchErrorType.HTTP_ERROR,
                             message=f"HTTP {resp.status_code}: {url}",
@@ -321,6 +323,7 @@ class SafeFetcher:
                         allowed = any(ct_lower.startswith(prefix) for prefix in ALLOWED_CONTENT_TYPES)
                         if not allowed:
                             await resp.aclose()
+                            resp = None
                             raise SafeFetchError(
                                 error_type=FetchErrorType.CONTENT_TYPE_REJECTED,
                                 message=f"拒绝 Content-Type '{content_type}': {url}",
@@ -330,15 +333,22 @@ class SafeFetcher:
                     # ── 流式读取 + 大小限制 ──────────────────
                     result = await self._read_stream(url, source, resp)
                     await resp.aclose()
+                    resp = None
                     return result
                 except SafeFetchError:
-                    await resp.aclose()
+                    if resp is not None:
+                        await resp.aclose()
+                        resp = None
                     raise
                 except Exception:
-                    await resp.aclose()
+                    if resp is not None:
+                        await resp.aclose()
+                        resp = None
                     raise
 
         except asyncio.TimeoutError:
+            if resp is not None:
+                await _shielded_close(resp)
             raise SafeFetchError(
                 error_type=FetchErrorType.TIMEOUT,
                 message=f"总超时 {self._total_timeout}s: {url}",
@@ -353,12 +363,16 @@ class SafeFetcher:
                 url=url, source=source,
             )
         except httpx.ReadTimeout:
+            if resp is not None:
+                await _shielded_close(resp)
             raise SafeFetchError(
                 error_type=FetchErrorType.TIMEOUT,
                 message=f"读取超时 {url}",
                 url=url, source=source,
             )
         except Exception as e:
+            if resp is not None:
+                await _shielded_close(resp)
             msg = str(e)
             if "ssl" in msg.lower() or "certificate" in msg.lower() or "tls" in msg.lower():
                 raise SafeFetchError(
@@ -402,6 +416,14 @@ class SafeFetcher:
             chunks.append(chunk)
 
         return b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
+
+
+async def _shielded_close(resp: httpx.Response) -> None:
+    """尽力清理响应资源。包装在 asyncio.shield 中，即使任务被取消也能运行。"""
+    try:
+        await asyncio.shield(resp.aclose())
+    except Exception:
+        pass
 
 
 # ── 便捷工厂 ────────────────────────────────────────────────────
