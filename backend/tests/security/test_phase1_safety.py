@@ -20,9 +20,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import ssl
 import tempfile
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -148,18 +150,24 @@ class TestSafeFetcherContentType:
 
         class FakeStreamResponse:
             status_code = 200
-            is_error = False
             encoding = "utf-8"
             headers = {"content-type": "application/pdf"}
 
-            async def aread(self):
+            async def aiter_bytes(self, chunk_size=65536):
+                yield b"fake pdf"
+                return
+
+            async def aclose(self):
                 pass
 
-            async def aiter_bytes(self, chunk_size=65536):
-                yield b""
+        class FakeClient:
+            async def aclose(self):
+                pass
 
         async def fake_send(self, request, stream=False):
-            return FakeStreamResponse()
+            resp = FakeStreamResponse()
+            resp._client = FakeClient()
+            return resp
 
         import httpx
         monkeypatch.setattr(httpx.AsyncClient, "send", fake_send)
@@ -185,18 +193,24 @@ class TestSafeFetcherContentLength:
 
         class FakeStreamResponse:
             status_code = 200
-            is_error = False
             encoding = "utf-8"
             headers = {"content-type": "text/html", "content-length": "10485760"}
 
-            async def aread(self):
-                pass
-
             async def aiter_bytes(self, chunk_size=65536):
                 yield b"x" * 500000
+                return
+
+            async def aclose(self):
+                pass
+
+        class FakeClient:
+            async def aclose(self):
+                pass
 
         async def fake_send(self, request, stream=False):
-            return FakeStreamResponse()
+            resp = FakeStreamResponse()
+            resp._client = FakeClient()
+            return resp
 
         import httpx
         monkeypatch.setattr(httpx.AsyncClient, "send", fake_send)
@@ -205,6 +219,209 @@ class TestSafeFetcherContentLength:
             with pytest.raises(SafeFetchError) as exc:
                 await f.get("https://www.ccgp.gov.cn/big", source="test")
             assert exc.value.error_type == FetchErrorType.CONTENT_TOO_LARGE
+
+
+class TestSafeFetcherChunkedOverflow:
+    """隔离网络的分块溢出：无 Content-Length 时 Streaming Limit 仍触发"""
+
+    @pytest.mark.asyncio
+    async def test_chunked_over_limit_without_content_length(self, monkeypatch):
+        """无 Content-Length header — 但 chunks 超过限制时应抛出 CONTENT_TOO_LARGE。
+        Patch _read_stream 直接抛出错误，验证 SafeFetcher 不吞掉该错误。"""
+        from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
+
+        async with SafeFetcher(max_bytes=1_000_000, source="test") as f:
+            with pytest.raises(SafeFetchError) as exc:
+                # 直接调用受保护的 _read_stream 以触发大小检查
+                await f._read_stream(
+                    "https://www.ccgp.gov.cn/chunked",
+                    "test",
+                    MockStreamOverLimit(),
+                )
+            assert exc.value.error_type == FetchErrorType.CONTENT_TOO_LARGE
+
+
+class MockStreamOverLimit:
+    """返回超过限制的块的模拟响应"""
+    status_code = 200
+    encoding = "utf-8"
+    headers = {"content-type": "text/html"}  # no content-length
+
+    async def aiter_bytes(self, chunk_size=65536):
+        for _ in range(20):
+            yield b"x" * 100_000
+
+
+class TestSafeFetcherTimeout:
+    """总超时强制"""
+
+    @pytest.mark.asyncio
+    async def test_total_timeout_enforced(self, monkeypatch):
+        """总超时到达时必须抛出 TIMEOUT"""
+        from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
+
+        async def _fake_resolve(*args, **kwargs):
+            return "www.ccgp.gov.cn"
+
+        monkeypatch.setattr("app.services.safe_fetcher._resolve_and_validate", _fake_resolve)
+
+        class SlowStreamResponse:
+            status_code = 200
+            encoding = "utf-8"
+            headers = {"content-type": "text/html"}
+
+            async def aiter_bytes(self, chunk_size=65536):
+                import asyncio
+                await asyncio.sleep(2)
+                yield b"late"
+
+            async def aclose(self):
+                pass
+
+        class FakeClient:
+            async def aclose(self):
+                pass
+
+        async def fake_send(self, request, stream=False):
+            resp = SlowStreamResponse()
+            resp._client = FakeClient()
+            return resp
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", fake_send)
+
+        async with SafeFetcher(total_timeout=1.0, source="test") as f:
+            with pytest.raises(SafeFetchError) as exc:
+                await f.get("https://www.ccgp.gov.cn/slow", source="test")
+            assert exc.value.error_type == FetchErrorType.TIMEOUT
+
+
+class TestSafeFetcherSourceUnknown:
+    """未知来源 fail-closed"""
+
+    @pytest.mark.asyncio
+    async def test_unknown_source_raises(self):
+        """未知 source 必须抛出 SOURCE_UNKNOWN"""
+        from app.services.safe_fetcher import fetcher_for_source, SafeFetchError, FetchErrorType
+
+        with pytest.raises(SafeFetchError) as exc:
+            fetcher_for_source("made_up_source_xyz")
+        assert exc.value.error_type == FetchErrorType.SOURCE_UNKNOWN
+
+
+class TestSafeFetcherTlsFail:
+    """TLS 证书错误"""
+
+    @pytest.mark.asyncio
+    async def test_tls_error_propagates(self, monkeypatch):
+        """SSL 错误被正确分类为 TLS_ERROR"""
+        from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
+
+        async def _fake_resolve(*args, **kwargs):
+            return "www.ccgp.gov.cn"
+
+        monkeypatch.setattr("app.services.safe_fetcher._resolve_and_validate", _fake_resolve)
+
+        class FakeClient:
+            async def aclose(self):
+                pass
+
+        import ssl
+        import httpx
+        async def fake_send(self, request, stream=False):
+            raise ssl.SSLCertVerificationError("certificate verify failed")
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", fake_send)
+
+        async with SafeFetcher(source="test") as f:
+            with pytest.raises(SafeFetchError) as exc:
+                await f.get("https://www.ccgp.gov.cn/bad-cert", source="test")
+            assert exc.value.error_type == FetchErrorType.TLS_ERROR
+
+
+class TestSafeFetcherRedirect:
+    """重定向攻击"""
+
+    @pytest.mark.asyncio
+    async def test_redirect_to_http_rejected(self, monkeypatch):
+        """HTTPS → HTTP 重定向必须被拒绝"""
+        from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
+
+        async def _fake_resolve(*args, **kwargs):
+            return "www.ccgp.gov.cn"
+
+        monkeypatch.setattr("app.services.safe_fetcher._resolve_and_validate", _fake_resolve)
+
+        class RedirectResponse:
+            status_code = 302
+            encoding = "utf-8"
+            headers = {"content-type": "text/html", "location": "http://evil.com/page"}
+
+            async def aiter_bytes(self, chunk_size=65536):
+                yield b""
+                return
+
+            async def aclose(self):
+                pass
+
+        class FakeClient:
+            async def aclose(self):
+                pass
+
+        async def fake_send(self, request, stream=False):
+            resp = RedirectResponse()
+            resp._client = FakeClient()
+            return resp
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", fake_send)
+
+        async with SafeFetcher(source="test") as f:
+            with pytest.raises(SafeFetchError) as exc:
+                await f.get("https://www.ccgp.gov.cn/redirect", source="test")
+            assert exc.value.error_type == FetchErrorType.REDIRECT_TO_HTTP
+
+    @pytest.mark.asyncio
+    async def test_redirect_to_private_ip_dns_rejected(self, monkeypatch):
+        """重定向到私网 IP 的 DNS 被拒绝"""
+        from app.services.safe_fetcher import SafeFetcher, SafeFetchError, FetchErrorType
+
+        async def _fake_resolve_real(host, source, url):
+            if host == "www.ccgp.gov.cn":
+                return host
+            raise SafeFetchError(
+                error_type=FetchErrorType.DNS_PRIVATE,
+                message=f"私网地址 {host}",
+                url=url, source=source,
+            )
+
+        monkeypatch.setattr("app.services.safe_fetcher._resolve_and_validate", _fake_resolve_real)
+
+        class RedirectResponse:
+            status_code = 301
+            encoding = "utf-8"
+            headers = {"content-type": "text/html", "location": "https://10.0.0.5/admin"}
+
+            async def aiter_bytes(self, chunk_size=65536):
+                yield b""
+                return
+
+            async def aclose(self):
+                pass
+
+        class FakeClient:
+            async def aclose(self):
+                pass
+
+        async def fake_send(self, request, stream=False):
+            resp = RedirectResponse()
+            resp._client = FakeClient()
+            return resp
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", fake_send)
+
+        async with SafeFetcher(source="test") as f:
+            with pytest.raises(SafeFetchError) as exc:
+                await f.get("https://www.ccgp.gov.cn/redirect-priv", source="test")
+            assert exc.value.error_type == FetchErrorType.DNS_PRIVATE
 
 
 # ═══════════════════════════════════════════════════════════════

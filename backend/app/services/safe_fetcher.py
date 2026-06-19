@@ -2,15 +2,16 @@
 
 策略：
 - HTTPS-only（明文 HTTP 拒绝）
-- 来源域名白名单
+- 来源域名白名单（未知来源硬失败，fail-closed）
 - 每次重定向逐跳校验 scheme/domain/IP
-- 拒绝 localhost、私网、链路本地、保留地址
+- 拒绝 localhost、私网、链路本地、保留地址（is_global 判定）
 - DNS 解析结果校验（A + AAAA 均需通过）
 - 限制重定向次数
-- 连接、读取和总超时
-- 流式读取 + 最大响应体限制
+- asyncio.timeout 总超时强制
+- 流式读取 + 最大响应体限制（逐块累积，不完整加载到内存）
 - Content-Type 白名单
 - 清晰错误类型和来源日志
+- resp.aclose() 确保连接清理
 
 使用方式::
 
@@ -67,9 +68,6 @@ ALLOWED_DOMAINS: dict[str, list[str]] = {
     "mof": ["gks.mof.gov.cn", "www.ccgp.gov.cn"],
 }
 
-# 旧 _PRIVATE_NETS 列表已移除。
-# 改用 ipaddress.is_global 精确判断 — 覆盖所有 IANA 特殊用途保留段。
-
 
 # ── 错误类型 ────────────────────────────────────────────────────
 
@@ -89,6 +87,7 @@ class FetchErrorType(str, Enum):
     TIMEOUT = "timeout"
     HTTP_ERROR = "http_error"
     NETWORK = "network"
+    SOURCE_UNKNOWN = "source_unknown"
 
 
 @dataclass
@@ -143,7 +142,7 @@ async def _resolve_and_validate(host: str, source: str, url: str) -> str:
             url=url, source=source,
         )
 
-    for family, _, _, _, sockaddr in addrs:
+    for _family, _, _, _, sockaddr in addrs:
         ip = sockaddr[0]
         if _is_private_ip(ip):
             raise SafeFetchError(
@@ -165,8 +164,10 @@ class SafeFetcher:
     - 仅允许 HTTPS scheme。
     - 每个目标 URL 的域名必须通过 DNS 校验（无私有 IP）。
     - 重定向逐跳校验（scheme、domain、DNS）。
-    - 响应体流式读取，受 max_bytes 限制。
+    - 响应体流式读取，受 max_bytes 限制（逐块累积，不完整加载）。
     - Content-Type 必须匹配白名单。
+    - 连接清理：resp.aclose() 确保每条响应关闭。
+    - 总超时：asyncio.timeout 包裹完整请求链。
     """
 
     def __init__(
@@ -245,8 +246,8 @@ class SafeFetcher:
                 url=url, source=source,
             )
 
-        # 步骤 1：域名白名单检查
-        if self._allowed_domains and host not in self._allowed_domains:
+        # 步骤 1：域名白名单检查（fail-closed）
+        if self._allowed_domains is not None and host not in self._allowed_domains:
             raise SafeFetchError(
                 error_type=FetchErrorType.REDIRECT_CROSS_DOMAIN,
                 message=f"域名 {host} 不在白名单 {self._allowed_domains}",
@@ -256,14 +257,95 @@ class SafeFetcher:
         # 步骤 2：DNS 校验
         await _resolve_and_validate(host, source=source, url=url)
 
-        # 步骤 3：发送请求（stream=True — 响应体通过 aiter_bytes 流式读取，
-        # 大小限制在读取过程中生效，避免完整加载到内存再检查）
+        # 步骤 3：发送请求 + 总超时 + 流式处理
         try:
-            resp = await self._client.send(
-                self._client.build_request("GET", url),
-                stream=True,
+            async with asyncio.timeout(self._total_timeout):
+                resp = await self._client.send(
+                    self._client.build_request("GET", url),
+                    stream=True,
+                )
+                try:
+                    # ── 重定向处理 ────────────────────────────
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        async for _ in resp.aiter_bytes(chunk_size=65536):
+                            pass
+                        await resp.aclose()
+                        location = resp.headers.get("location", "")
+                        if not location:
+                            raise SafeFetchError(
+                                error_type=FetchErrorType.NETWORK,
+                                message=f"重定向响应缺少 Location 头: {url}",
+                                url=url, source=source,
+                            )
+                        from urllib.parse import urljoin
+                        next_url = urljoin(url, location)
+                        if redirect_count >= self._max_redirects:
+                            raise SafeFetchError(
+                                error_type=FetchErrorType.REDIRECT_LOOP,
+                                message=f"重定向次数超限 ({self._max_redirects}): {url} → {next_url}",
+                                url=url, source=source,
+                            )
+                        next_parsed = urlparse(next_url)
+                        if next_parsed.scheme != "https":
+                            raise SafeFetchError(
+                                error_type=FetchErrorType.REDIRECT_TO_HTTP,
+                                message=f"重定向到 HTTP: {next_url}",
+                                url=url, source=source,
+                            )
+                        next_host = next_parsed.hostname or ""
+                        if self._allowed_domains is not None and next_host not in self._allowed_domains:
+                            raise SafeFetchError(
+                                error_type=FetchErrorType.REDIRECT_CROSS_DOMAIN,
+                                message=f"重定向跨域 {host} → {next_host}，不在白名单内",
+                                url=url, source=source,
+                            )
+                        await _resolve_and_validate(next_host, source=source, url=next_url)
+                        return await self._fetch_with_redirect(
+                            next_url, source=source, redirect_count=redirect_count + 1,
+                        )
+
+                    # ── HTTP 状态码检查 ──────────────────────
+                    if resp.status_code >= 400:
+                        await resp.aclose()
+                        raise SafeFetchError(
+                            error_type=FetchErrorType.HTTP_ERROR,
+                            message=f"HTTP {resp.status_code}: {url}",
+                            url=url, source=source,
+                            status_code=resp.status_code,
+                        )
+
+                    # ── Content-Type 检查 ────────────────────
+                    content_type = resp.headers.get("content-type", "")
+                    if content_type:
+                        ct_lower = content_type.lower()
+                        allowed = any(ct_lower.startswith(prefix) for prefix in ALLOWED_CONTENT_TYPES)
+                        if not allowed:
+                            await resp.aclose()
+                            raise SafeFetchError(
+                                error_type=FetchErrorType.CONTENT_TYPE_REJECTED,
+                                message=f"拒绝 Content-Type '{content_type}': {url}",
+                                url=url, source=source,
+                            )
+
+                    # ── 流式读取 + 大小限制 ──────────────────
+                    result = await self._read_stream(url, source, resp)
+                    await resp.aclose()
+                    return result
+                except SafeFetchError:
+                    await resp.aclose()
+                    raise
+                except Exception:
+                    await resp.aclose()
+                    raise
+
+        except asyncio.TimeoutError:
+            raise SafeFetchError(
+                error_type=FetchErrorType.TIMEOUT,
+                message=f"总超时 {self._total_timeout}s: {url}",
+                url=url, source=source,
             )
-            await resp.aread()  # ensure headers received
+        except SafeFetchError:
+            raise
         except httpx.ConnectError as e:
             raise SafeFetchError(
                 error_type=FetchErrorType.NETWORK,
@@ -277,7 +359,6 @@ class SafeFetcher:
                 url=url, source=source,
             )
         except Exception as e:
-            # 捕获 SSL 错误（证书校验失败等）
             msg = str(e)
             if "ssl" in msg.lower() or "certificate" in msg.lower() or "tls" in msg.lower():
                 raise SafeFetchError(
@@ -291,72 +372,10 @@ class SafeFetcher:
                 url=url, source=source,
             )
 
-        # 步骤 4：处理重定向
-        if resp.status_code in (301, 302, 303, 307, 308):
-            location = resp.headers.get("location", "")
-            if not location:
-                raise SafeFetchError(
-                    error_type=FetchErrorType.NETWORK,
-                    message=f"重定向响应缺少 Location 头: {url}",
-                    url=url, source=source,
-                )
-
-            # 解析相对 URL
-            from urllib.parse import urljoin
-            next_url = urljoin(url, location)
-
-            if redirect_count >= self._max_redirects:
-                raise SafeFetchError(
-                    error_type=FetchErrorType.REDIRECT_LOOP,
-                    message=f"重定向次数超限 ({self._max_redirects}): {url} → {next_url}",
-                    url=url, source=source,
-                )
-
-            # 逐跳校验重定向目标
-            next_parsed = urlparse(next_url)
-            if next_parsed.scheme != "https":
-                raise SafeFetchError(
-                    error_type=FetchErrorType.REDIRECT_TO_HTTP,
-                    message=f"重定向到 HTTP: {next_url}",
-                    url=url, source=source,
-                )
-
-            next_host = next_parsed.hostname or ""
-            if self._allowed_domains and next_host not in self._allowed_domains:
-                raise SafeFetchError(
-                    error_type=FetchErrorType.REDIRECT_CROSS_DOMAIN,
-                    message=f"重定向跨域 {host} → {next_host}，不在白名单内",
-                    url=url, source=source,
-                )
-
-            await _resolve_and_validate(next_host, source=source, url=next_url)
-
-            return await self._fetch_with_redirect(
-                next_url, source=source, redirect_count=redirect_count + 1,
-            )
-
-        # 步骤 5：HTTP 状态码检查
-        if resp.is_error or resp.status_code >= 400:
-            raise SafeFetchError(
-                error_type=FetchErrorType.HTTP_ERROR,
-                message=f"HTTP {resp.status_code}: {url}",
-                url=url, source=source,
-                status_code=resp.status_code,
-            )
-
-        # 步骤 6：Content-Type 检查
-        content_type = resp.headers.get("content-type", "")
-        if content_type:
-            ct_lower = content_type.lower()
-            allowed = any(ct_lower.startswith(prefix) for prefix in ALLOWED_CONTENT_TYPES)
-            if not allowed:
-                raise SafeFetchError(
-                    error_type=FetchErrorType.CONTENT_TYPE_REJECTED,
-                    message=f"拒绝 Content-Type '{content_type}': {url}",
-                    url=url, source=source,
-                )
-
-        # 步骤 7：流式读取受大小限制
+    async def _read_stream(
+        self, url: str, source: str, resp: httpx.Response,
+    ) -> str:
+        """流式读取响应体，逐块累积并强制定大上限。"""
         content_length = resp.headers.get("content-length")
         if content_length:
             try:
@@ -364,7 +383,7 @@ class SafeFetcher:
                 if cl > self._max_bytes:
                     raise SafeFetchError(
                         error_type=FetchErrorType.CONTENT_TOO_LARGE,
-                        message=f"Content-Length {cl} 超过限制 {self._max_bytes}",
+                        message=f"Content-Length {cl} > {self._max_bytes}: {url}",
                         url=url, source=source,
                     )
             except ValueError:
@@ -377,7 +396,7 @@ class SafeFetcher:
             if total > self._max_bytes:
                 raise SafeFetchError(
                     error_type=FetchErrorType.CONTENT_TOO_LARGE,
-                    message=f"响应体超过限制 {self._max_bytes}（已读取 {total} 字节）",
+                    message=f"响应体超过 {self._max_bytes}（已读 {total}B）: {url}",
                     url=url, source=source,
                 )
             chunks.append(chunk)
@@ -391,7 +410,13 @@ class SafeFetcher:
 def fetcher_for_source(source: str) -> SafeFetcher:
     """为指定采集来源创建已配置域名白名单的抓取器。
 
-    source 必须匹配 ALLOWED_DOMAINS 中的键。
+    source 必须匹配 ALLOWED_DOMAINS 键。未知 source 抛 SafeFetchError。
     """
     domains = ALLOWED_DOMAINS.get(source)
+    if domains is None:
+        raise SafeFetchError(
+            error_type=FetchErrorType.SOURCE_UNKNOWN,
+            message=f"未知采集来源 '{source}'。已知来源: {list(ALLOWED_DOMAINS)}",
+            source=source,
+        )
     return SafeFetcher(allowed_domains=domains, source=source)
