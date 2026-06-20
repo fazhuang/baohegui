@@ -391,13 +391,14 @@ async def crawl_all() -> dict:
         for err in stats[src_key]["errors"]:
             stats["errors"].append(f"{src_key}: {err}")
 
-    # ── 同步到 KG ───────────────────────────────────────
+    # ── 同步到 KG（仅 published 案例） ──────────────────
     try:
-        from app.services.knowledge_graph import knowledge_graph
+        from app.services.kg_projection import kg_projection
 
         db = SessionLocal()
         try:
-            stats["kg_synced"] = knowledge_graph.sync_complaint_cases(db)
+            kg_result = kg_projection.project_all_published(db, limit=500)
+            stats["kg_synced"] = kg_result["created"] + kg_result["updated"]
             db.commit()
         finally:
             db.close()
@@ -412,7 +413,10 @@ async def crawl_all() -> dict:
 
 
 def _save_case(data: dict) -> bool:
-    """将一条案例写入数据库（去重）"""
+    """将一条案例写入数据库（去重）
+
+    自动转换 decision_date 字符串为 date 对象。
+    """
     db: Session = SessionLocal()
     try:
         existing = db.query(ComplaintCase).filter(
@@ -420,6 +424,19 @@ def _save_case(data: dict) -> bool:
         ).first()
         if existing:
             return False
+
+        # 兼容字符串日期 → Date 类型
+        if "decision_date" in data and isinstance(data["decision_date"], str):
+            from datetime import date as date_cls
+            raw_d = data["decision_date"].strip()
+            if raw_d:
+                try:
+                    data["decision_date"] = date_cls.fromisoformat(raw_d)
+                except (ValueError, TypeError):
+                    data["decision_date"] = None
+            else:
+                data["decision_date"] = None
+
         case = ComplaintCase(**data)
         db.add(case)
         db.commit()

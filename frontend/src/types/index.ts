@@ -45,7 +45,11 @@ export type PermissionKey =
   // 知识图谱
   | 'kg:read' | 'kg:seed'
   // 爬虫
-  | 'crawler:read' | 'crawler:trigger';
+  | 'crawler:read' | 'crawler:trigger'
+  // 案例审核
+  | 'cases:review' | 'cases:manage'
+  // 候选规则
+  | 'candidate_rules:read' | 'candidate_rules:write';
 
 // ═══════════════════════════════════════════════════════════════
 // 菜单配置类型
@@ -404,5 +408,155 @@ export interface MemberDashboardResponse {
   };
   data?: {
     announcements?: Array<Record<string, unknown>>;
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 案例审核 (Phase 2)
+// ═══════════════════════════════════════════════════════════════
+
+export type CaseReviewStatus =
+  | 'fetched'
+  | 'normalized'
+  | 'extracted'
+  | 'pending_review'
+  | 'verified'
+  | 'published'
+  | 'unpublished'
+  | 'duplicate'
+  | 'rejected'
+  | 'parse_failed'
+  | 'quarantined'
+  | 'archived';
+
+export type PublishStatus = 'draft' | 'published' | 'unpublished';
+
+export interface ComplaintCaseItem {
+  id: number;
+  title: string;
+  province: string;
+  source_url?: string;
+  source_type?: string;
+  project_name?: string;
+  project_number?: string;
+  case_no?: string;
+  city?: string;
+  decision_date?: string | null;
+  decision_type: string;
+  review_status: CaseReviewStatus;
+  publish_status: PublishStatus;
+  quality_score: number;
+  content_hash?: string;
+  has_raw: boolean;
+  has_sanitized: boolean;
+  is_analyzed: number;
+  created_at?: string;
+  allowed_transitions: string[];
+}
+
+export interface ComplaintCaseDetail extends ComplaintCaseItem {
+  complainant?: string;
+  respondent?: string;
+  complaint_types: string[];
+  legal_basis: string[];
+  summary?: string;
+  raw_content?: string;
+  sanitized_content?: string;
+  canonical_url?: string;
+  reviewed_by?: number;
+  reviewed_at?: string | null;
+  published_at?: string | null;
+  extractor_version?: string;
+  extraction_metadata?: Record<string, unknown>;
+  dedup_info?: DedupResult;
+  candidate_rules?: Array<{
+    id: number;
+    candidate_id: string;
+    description: string;
+    review_status: string;
+    confidence: number;
+  }>;
+}
+
+export interface DedupResult {
+  is_duplicate: boolean;
+  method: string;
+  duplicates: Array<{
+    id: number;
+    title: string;
+    source_url?: string;
+    decision_date?: string | null;
+    review_status: string;
+  }>;
+  candidates: Array<{
+    id: number;
+    title: string;
+    title_similarity: number;
+    content_similarity: number;
+  }>;
+  auto_resolved: boolean;
+}
+
+export interface ReviewQueueStats {
+  by_status: Record<string, number>;
+  pending_total: number;
+  by_source_type: Record<string, number>;
+  by_province: Record<string, number>;
+}
+
+export interface ReviewActionResponse {
+  action: string;
+  success_count: number;
+  error_count: number;
+  results: Array<{
+    case_id: number;
+    from_status: string;
+    to_status: string;
+    title: string;
+  }>;
+  errors: Array<{
+    case_id: number;
+    error: string;
+  }>;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 候选规则 (Phase 2)
+// ═══════════════════════════════════════════════════════════════
+
+export interface CandidateRuleItem {
+  id: number;
+  candidate_id: string;
+  source_case_id?: number;
+  source_type: string;
+  rule_type: string;
+  target: string;
+  description: string;
+  risk_level: 'critical' | 'high' | 'medium' | 'low';
+  category: string;
+  law_ref?: string;
+  suggestion?: string;
+  pattern?: string;
+  confidence: number;
+  miner_version?: string;
+  review_status: 'pending' | 'approved' | 'rejected' | 'duplicate';
+  reviewed_by?: number;
+  reviewed_at?: string | null;
+  review_note?: string;
+  promoted_to?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CandidateRuleDetail extends CandidateRuleItem {
+  evidence?: {
+    case_id?: number;
+    matches: string[];
+  };
+  source_case?: {
+    id: number;
+    title: string;
+    decision_type: string;
+    province: string;
   };
 }

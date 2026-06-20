@@ -64,10 +64,13 @@ async def test_crawl_all_syncs_cases_into_kg(db_session, monkeypatch):
     assert stats["ningxia"]["saved"] == 1
     assert stats["mof"]["saved"] == 1
     assert stats["cases_saved"] == 3
-    assert stats["kg_synced"] == 3
+    # Phase 2: kg_synced now counts published cases only (via kg_projection);
+    # newly-crawled cases are in "fetched" state, so kg_synced = 0
+    assert stats["kg_synced"] == 0
     assert stats["errors"] == []
 
     complaint_count = db_session.query(ComplaintCase).count()
     kg_case_count = db_session.query(KGNode).filter(KGNode.node_type == "case").count()
     assert complaint_count == 3
-    assert kg_case_count == 3
+    # Phase 2: kg_case nodes only created for published cases
+    assert kg_case_count == 0

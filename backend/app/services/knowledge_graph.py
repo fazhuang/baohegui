@@ -929,8 +929,10 @@ class KnowledgeGraphService:
 
         db.flush()
 
-        # ── Phase 9: 案例节点 — 从 complaint_cases 表同步 (NEW) ──
-        count += KnowledgeGraphService.sync_complaint_cases(db)
+        # ── Phase 9: 案例节点 — 仅 published 案例通过 kg_projection 投影 ──
+        from app.services.kg_projection import kg_projection
+        kg_pr = kg_projection.project_all_published(db, limit=1000)
+        count += kg_pr["created"] + kg_pr["updated"]
 
         db.flush()
 
@@ -1173,142 +1175,15 @@ class KnowledgeGraphService:
 
     @staticmethod
     def sync_complaint_cases(db: Session) -> int:
-        """将 `complaint_cases` 表同步为 KG case 节点。
+        """将 published complaint_cases 投影为 KG case 节点（Phase 2 委托 kg_projection）。
 
-        该方法是幂等的：
-        - 已存在节点只更新基础展示字段，不会回写审核状态或可信度
-        - 新节点默认 `audit_status='unreviewed'`、`trust_level=0.55`
+        该方法兼容旧调用方，实际委托 kg_projection.project_all_published 执行。
+        旧行为：所有案例 → unreviewed 节点。
+        新行为：仅 published 案例 → verified 节点。
         """
-        decision_tag_map = {
-            "upheld": "投诉成立",
-            "rejected": "投诉驳回",
-            "partial": "部分成立",
-            "dismissed": "驳回",
-        }
-
-        def _parse_complaint_types(raw: str | None) -> list[str]:
-            """将 complaint_types 字段解析为清洗后的标签列表。
-
-            支持三种输入格式：
-            1. 标准 JSON 数组：'["品牌锁定", "参数排他"]'
-            2. Python repr 字符串（历史遗留）："['品牌锁定', '参数排他']" 或 "['O\\'Reilly', '品牌']"
-            3. 空值/损坏值：返回空列表
-
-            安全约束：优先 json.loads，失败后使用 ast.literal_eval 安全解析 Python 字面量。
-            """
-            if not raw or not raw.strip():
-                return []
-            raw = raw.strip()
-            try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, list):
-                    return [str(item).strip() for item in parsed if item and str(item).strip()]
-            except (json.JSONDecodeError, TypeError):
-                pass
-            # 历史 Python repr 兼容：使用 ast.literal_eval 安全解析
-            # 相比手工引号替换，ast.literal_eval 正确处理撇号、转义、嵌套引号等边界情况
-            if raw.startswith("[") and raw.endswith("]"):
-                try:
-                    parsed = ast.literal_eval(raw)
-                    if isinstance(parsed, list):
-                        return [str(item).strip() for item in parsed if item and str(item).strip()]
-                except (ValueError, SyntaxError, TypeError):
-                    pass
-            # Fallback：无法解析时，作为单个标签处理
-            cleaned = raw.strip("[]'\" \t\n\r")
-            if cleaned:
-                return [cleaned]
-            return []
-
-        synced = 0
-        try:
-            db_cases = db.query(ComplaintCase).filter(ComplaintCase.is_analyzed >= 0).all()
-            for case in db_cases:
-                cc_rule_id = f"CC-{case.id}"
-                complaint_types = _parse_complaint_types(case.complaint_types)
-                decision_label = decision_tag_map.get(case.decision_type, case.decision_type or "unknown")
-
-                tags_parts = ["案例", "投诉案例", decision_label]
-                tags_parts.extend(complaint_types)
-
-                content_parts = []
-                if case.project_name:
-                    content_parts.append(f"项目名称: {case.project_name}")
-                if case.project_number:
-                    content_parts.append(f"项目编号: {case.project_number}")
-                if case.decision_date:
-                    content_parts.append(f"决定日期: {case.decision_date}")
-                content_parts.append(f"处理结果: {decision_label}")
-                if complaint_types:
-                    content_parts.append(f"投诉类型: {', '.join(complaint_types)}")
-                if case.legal_basis:
-                    content_parts.append(f"法规依据: {case.legal_basis}")
-                if case.summary:
-                    content_parts.append(f"摘要: {case.summary}")
-
-                title_prefix = f"[{case.province}] " if case.province and case.province != "全国" else ""
-                title = f"{title_prefix}{case.title}"
-                content = "\n".join(content_parts)[:2000]
-                source = f"{case.province}政府采购网" if case.province else "政府采购网"
-                source_url = case.source_url or ""
-                tags = ",".join(filter(None, tags_parts))
-                jurisdiction = case.province or ""
-                publish_date = KnowledgeGraphService._parse_date(case.decision_date or "")
-                metadata = {
-                    "complaint_case_id": case.id,
-                    "decision_type": case.decision_type,
-                    "complaint_types": complaint_types,
-                    "project_name": case.project_name,
-                    "project_number": case.project_number,
-                    "source_url": case.source_url,
-                }
-
-                existing = db.query(KGNode).filter(
-                    KGNode.node_type == "case",
-                    KGNode.rule_id == cc_rule_id,
-                ).first()
-                if existing:
-                    changed = False
-                    field_values = {
-                        "title": title,
-                        "content": content,
-                        "source": source,
-                        "source_url": source_url,
-                        "tags": tags,
-                        "jurisdiction": jurisdiction,
-                        "publish_date": publish_date,
-                        "metadata_json": json.dumps(metadata, ensure_ascii=False),
-                    }
-                    for field_name, value in field_values.items():
-                        if getattr(existing, field_name) != value:
-                            setattr(existing, field_name, value)
-                            changed = True
-                    if changed:
-                        synced += 1
-                    continue
-
-                node = KGNode(
-                    node_type="case",
-                    title=title,
-                    content=content,
-                    source=source,
-                    source_url=source_url,
-                    tags=tags,
-                    jurisdiction=jurisdiction,
-                    rule_id=cc_rule_id,
-                    publish_date=publish_date,
-                    metadata_json=json.dumps(metadata, ensure_ascii=False),
-                    trust_level=0.55,
-                    audit_status="unreviewed",
-                )
-                db.add(node)
-                synced += 1
-        except Exception as e:
-            logger.warning("从 complaint_cases 表同步案例节点失败: %s", e)
-        finally:
-            db.flush()
-
-        return synced
+        from app.services.kg_projection import kg_projection
+        kg_pr = kg_projection.project_all_published(db, limit=10000)
+        return kg_pr["created"] + kg_pr["updated"]
 
     # ── 内部工具方法 ─────────────────────────────────
 

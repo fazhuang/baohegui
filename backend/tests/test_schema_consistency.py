@@ -81,6 +81,8 @@ def orm_engine():
     """纯 ORM create_all 引擎 — 用于对比 Alembic 与 ORM 的差距。"""
     from app.core.audit import AuditBase
     from app.models.announcement import Base as AnnouncementBase
+    from app.models.candidate_rule import Base as CandidateRuleBase
+    from app.models.complaint_case import Base as ComplaintCaseBase
     from app.models.document import Base as DocumentBase
     from app.models.knowledge_graph import KGNode, KGEdge  # noqa: F401
     from app.models.rule import Base as RuleBase
@@ -95,7 +97,7 @@ def orm_engine():
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False},
     )
-    for base in [DocumentBase, RuleBase, AuditBase, AnnouncementBase, SubscriptionBase]:
+    for base in [DocumentBase, RuleBase, AuditBase, AnnouncementBase, ComplaintCaseBase, CandidateRuleBase, SubscriptionBase]:
         base.metadata.create_all(bind=engine)
 
     yield engine
@@ -203,7 +205,7 @@ class TestAlembicSchemaVsOrm:
         inspector = inspect(alembic_engine)
         tables = set(inspector.get_table_names())
         # Alembic 迁移当前创建这些核心表（audit_logs 可能由迁移或 AuditService 创建）
-        required = {"complaint_cases", "kg_nodes", "kg_edges"}
+        required = {"complaint_cases", "kg_nodes", "kg_edges", "candidate_rules"}
         missing = required - tables
         assert not missing, f"Alembic tables missing: {missing}"
 
@@ -216,7 +218,7 @@ class TestAlembicSchemaVsOrm:
         # 当前迁移仅创建 complaint_cases / kg_edges / kg_nodes / audit_logs
         # + alembic_version = 5
         # 注意：audit_logs 可能由 AuditService 引擎创建（共享同一 DB URL）或由迁移创建
-        core = {"alembic_version", "complaint_cases", "kg_edges", "kg_nodes"}
+        core = {"alembic_version", "complaint_cases", "kg_edges", "kg_nodes", "candidate_rules"}
         extra = tables - core
         # 允许 audit_logs（由迁移或 AuditService 创建），但不允许其他意外表
         unexpected = extra - {"audit_logs", "sqlite_sequence"}

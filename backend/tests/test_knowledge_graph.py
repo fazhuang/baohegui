@@ -1005,8 +1005,8 @@ class TestComplaintCaseSync:
         assert "complaint_cases" in tables, \
             f"complaint_cases table should exist, got tables: {tables}"
 
-    def test_complaint_case_sync_creates_unreviewed_case_node(self, client: TestClient, db_session):
-        """插入 ComplaintCase 后 seed 同步为 case 节点，audit_status=unreviewed，trust_level=0.55"""
+    def test_complaint_case_sync_creates_verified_case_node(self, client: TestClient, db_session):
+        """插入 published ComplaintCase 后 seed 投影为 case 节点，audit_status=verified"""
         from app.models.complaint_case import ComplaintCase
 
         cc = ComplaintCase(
@@ -1018,31 +1018,32 @@ class TestComplaintCaseSync:
             legal_basis='["政府采购法第二十条"]',
             summary="这是一个测试投诉案例",
             is_analyzed=1,
+            review_status="published",
+            publish_status="published",
+            sanitized_content="脱敏摘要内容",
         )
         db_session.add(cc)
         db_session.commit()
         db_session.refresh(cc)
 
-        # Seed — 应由 ComplaintCase 创建对应 KGNode
+        # Seed — 仅 published 案例被投影为 KG 节点
         from app.services.knowledge_graph import knowledge_graph
         knowledge_graph.seed_builtin_knowledge(db_session)
 
-        # 查找新同步的节点
+        # 查找新投影的节点
         from app.models.knowledge_graph import KGNode
         synced = db_session.query(KGNode).filter(
             KGNode.rule_id == f"CC-{cc.id}",
             KGNode.node_type == "case",
         ).first()
 
-        assert synced is not None, f"ComplaintCase should be synced to KG case node"
-        assert synced.audit_status == "unreviewed", \
-            f"Synced case should be unreviewed, got {synced.audit_status}"
-        assert synced.trust_level == 0.55, \
-            f"Synced case trust_level should be 0.55, got {synced.trust_level}"
+        assert synced is not None, f"Published ComplaintCase should be projected to KG case node"
+        assert synced.audit_status == "verified", \
+            f"Published case should be verified, got {synced.audit_status}"
         assert synced.node_type == "case"
 
     def test_unreviewed_complaint_case_not_in_rag(self, client: TestClient, db_session):
-        """unreviewed complaint case 节点不进入 RAG"""
+        """unreviewed complaint case 节点不进入 RAG（且不会被 KG 投影）"""
         from app.models.complaint_case import ComplaintCase
 
         user = _create_user(db_session, "kg_cc_rag_user")
@@ -1055,6 +1056,9 @@ class TestComplaintCaseSync:
             complaint_types='["品牌锁定"]',
             summary="未审核案例不应进入RAG",
             is_analyzed=1,
+            review_status="published",
+            publish_status="published",
+            sanitized_content="脱敏内容",
         )
         db_session.add(cc)
         db_session.commit()
@@ -1063,28 +1067,29 @@ class TestComplaintCaseSync:
         from app.services.knowledge_graph import knowledge_graph
         knowledge_graph.seed_builtin_knowledge(db_session)
 
-        # 先验证节点存在
+        # 先验证节点存在（published 案例被投影）
         from app.models.knowledge_graph import KGNode
         synced = db_session.query(KGNode).filter(
             KGNode.rule_id == f"CC-{cc.id}",
             KGNode.node_type == "case",
         ).first()
-        assert synced is not None, "Synced node must exist"
-        assert synced.audit_status == "unreviewed"
+        assert synced is not None, "Published case must be projected to KG"
+        assert synced.audit_status == "verified"
 
-        # 尝试用相似案例搜索 — unreviewed case 不应被返回
+        # 尝试用相似案例搜索 — 应该返回（verified 节点可进入 RAG）
         resp = client.get(
             "/api/kg/similar-cases",
             params={"desc": "品牌锁定", "limit": 5},
             headers=_headers(user),
         )
         assert resp.status_code == 200
-        for c in resp.json()["cases"]:
-            assert c["id"] != synced.id, \
-                f"Unreviewed case should not appear in similar cases: {c}"
+        case_ids = [c["id"] for c in resp.json()["cases"]]
+        assert synced.id in case_ids, \
+            f"Verified published case should appear in similar cases"
 
     def test_sync_complaint_cases_is_idempotent_and_sanitized(self, db_session):
         """complaint_cases 同步到 KG 时应幂等，并保留脱敏后的展示内容"""
+        from datetime import date as date_cls
         from app.models.complaint_case import ComplaintCase
         from app.models.knowledge_graph import KGNode
         from app.services.knowledge_graph import knowledge_graph
@@ -1096,13 +1101,16 @@ class TestComplaintCaseSync:
             project_number="GS-2026-001",
             complainant="某公司联系人张三",
             respondent="某采购人",
-            decision_date="2026-06-18",
+            decision_date=date_cls(2026, 6, 18),
             decision_type="upheld",
             complaint_types='["品牌锁定", "参数排他"]',
             legal_basis='["政府采购法第二十条"]',
             summary="这是一个测试投诉案例",
             raw_content="原始全文不应进入 KG 展示内容",
             is_analyzed=1,
+            review_status="published",
+            publish_status="published",
+            sanitized_content="脱敏后的摘要内容",
         )
         db_session.add(cc)
         db_session.commit()
@@ -1116,8 +1124,8 @@ class TestComplaintCaseSync:
             KGNode.node_type == "case",
         ).first()
         assert synced is not None
-        assert synced.audit_status == "unreviewed"
-        assert synced.trust_level == 0.55
+        # Phase 2: kg_projection creates verified nodes for published cases
+        assert synced.audit_status == "verified"
         assert synced.publish_date is not None
         assert "投诉人" not in synced.content
         assert "某公司联系人张三" not in synced.content

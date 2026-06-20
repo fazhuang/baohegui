@@ -286,6 +286,9 @@ class TestComplaintTypesNormalization:
             complaint_types="['品牌锁定', '参数排他']",  # 旧格式
             summary="测试",
             is_analyzed=1,
+            review_status="published",
+            publish_status="published",
+            sanitized_content="测试内容",
         )
         db_session.add(cc)
         db_session.commit()
@@ -314,6 +317,9 @@ class TestComplaintTypesNormalization:
             complaint_types="",
             summary="测试",
             is_analyzed=1,
+            review_status="published",
+            publish_status="published",
+            sanitized_content="测试内容",
         )
         db_session.add(cc)
         db_session.commit()
@@ -341,6 +347,9 @@ class TestComplaintTypesNormalization:
             complaint_types=None,
             summary="测试",
             is_analyzed=1,
+            review_status="published",
+            publish_status="published",
+            sanitized_content="测试内容",
         )
         db_session.add(cc)
         db_session.commit()
@@ -360,6 +369,9 @@ class TestComplaintTypesNormalization:
             complaint_types="{broken json!!!",
             summary="测试",
             is_analyzed=1,
+            review_status="published",
+            publish_status="published",
+            sanitized_content="测试",
         )
         db_session.add(cc)
         db_session.commit()
@@ -387,6 +399,9 @@ class TestComplaintTypesNormalization:
             complaint_types="['品牌锁定']",
             summary="测试",
             is_analyzed=1,
+            review_status="published",
+            publish_status="published",
+            sanitized_content="测试",
         )
         db_session.add(cc)
         db_session.commit()
@@ -411,6 +426,9 @@ class TestComplaintTypesNormalization:
             complaint_types='''[\"O'Reilly\", \"品牌锁定\"]''',
             summary="测试",
             is_analyzed=1,
+            review_status="published",
+            publish_status="published",
+            sanitized_content="测试",
         )
         db_session.add(cc)
         db_session.commit()

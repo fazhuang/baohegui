@@ -11,6 +11,8 @@ import type {
   PlatformRule, RuleListResponse, SyncResultData, SyncHistoryItem,
   SyncStatus, DashboardStats, EngineStatus, BillingStatus,
   ComplianceReport, MemberDashboardResponse,
+  ComplaintCaseItem, ComplaintCaseDetail, ReviewQueueStats,
+  ReviewActionResponse, CandidateRuleItem, CandidateRuleDetail,
 } from '../types';
 import type { UserInfo, AuditLogEntry, CompareResult } from '../types/admin-types';
 
@@ -478,5 +480,137 @@ export async function deleteKGNode(nodeId: number): Promise<{ status: string; id
 
 export async function getNodesNeedingReview(): Promise<{ nodes: Array<{ id: number; node_type: string; title: string; source: string; rule_id?: string; trust_level: number; audit_status: string; content_preview: string }> }> {
   const { data } = await http.get('/kg/nodes/needing-review');
+  return data;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 案例审核管理 (Phase 2) — Admin only
+// ═══════════════════════════════════════════════════════════════
+
+export interface CaseReviewListResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  cases: ComplaintCaseItem[];
+}
+
+export async function getReviewQueue(params: {
+  review_status?: string;
+  source_type?: string;
+  province?: string;
+  decision_type?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+  sort_by?: string;
+  sort_dir?: string;
+}): Promise<CaseReviewListResponse> {
+  const { data } = await http.get('/admin/cases/review-queue', { params });
+  return data;
+}
+
+export async function getReviewQueueStats(): Promise<ReviewQueueStats> {
+  const { data } = await http.get('/admin/cases/review-queue/stats');
+  return data;
+}
+
+export async function getCaseDetail(caseId: number): Promise<ComplaintCaseDetail> {
+  const { data } = await http.get(`/admin/cases/${caseId}`);
+  return data;
+}
+
+export async function updateCase(caseId: number, updates: Record<string, unknown>): Promise<{ id: number; updated_fields: string[] }> {
+  const { data } = await http.put(`/admin/cases/${caseId}`, updates);
+  return data;
+}
+
+export async function reviewCases(body: {
+  action: string;
+  reason?: string;
+  case_ids: number[];
+  mark_published?: boolean;
+}): Promise<ReviewActionResponse> {
+  const { data } = await http.post('/admin/cases/review', body);
+  return data;
+}
+
+export async function dedupCheckCase(caseId: number, autoMark?: boolean): Promise<{
+  is_duplicate: boolean;
+  method: string;
+  duplicates: Array<Record<string, unknown>>;
+  candidates: Array<Record<string, unknown>>;
+  auto_resolved: boolean;
+}> {
+  const { data } = await http.post('/admin/cases/dedup-check', { case_id: caseId, auto_mark: autoMark ?? true });
+  return data;
+}
+
+export async function getPublicCaseList(params: {
+  province?: string;
+  decision_type?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ total: number; cases: Array<Record<string, unknown>> }> {
+  const { data } = await http.get('/admin/cases/public/list', { params });
+  return data;
+}
+
+export async function getPublicCaseDetail(caseId: number): Promise<Record<string, unknown>> {
+  const { data } = await http.get(`/admin/cases/public/${caseId}`);
+  return data;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 候选规则管理 (Phase 2) — Admin only
+// ═══════════════════════════════════════════════════════════════
+
+export interface CandidateRuleListResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  candidates: CandidateRuleItem[];
+}
+
+export async function getCandidateRules(params: {
+  review_status?: string;
+  source_type?: string;
+  min_confidence?: number;
+  risk_level?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<CandidateRuleListResponse> {
+  const { data } = await http.get('/admin/candidate-rules', { params });
+  return data;
+}
+
+export async function getCandidateRuleStats(): Promise<{
+  by_status: Record<string, number>;
+  pending_total: number;
+  by_risk_level: Record<string, number>;
+  total: number;
+}> {
+  const { data } = await http.get('/admin/candidate-rules/stats');
+  return data;
+}
+
+export async function getCandidateRuleDetail(candidateId: number): Promise<CandidateRuleDetail> {
+  const { data } = await http.get(`/admin/candidate-rules/${candidateId}`);
+  return data;
+}
+
+export async function reviewCandidateRules(body: {
+  candidate_ids: number[];
+  action: string;
+  note?: string;
+  promoted_rule_id?: string;
+}): Promise<{
+  action: string;
+  success_count: number;
+  error_count: number;
+  results: Array<Record<string, unknown>>;
+  errors: Array<Record<string, unknown>>;
+}> {
+  const { data } = await http.post('/admin/candidate-rules/review', body);
   return data;
 }
