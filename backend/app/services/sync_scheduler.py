@@ -139,13 +139,25 @@ class SyncScheduler:
                 logger.error("定时同步异常: %s", e)
 
     async def _run_case_scrape_loop(self) -> None:
-        """后台循环：按间隔执行案例采集"""
+        """后台循环：按间隔执行案例采集，每次创建独立 DB 会话持久化任务。"""
+        from app.db.database import SessionLocal
+
         while self._running:
             try:
                 await asyncio.sleep(self.case_scrape_interval_hours * 3600)
                 if not self._running:
                     break
-                await self.scrape_cases()
+                # C-1: 创建独立、短生命周期数据库会话
+                db_session = SessionLocal()
+                try:
+                    await self.scrape_cases(
+                        db_session=db_session,
+                        user_id=None,
+                        trigger="scheduled",
+                    )
+                finally:
+                    # C-3: 无论成功、部分失败、完全失败或异常，都必须关闭会话
+                    db_session.close()
             except asyncio.CancelledError:
                 break
             except Exception as e:

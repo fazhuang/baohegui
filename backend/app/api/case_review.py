@@ -10,6 +10,8 @@ Phase 2 — 管理后台案例审核：
 """
 
 import logging
+
+logger = logging.getLogger(__name__)
 from datetime import date, datetime, timezone
 from typing import Optional
 
@@ -393,10 +395,12 @@ async def review_cases(
 
     for case_id in body.case_ids:
         # Per-case savepoint: 单条失败不破坏其他成功项
+        savepoint = None
         try:
-            db.begin_nested()
+            # 显式保存嵌套事务引用
+            savepoint = db.begin_nested()
         except Exception:
-            pass  # SQLite may not support savepoints; fall through
+            savepoint = None  # SQLite savepoint 失败时回退到顶事务
 
         try:
             case = db.query(ComplaintCase).filter(
@@ -405,7 +409,8 @@ async def review_cases(
 
             if not case:
                 errors.append({"case_id": case_id, "error": "案例不存在"})
-                db.rollback()
+                if savepoint:
+                    savepoint.rollback()
                 continue
 
             current_status = case.review_status or "fetched"
@@ -419,13 +424,15 @@ async def review_cases(
                         "case_id": case_id,
                         "error": "脱敏内容为空，无法发布。请先编辑 sanitized_content 后再审核通过。"
                     })
-                    db.rollback()
+                    if savepoint:
+                        savepoint.rollback()
                     continue
                 target = CaseStatus.VERIFIED.value
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
-                    db.rollback()
+                    if savepoint:
+                        savepoint.rollback()
                     continue
                 if body.mark_published:
                     sm.transition(case, CaseStatus.PUBLISHED.value, user_id=admin_id)
@@ -435,7 +442,8 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
-                    db.rollback()
+                    if savepoint:
+                        savepoint.rollback()
                     continue
 
             elif body.action == "quarantine":
@@ -443,7 +451,8 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
-                    db.rollback()
+                    if savepoint:
+                        savepoint.rollback()
                     continue
 
             elif body.action == "unpublish":
@@ -451,7 +460,8 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
-                    db.rollback()
+                    if savepoint:
+                        savepoint.rollback()
                     continue
 
             elif body.action == "republish":
@@ -460,7 +470,8 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
-                    db.rollback()
+                    if savepoint:
+                        savepoint.rollback()
                     continue
 
             elif body.action == "mark_duplicate":
@@ -468,7 +479,8 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
-                    db.rollback()
+                    if savepoint:
+                        savepoint.rollback()
                     continue
 
             elif body.action == "retry":
@@ -476,28 +488,30 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
-                    db.rollback()
+                    if savepoint:
+                        savepoint.rollback()
                     continue
 
             # ── KG 投影（与状态变更原子操作） ──
-            kg_error = None
             if case.review_status == CaseStatus.PUBLISHED.value:
                 from app.services.kg_projection import kg_projection
                 kg_result = kg_projection.project_case(db, case)
                 if not kg_result["success"]:
-                    kg_error = kg_result.get("error", "KG projection failed")
-                    logger.error(f"案例 {case_id} KG 投影失败: {kg_error}")
-                    errors.append({"case_id": case_id, "error": f"KG 投影失败: {kg_error}"})
-                    db.rollback()
+                    kg_error_msg = kg_result.get("error", "KG projection failed")
+                    logger.error("案例 %d KG 投影失败: %s", case_id, kg_error_msg)
+                    errors.append({"case_id": case_id, "error": f"KG 投影失败: {kg_error_msg}"})
+                    if savepoint:
+                        savepoint.rollback()
                     continue
             elif case.review_status == CaseStatus.UNPUBLISHED.value:
                 from app.services.kg_projection import kg_projection
                 kg_result = kg_projection.unproject_case(db, case)
                 if not kg_result["success"]:
-                    kg_error = kg_result.get("error", "KG unproject failed")
-                    logger.error(f"案例 {case_id} KG 下架失败: {kg_error}")
-                    errors.append({"case_id": case_id, "error": f"KG 下架失败: {kg_error}"})
-                    db.rollback()
+                    kg_error_msg = kg_result.get("error", "KG unproject failed")
+                    logger.error("案例 %d KG 下架失败: %s", case_id, kg_error_msg)
+                    errors.append({"case_id": case_id, "error": f"KG 下架失败: {kg_error_msg}"})
+                    if savepoint:
+                        savepoint.rollback()
                     continue
 
             results.append({
@@ -508,11 +522,23 @@ async def review_cases(
             })
 
         except Exception as e:
-            errors.append({"case_id": case_id, "error": str(e)})
-            db.rollback()
+            errors.append({"case_id": case_id, "error": f"内部错误: {str(e)}"})
+            if savepoint:
+                savepoint.rollback()
             continue
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        logger.error("批量审核外层提交失败: %s", e)
+        # 提交失败时清除所有结果，不得报告虚假成功
+        return {
+            "action": body.action,
+            "success_count": 0,
+            "error_count": len(body.case_ids),
+            "results": [],
+            "errors": [{"case_id": 0, "error": f"数据库提交失败: {str(e)}"}],
+        }
 
     # 审计日志
     audit_service.log(

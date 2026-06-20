@@ -78,6 +78,15 @@ class KGProjectionService:
             return result
 
         try:
+            # 安全约束：拒绝未脱敏内容进入 KG/RAG
+            _sanitized = (case.sanitized_content or "").strip()
+            if not _sanitized:
+                result["error"] = (
+                    f"案例 {case.id} 缺少 sanitized_content，"
+                    f"禁止将未脱敏内容投影到 KG/RAG"
+                )
+                return result
+
             content_hash = case.content_hash or _compute_content_hash(case)
 
             # 查找已有节点（幂等）
@@ -312,8 +321,8 @@ def _create_case_node(case: ComplaintCase, content_hash: str) -> KGNode:
     if case.summary:
         content_parts.append(f"摘要: {case.summary}")
 
-    # 脱敏内容或原始内容
-    body = case.sanitized_content or case.raw_content or ""
+    # 脱敏内容 （仅允许 sanitized_content）
+    body = (case.sanitized_content or "").strip()
     if body:
         content_parts.append(f"正文: {body[:1500]}")
 
@@ -412,12 +421,10 @@ def _update_case_node_fields(node: KGNode, case: ComplaintCase) -> None:
     content_parts.append(f"处理结果: {decision_label}")
     if case.summary:
         content_parts.append(f"摘要: {case.summary}")
-    body = case.sanitized_content or case.raw_content or ""
+    body = (case.sanitized_content or "").strip()
     if body:
         content_parts.append(f"正文: {body[:1500]}")
     node.content = "\n".join(content_parts)[:3000]
-
-    node.source = f"{case.province}政府采购网" if case.province else "政府采购网"
     node.source_url = case.canonical_url or case.source_url or ""
     node.jurisdiction = case.province or ""
     node.publish_date = case.decision_date
