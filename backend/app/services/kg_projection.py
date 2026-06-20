@@ -42,11 +42,18 @@ class KGProjectionService:
 
         幂等：已存在同 origin_type/origin_id 的节点则更新。
         仅 published 案例可投影。
+        重新发布（republish）时将 rejected 节点恢复为 verified 并清除 unprojected_at。
+
+        Phase 2 幂等判断比较：
+        - content_hash
+        - audit_status（rejected → 需要恢复，不是 skipped）
+        - 是否存在 unprojected_at（下架过 → 需要恢复而不是跳过）
+        - sync_version（版本升级 → 更新而不是跳过）
 
         返回：
         {
             "success": bool,
-            "action": "created" | "updated" | "removed" | "skipped",
+            "action": "created" | "updated" | "restored" | "skipped",
             "node_id": int | None,
             "case_id": int,
             "error": str | None,
@@ -71,24 +78,36 @@ class KGProjectionService:
             return result
 
         try:
-            origin_id = f"complaint_case:{case.id}"
             content_hash = case.content_hash or _compute_content_hash(case)
 
             # 查找已有节点（幂等）
             existing = KGProjectionService._find_by_origin(db, "complaint_case", case.id)
 
             if existing:
-                # 检查 content_hash 是否已匹配（真正幂等的跳过）
                 existing_meta = _parse_metadata(existing.metadata_json)
-                if existing_meta.get("content_hash") == content_hash:
+                needs_restore = (
+                    existing.audit_status == "rejected"
+                    or existing_meta.get("unprojected_at") is not None
+                    or existing_meta.get(SYNC_VERSION_KEY) != SYNC_VERSION
+                )
+                content_unchanged = existing_meta.get("content_hash") == content_hash
+
+                # Phase 2 fix: 重新发布时必须恢复 rejected 节点
+                if needs_restore:
+                    _restore_case_node(existing, case, content_hash)
+                    result["action"] = "restored"
+                    result["node_id"] = existing.id
+                elif content_unchanged:
+                    # 内容未变、状态正常、版本匹配 → 真正跳过
                     result["action"] = "skipped"
                     result["node_id"] = existing.id
                     result["success"] = True
                     return result
-                # 更新节点
-                _update_case_node(existing, case, content_hash)
-                result["action"] = "updated"
-                result["node_id"] = existing.id
+                else:
+                    # 内容变化 → 更新
+                    _update_case_node(existing, case, content_hash)
+                    result["action"] = "updated"
+                    result["node_id"] = existing.id
             else:
                 # 创建新节点
                 node = _create_case_node(case, content_hash)
@@ -109,7 +128,8 @@ class KGProjectionService:
     def unproject_case(db: Session, case: ComplaintCase) -> dict:
         """下架案例的 KG 投影 — 软删除节点（标记 rejected）
 
-        这使得该案例从 RAG 检索中隔离。
+        这使得该案例从 RAG 检索中隔离。记录 unprojected_at 时间戳。
+        再次 republish 时会被 _restore_case_node 恢复。
         """
         result = {
             "success": False,
@@ -123,10 +143,17 @@ class KGProjectionService:
             existing = KGProjectionService._find_by_origin(db, "complaint_case", case.id)
             if existing:
                 existing.audit_status = "rejected"
+                existing.trust_level = 0.35  # 降低信任度，防止意外 RAG 引用
                 existing.metadata_json = _update_metadata(existing.metadata_json, {
                     SYNC_VERSION_KEY: SYNC_VERSION,
                     "unprojected_at": datetime.now(timezone.utc).isoformat(),
+                    # 清除 synced_at 以强制 republish 时重新同步
                 })
+                # 清除 synced_at
+                meta = _parse_metadata(existing.metadata_json)
+                meta.pop("synced_at", None)
+                existing.metadata_json = json.dumps(meta, ensure_ascii=False)
+                existing.trust_level = 0.35  # 降低信任度，防止意外 RAG 引用
                 result["action"] = "removed"
                 result["node_id"] = existing.id
             else:
@@ -330,15 +357,38 @@ def _create_case_node(case: ComplaintCase, content_hash: str) -> KGNode:
     )
 
 
-def _update_case_node(
+def _restore_case_node(
     node: KGNode,
     case: ComplaintCase,
     content_hash: str,
 ) -> None:
-    """更新 KG 节点（幂等同步）"""
-    import json as _json
+    """恢复被下架的 KG 节点（rejected → verified，清除 unprojected_at）。
 
-    # 更新基础展示字段
+    用于 republish 路径：published → unpublished → republish。
+    """
+    # 恢复审核状态为 verified
+    node.audit_status = "verified"
+
+    # 更新内容和元数据
+    old_meta = _parse_metadata(node.metadata_json)
+    old_meta.update({
+        ORIGIN_TYPE_KEY: "complaint_case",
+        ORIGIN_ID_KEY: case.id,
+        "content_hash": content_hash,
+        SYNC_VERSION_KEY: SYNC_VERSION,
+        "synced_at": datetime.now(timezone.utc).isoformat(),
+    })
+    # 清除下架标记
+    old_meta.pop("unprojected_at", None)
+    node.metadata_json = json.dumps(old_meta, ensure_ascii=False)
+
+    # 更新展示字段
+    _update_case_node_fields(node, case)
+    logger.info("KG 节点 %d 已恢复 (republish case %d)", node.id, case.id)
+
+
+def _update_case_node_fields(node: KGNode, case: ComplaintCase) -> None:
+    """更新 KG 节点的展示字段（不碰 metadata）"""
     decision_tag_map = {
         "upheld": "投诉成立",
         "rejected": "投诉驳回",
@@ -371,6 +421,16 @@ def _update_case_node(
     node.source_url = case.canonical_url or case.source_url or ""
     node.jurisdiction = case.province or ""
     node.publish_date = case.decision_date
+
+
+def _update_case_node(
+    node: KGNode,
+    case: ComplaintCase,
+    content_hash: str,
+) -> None:
+    """更新 KG 节点（幂等同步）"""
+    # 更新基础展示字段
+    _update_case_node_fields(node, case)
 
     # 更新 metadata
     old_meta = _parse_metadata(node.metadata_json)

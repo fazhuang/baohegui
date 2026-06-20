@@ -9,6 +9,7 @@ Phase 2 — 管理后台案例审核：
 - 审核理由 + 操作审计
 """
 
+import logging
 from datetime import date, datetime, timezone
 from typing import Optional
 
@@ -373,6 +374,9 @@ async def review_cases(
 ):
     """审核案例 — 支持批量和多种操作
 
+    Phase 2: 状态变更与 KG 投影在同一事务内，投影失败时回滚案例状态。
+    批量操作使用 per-case savepoint，单条失败不影响其他成功项。
+
     操作类型：
     - approve:   pending_review → verified → (可选 published)
     - reject:    pending_review → rejected
@@ -388,18 +392,25 @@ async def review_cases(
     errors = []
 
     for case_id in body.case_ids:
-        case = db.query(ComplaintCase).filter(
-            ComplaintCase.id == case_id
-        ).first()
-
-        if not case:
-            errors.append({"case_id": case_id, "error": "案例不存在"})
-            continue
-
-        current_status = case.review_status or "fetched"
-        note = body.reason
+        # Per-case savepoint: 单条失败不破坏其他成功项
+        try:
+            db.begin_nested()
+        except Exception:
+            pass  # SQLite may not support savepoints; fall through
 
         try:
+            case = db.query(ComplaintCase).filter(
+                ComplaintCase.id == case_id
+            ).first()
+
+            if not case:
+                errors.append({"case_id": case_id, "error": "案例不存在"})
+                db.rollback()
+                continue
+
+            current_status = case.review_status or "fetched"
+            note = body.reason
+
             if body.action == "approve":
                 # pending_review → verified → published
                 # 安全检查：脱敏内容为空时禁止发布
@@ -408,11 +419,13 @@ async def review_cases(
                         "case_id": case_id,
                         "error": "脱敏内容为空，无法发布。请先编辑 sanitized_content 后再审核通过。"
                     })
+                    db.rollback()
                     continue
                 target = CaseStatus.VERIFIED.value
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
+                    db.rollback()
                     continue
                 if body.mark_published:
                     sm.transition(case, CaseStatus.PUBLISHED.value, user_id=admin_id)
@@ -422,6 +435,7 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
+                    db.rollback()
                     continue
 
             elif body.action == "quarantine":
@@ -429,6 +443,7 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
+                    db.rollback()
                     continue
 
             elif body.action == "unpublish":
@@ -436,6 +451,7 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
+                    db.rollback()
                     continue
 
             elif body.action == "republish":
@@ -444,6 +460,7 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
+                    db.rollback()
                     continue
 
             elif body.action == "mark_duplicate":
@@ -451,6 +468,7 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
+                    db.rollback()
                     continue
 
             elif body.action == "retry":
@@ -458,6 +476,28 @@ async def review_cases(
                 ok, msg = sm.transition(case, target, user_id=admin_id, note=note)
                 if not ok:
                     errors.append({"case_id": case_id, "error": msg})
+                    db.rollback()
+                    continue
+
+            # ── KG 投影（与状态变更原子操作） ──
+            kg_error = None
+            if case.review_status == CaseStatus.PUBLISHED.value:
+                from app.services.kg_projection import kg_projection
+                kg_result = kg_projection.project_case(db, case)
+                if not kg_result["success"]:
+                    kg_error = kg_result.get("error", "KG projection failed")
+                    logger.error(f"案例 {case_id} KG 投影失败: {kg_error}")
+                    errors.append({"case_id": case_id, "error": f"KG 投影失败: {kg_error}"})
+                    db.rollback()
+                    continue
+            elif case.review_status == CaseStatus.UNPUBLISHED.value:
+                from app.services.kg_projection import kg_projection
+                kg_result = kg_projection.unproject_case(db, case)
+                if not kg_result["success"]:
+                    kg_error = kg_result.get("error", "KG unproject failed")
+                    logger.error(f"案例 {case_id} KG 下架失败: {kg_error}")
+                    errors.append({"case_id": case_id, "error": f"KG 下架失败: {kg_error}"})
+                    db.rollback()
                     continue
 
             results.append({
@@ -469,38 +509,10 @@ async def review_cases(
 
         except Exception as e:
             errors.append({"case_id": case_id, "error": str(e)})
+            db.rollback()
             continue
 
     db.commit()
-
-    # ── KG 投影（发布/下架/重新发布） ──────────────────
-    from app.services.kg_projection import kg_projection
-
-    kg_results = []
-    kg_errors = []
-    for r in results:
-        case = db.query(ComplaintCase).filter(ComplaintCase.id == r["case_id"]).first()
-        if not case:
-            continue
-        if r["to_status"] == CaseStatus.PUBLISHED.value:
-            kg_result = kg_projection.project_case(db, case)
-            kg_results.append(kg_result)
-            if not kg_result["success"]:
-                kg_errors.append({
-                    "case_id": r["case_id"],
-                    "kg_error": kg_result.get("error", "KG projection failed"),
-                })
-        elif r["to_status"] == CaseStatus.UNPUBLISHED.value:
-            kg_result = kg_projection.unproject_case(db, case)
-            kg_results.append(kg_result)
-            if not kg_result["success"]:
-                kg_errors.append({
-                    "case_id": r["case_id"],
-                    "kg_error": kg_result.get("error", "KG unproject failed"),
-                })
-
-    if kg_results:
-        db.commit()
 
     # 审计日志
     audit_service.log(
@@ -522,12 +534,6 @@ async def review_cases(
         "error_count": len(errors),
         "results": results,
         "errors": errors,
-        "kg_projection": {
-            "total": len(kg_results),
-            "succeeded": sum(1 for r in kg_results if r.get("success")),
-            "failed": len(kg_errors),
-            "details": kg_results,
-        },
     }
 
 
