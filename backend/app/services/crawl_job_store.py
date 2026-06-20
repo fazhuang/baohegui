@@ -146,8 +146,11 @@ class CrawlJobStore:
         ).order_by(CrawlJobItem.source_name).all()
 
     @staticmethod
-    def get_last_scrape_status(db: Session) -> dict:
-        """获取最近一次采集的摘要（供 /api/crawler/status 使用）"""
+    def get_last_scrape_status(db: Session, is_admin: bool = False) -> dict:
+        """获取最近一次采集的摘要（供 /api/crawler/status 使用）
+
+        普通用户只看到计数，不暴露底层错误详情。
+        """
         last_job = db.query(CrawlJob).filter(
             CrawlJob.job_type == "case_scrape"
         ).order_by(CrawlJob.created_at.desc()).first()
@@ -163,12 +166,16 @@ class CrawlJobStore:
                 "saved": item.saved_count,
                 "fetched": item.fetched_count,
                 "duplicates": item.duplicate_count,
-                "error_type": item.error_type,
-                "error_message": item.error_message if item.status == "failed" else None,
                 "duration_ms": item.duration_ms,
             }
+            # 仅管理员可看错误类型和错误正文
+            if is_admin:
+                per_source[item.source_name]["error_type"] = item.error_type
+                per_source[item.source_name]["error_message"] = (
+                    item.error_message if item.status == "failed" else None
+                )
 
-        return {
+        result = {
             "last_scrape": {
                 "id": last_job.id,
                 "status": last_job.status,
@@ -179,10 +186,12 @@ class CrawlJobStore:
                 "total_fetched": last_job.total_fetched,
                 "total_duplicates": last_job.total_duplicates,
                 "kg_synced": last_job.kg_synced,
-                "error_message": last_job.error_message,
                 "per_source": per_source,
             }
         }
+        if is_admin:
+            result["last_scrape"]["error_message"] = last_job.error_message
+        return result
 
     @staticmethod
     def get_job_detail(db: Session, job_id: int, is_admin: bool = False) -> dict | None:

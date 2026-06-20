@@ -65,8 +65,9 @@ async def crawler_status(
     """采集器状态 — Phase 2：从 crawl_jobs 表读取最近任务历史"""
     status = sync_scheduler.get_status(db_session=db)
 
-    # Phase 2: 优先使用 DB 持久化的最近一次采集
-    db_scrape = crawl_job_store.get_last_scrape_status(db)
+    # Phase 2: 优先使用 DB 持久化的最近一次采集（普通用户不暴露错误正文）
+    is_admin = user.get("role") == "admin"
+    db_scrape = crawl_job_store.get_last_scrape_status(db, is_admin=is_admin)
     if db_scrape.get("last_scrape"):
         status["last_case_scrape"] = db_scrape["last_scrape"]
 
