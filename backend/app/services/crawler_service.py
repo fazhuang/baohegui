@@ -293,10 +293,10 @@ async def crawl_all() -> dict:
     from app.services.safe_fetcher import SafeFetchError, fetcher_for_source
 
     stats = {
-        "ccgp": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": []},
-        "ningxia": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": []},
-        "shaanxi": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": []},
-        "mof": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": []},
+        "ccgp": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success"},
+        "ningxia": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success"},
+        "shaanxi": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success"},
+        "mof": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success"},
         "kg_synced": 0,
         "errors": [],
         "cases_saved": 0,
@@ -318,16 +318,20 @@ async def crawl_all() -> dict:
                 await asyncio.sleep(0.3)
             stats["ccgp"]["saved"] = saved
             stats["ccgp"]["fetched"] = len(ccgp_items)
+            # D: 来源状态规则 — errors 非空则为 partial
+            stats["ccgp"]["status"] = "partial" if stats["ccgp"]["errors"] else "success"
     except SafeFetchError as e:
         logger.error("CCGP 安全抓取错误: %s", e)
         stats["ccgp"]["errors"].append(f"{e.error_type.value}: {e.message}")
         stats["ccgp"]["error"] = str(e)
         stats["ccgp"]["error_type"] = e.error_type.value
+        stats["ccgp"]["status"] = "failed"
     except Exception as e:
         logger.error("CCGP 异常: %s", e)
         stats["ccgp"]["errors"].append(f"exception: {e}")
         stats["ccgp"]["error"] = str(e)
         stats["ccgp"]["error_type"] = "exception"
+        stats["ccgp"]["status"] = "failed"
 
     # ── 宁夏 ────────────────────────────────────────────
     try:
@@ -346,16 +350,19 @@ async def crawl_all() -> dict:
                     stats["ningxia"]["errors"].append(f"{item['url']}: {e.error_type.value}={e.message}")
                 await asyncio.sleep(0.3)
             stats["ningxia"]["saved"] = saved
+            stats["ningxia"]["fetched"] = len(nx_items)
+            stats["ningxia"]["status"] = "partial" if stats["ningxia"]["errors"] else "success"
     except SafeFetchError as e:
-        logger.error("宁夏 安全抓取错误: %s", e)
         stats["ningxia"]["errors"].append(f"{e.error_type.value}: {e.message}")
         stats["ningxia"]["error"] = str(e)
         stats["ningxia"]["error_type"] = e.error_type.value
+        stats["ningxia"]["status"] = "failed"
     except Exception as e:
         logger.error("宁夏 异常: %s", e)
         stats["ningxia"]["errors"].append(f"exception: {e}")
         stats["ningxia"]["error"] = str(e)
         stats["ningxia"]["error_type"] = "exception"
+        stats["ningxia"]["status"] = "failed"
 
     # ── 陕西（Playwright，独立 client） ──────────────────
     try:
@@ -366,6 +373,7 @@ async def crawl_all() -> dict:
         stats["shaanxi"]["errors"].append(f"exception: {e}")
         stats["shaanxi"]["error"] = str(e)
         stats["shaanxi"]["error_type"] = "exception"
+        stats["shaanxi"]["status"] = "failed"
 
     # ── 财政部信息公告（独立处理） ───────────────────────
     try:
@@ -387,16 +395,19 @@ async def crawl_all() -> dict:
                 await asyncio.sleep(0.3)
             stats["mof"]["saved"] = saved
             stats["mof"]["fetched"] = len(mof_items)
+            stats["mof"]["status"] = "partial" if stats["mof"]["errors"] else "success"
     except SafeFetchError as e:
         logger.error("财政部 安全抓取错误: %s", e)
         stats["mof"]["errors"].append(f"{e.error_type.value}: {e.message}")
         stats["mof"]["error"] = str(e)
         stats["mof"]["error_type"] = e.error_type.value
+        stats["mof"]["status"] = "failed"
     except Exception as e:
         logger.error("财政部 异常: %s", e)
         stats["mof"]["errors"].append(f"exception: {e}")
         stats["mof"]["error"] = str(e)
         stats["mof"]["error_type"] = "exception"
+        stats["mof"]["status"] = "failed"
 
     # ── 汇总 ───────────────────────────────────────────
     stats["cases_saved"] = (

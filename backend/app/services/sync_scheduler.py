@@ -216,34 +216,52 @@ class SyncScheduler:
                 "kg_synced": stats.get("kg_synced", 0),
             }
 
-            # ── 持久化各来源明细 ──
+            # ── 持久化各来源明细（Phase 2 D: 正确状态规则）───
             if db_session and db_job:
                 for src_key, item in db_items.items():
                     src_stat = stats.get(src_key, {})
                     if isinstance(src_stat, dict):
                         src_saved = src_stat.get("saved", 0)
-                        src_fetched = src_stat.get("fetched", src_saved)  # some sources don't distinguish
+                        src_fetched = src_stat.get("fetched", src_saved)
                         src_dups = src_stat.get("duplicates", 0)
-                        src_error = src_stat.get("error")
-                        src_error_type = src_stat.get("error_type")
-                        item_status = "failed" if src_error else "success"
+                        src_errors = src_stat.get("errors", [])
+                        src_status = src_stat.get("status", "success")
+                        # D-1/D-2: errors 非空 → 不是 success
+                        if src_errors and src_status == "success":
+                            src_status = "partial"
+                        # D-3: 来源级连接失败 → failed
+                        if src_stat.get("error"):
+                            src_status = "failed"
+
+                        crawl_job_store.complete_item(
+                            db_session, item,
+                            status=src_status,
+                            fetched_count=src_fetched,
+                            saved_count=src_saved,
+                            duplicate_count=src_dups,
+                            error_type=src_stat.get("error_type"),
+                            error_message=src_stat.get("error"),
+                        )
                     else:
                         src_saved = src_stat if isinstance(src_stat, int) else 0
                         src_fetched = src_saved
                         src_dups = 0
-                        src_error = None
-                        src_error_type = None
-                        item_status = "success"
+                        crawl_job_store.complete_item(
+                            db_session, item,
+                            status="success",
+                            fetched_count=src_fetched,
+                            saved_count=src_saved,
+                            duplicate_count=src_dups,
+                        )
 
-                    crawl_job_store.complete_item(
-                        db_session, item,
-                        status=item_status,
-                        fetched_count=src_fetched,
-                        saved_count=src_saved,
-                        duplicate_count=src_dups,
-                        error_type=src_error_type,
-                        error_message=src_error,
-                    )
+                # D-6: 全局任务状态聚合
+                item_statuses = [i.status for i in db_items.values()]
+                if "failed" in item_statuses:
+                    job_status = SyncStatus.FAILED
+                elif "partial" in item_statuses:
+                    job_status = SyncStatus.PARTIAL
+                else:
+                    job_status = SyncStatus.SUCCESS
 
                 crawl_job_store.complete_job(
                     db_session, db_job,
