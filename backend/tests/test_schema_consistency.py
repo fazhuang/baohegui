@@ -210,17 +210,17 @@ class TestAlembicSchemaVsOrm:
         assert not missing, f"Alembic tables missing: {missing}"
 
     def test_alembic_tables_only(self, alembic_engine):
-        """纯 Alembic 库仅应有 4 张核心表 + alembic_version。
+        """纯 Alembic 库仅应有核心表 + alembic_version。
         此断言确保 create_all 没有被执行，否则会多出 users / announcements 等表。
-        注意：audit_logs 由 AuditService.__init__ 经自身引擎创建，不在 Alembic 迁移中。"""
+        Phase 2: 新增 crawl_jobs + crawl_job_items。"""
         inspector = inspect(alembic_engine)
         tables = set(inspector.get_table_names())
-        # 当前迁移仅创建 complaint_cases / kg_edges / kg_nodes / audit_logs
-        # + alembic_version = 5
-        # 注意：audit_logs 可能由 AuditService 引擎创建（共享同一 DB URL）或由迁移创建
-        core = {"alembic_version", "complaint_cases", "kg_edges", "kg_nodes", "candidate_rules"}
+        core = {
+            "alembic_version",
+            "complaint_cases", "kg_edges", "kg_nodes",
+            "candidate_rules", "crawl_jobs", "crawl_job_items",
+        }
         extra = tables - core
-        # 允许 audit_logs（由迁移或 AuditService 创建），但不允许其他意外表
         unexpected = extra - {"audit_logs", "sqlite_sequence"}
         assert not unexpected, \
             f"Alembic-only tables should only have core + audit_logs; unexpected: {sorted(unexpected)}"
