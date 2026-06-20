@@ -28,10 +28,12 @@ if config.config_file_name is not None:
 
 from app.models.document import Base as DocumentBase
 from app.models.rule import Base as RuleBase
+from app.models.candidate_rule import Base as CandidateRuleBase
+from app.models.crawl_job import Base as CrawlJobBase
 from app.core.audit import AuditBase
 
 combined_metadata = DocumentBase.metadata
-for base in (RuleBase, AuditBase):
+for base in (RuleBase, AuditBase, CandidateRuleBase, CrawlJobBase):
     for table in base.metadata.tables.values():
         if table.name not in combined_metadata.tables:
             table.tometadata(combined_metadata)

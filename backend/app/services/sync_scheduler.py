@@ -151,9 +151,13 @@ class SyncScheduler:
             except Exception as e:
                 logger.error("案例采集异常: %s", e)
 
-    async def scrape_cases(self) -> SyncTaskRecord:
-        """执行一轮案例采集"""
+    async def scrape_cases(self, db_session=None, user_id: int | None = None, trigger: str = "manual") -> SyncTaskRecord:
+        """执行一轮案例采集，成果持久化至 crawl_jobs / crawl_job_items。
+
+        如果未提供 db_session，只写在内存 history（向后兼容后台循环）。
+        """
         from app.services.crawler_service import crawl_all
+        from app.services.crawl_job_store import crawl_job_store
 
         record = SyncTaskRecord(
             id=self._next_id(),
@@ -161,10 +165,30 @@ class SyncScheduler:
             status=SyncStatus.RUNNING,
             started_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         )
+
+        # ── 持久化：创建任务和明细 ──
+        db_job = None
+        db_items: dict[str, any] = {}
+        job_status = SyncStatus.SUCCESS
+        job_error = None
+
+        if db_session:
+            db_job = crawl_job_store.create_job(
+                db_session,
+                job_type="case_scrape",
+                trigger_type=trigger,
+                created_by=user_id,
+            )
+            # 为每个已知来源创建初始明细
+            for src in ("ccgp", "ningxia", "shaanxi", "mof"):
+                db_items[src] = crawl_job_store.create_item(db_session, db_job.id, src)
+            db_session.commit()
+
         try:
             stats = await crawl_all()
             has_errors = bool(stats.get("errors"))
             record.status = SyncStatus.PARTIAL if has_errors else SyncStatus.SUCCESS
+            job_status = record.status
             record.result = SyncResult(
                 new_rules=0,
                 updated_rules=0,
@@ -179,6 +203,45 @@ class SyncScheduler:
                 "cases_saved": stats.get("cases_saved", 0),
                 "kg_synced": stats.get("kg_synced", 0),
             }
+
+            # ── 持久化各来源明细 ──
+            if db_session and db_job:
+                for src_key, item in db_items.items():
+                    src_stat = stats.get(src_key, {})
+                    if isinstance(src_stat, dict):
+                        src_saved = src_stat.get("saved", 0)
+                        src_fetched = src_stat.get("fetched", src_saved)  # some sources don't distinguish
+                        src_dups = src_stat.get("duplicates", 0)
+                        src_error = src_stat.get("error")
+                        src_error_type = src_stat.get("error_type")
+                        item_status = "failed" if src_error else "success"
+                    else:
+                        src_saved = src_stat if isinstance(src_stat, int) else 0
+                        src_fetched = src_saved
+                        src_dups = 0
+                        src_error = None
+                        src_error_type = None
+                        item_status = "success"
+
+                    crawl_job_store.complete_item(
+                        db_session, item,
+                        status=item_status,
+                        fetched_count=src_fetched,
+                        saved_count=src_saved,
+                        duplicate_count=src_dups,
+                        error_type=src_error_type,
+                        error_message=src_error,
+                    )
+
+                crawl_job_store.complete_job(
+                    db_session, db_job,
+                    status=job_status.value,
+                    items=list(db_items.values()),
+                    error_message=job_error,
+                    kg_synced=stats.get("kg_synced", 0),
+                )
+                db_session.commit()
+
             logger.info(
                 "案例采集完成: CCGP=%d 宁夏=%d 陕西=%d 财政部=%d 总保存=%d KG同步=%d errors=%d",
                 record.scrape_stats["ccgp"],
@@ -192,7 +255,27 @@ class SyncScheduler:
         except Exception as e:
             record.status = SyncStatus.FAILED
             record.error_message = str(e)
+            job_status = SyncStatus.FAILED
+            job_error = str(e)
             logger.error("案例采集失败: %s", e)
+
+            # ── 失败也持久化 ──
+            if db_session and db_job:
+                for item in db_items.values():
+                    if item.status == "running":
+                        crawl_job_store.complete_item(
+                            db_session, item,
+                            status="failed",
+                            error_type="task_error",
+                            error_message=job_error,
+                        )
+                crawl_job_store.complete_job(
+                    db_session, db_job,
+                    status="failed",
+                    items=list(db_items.values()),
+                    error_message=job_error,
+                )
+                db_session.commit()
 
         record.finished_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         self._case_history.append(record)
@@ -284,28 +367,48 @@ class SyncScheduler:
 
     # ── 状态查询 ─────────────────────────────────────────
 
-    def get_status(self) -> dict:
-        """调度器整体状态 — Phase 1：包含 Per-source 采集统计和依赖健康度"""
+    def get_status(self, db_session=None) -> dict:
+        """调度器整体状态 — Phase 2：优先从 DB 读取最近任务"""
         running = self._running and any(
             r.status == SyncStatus.RUNNING for r in self._history[-5:]
         )
         last_sync = self._history[-1] if self._history else None
-        last_case = self._case_history[-1] if self._case_history else None
 
-        # 从最后一次采集记录中构建摘要
+        # Phase 2：优先从 DB 读取最近采集状态
         last_case_summary = None
-        if last_case:
-            last_case_summary = {
-                "status": last_case.status.value,
-                "time": last_case.finished_at,
-                "error": last_case.error_message,
-                "id": last_case.id,
-            }
-            if last_case.scrape_stats:
-                last_case_summary["scrape_stats"] = last_case.scrape_stats
-                # 如果 stats 有 per-source 详细信息则暴露
-            if last_case.result and last_case.result.errors:
-                last_case_summary["errors"] = last_case.result.errors
+        if db_session:
+            try:
+                from app.services.crawl_job_store import crawl_job_store
+                db_status = crawl_job_store.get_last_scrape_status(db_session)
+                last_scrape = db_status.get("last_scrape")
+                if last_scrape:
+                    last_case_summary = {
+                        "status": last_scrape["status"],
+                        "time": last_scrape["finished_at"],
+                        "error": last_scrape.get("error_message"),
+                        "id": last_scrape["id"],
+                        "total_saved": last_scrape.get("total_saved", 0),
+                        "per_source": last_scrape.get("per_source", {}),
+                    }
+                    if last_scrape.get("kg_synced"):
+                        last_case_summary["kg_synced"] = last_scrape["kg_synced"]
+            except Exception:
+                pass  # 表不存在等回退
+
+        # 回退到内存历史
+        if not last_case_summary:
+            last_case = self._case_history[-1] if self._case_history else None
+            if last_case:
+                last_case_summary = {
+                    "status": last_case.status.value,
+                    "time": last_case.finished_at,
+                    "error": last_case.error_message,
+                    "id": last_case.id,
+                }
+                if last_case.scrape_stats:
+                    last_case_summary["scrape_stats"] = last_case.scrape_stats
+                if last_case.result and last_case.result.errors:
+                    last_case_summary["errors"] = last_case.result.errors
 
         # Phase 1：依赖健康度检查
         health = _check_crawler_health()

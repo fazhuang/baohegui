@@ -1,12 +1,12 @@
-"""案例采集 API 路由 — 手动触发 + 状态查看 + 规则分析
+"""案例采集 API 路由 — 手动触发 + 状态查看 + 规则分析 + 任务历史
 
 安全基线：管理操作（trigger/analyze）仅管理员可访问。
-读取端点（cases/stats）仍需要认证但普通用户可用。
+读取端点（cases/stats/status）仍需要认证但普通用户可用。
+任务历史仅管理员可查看明细。
 
-Phase 1：案例数据分级
-- 普通用户案例列表不返回敏感字段（complainant、respondent）。
-- 普通用户案例详情不返回 raw_content、complainant、respondent。
-- 管理员案例详情返回完整信息并写入审计日志。
+Phase 2：采集任务持久化至 crawl_jobs / crawl_job_items，
+  /api/crawler/status 从数据库读取最近任务，
+  /api/crawler/jobs 提供管理员采集监控数据。
 """
 
 from fastapi import APIRouter, Depends, Query
@@ -16,6 +16,7 @@ from app.core.audit import audit_service
 from app.core.security import get_current_user, require_admin
 from app.db.database import get_db
 from app.services.crawler_service import count_cases, query_cases, count_case_stats
+from app.services.crawl_job_store import crawl_job_store
 from app.services.rule_miner import analyze_all_unanalyzed
 from app.services.sync_scheduler import sync_scheduler
 
@@ -23,12 +24,20 @@ router = APIRouter(prefix="/api/crawler", tags=["crawler"])
 
 
 @router.post("/trigger")
-async def trigger_crawl(admin: dict = Depends(require_admin)):
+async def trigger_crawl(
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
     """手动触发一轮案例采集 — 仅管理员
 
     返回各来源新增案例数、KG 同步数量、错误列表。
+    采集结果持久化至 crawl_jobs / crawl_job_items。
     """
-    record = await sync_scheduler.scrape_cases()
+    record = await sync_scheduler.scrape_cases(
+        db_session=db,
+        user_id=int(admin["sub"]),
+        trigger="manual",
+    )
     audit_service.log(
         user_id=int(admin["sub"]),
         action="crawler_trigger",
@@ -49,23 +58,63 @@ async def trigger_crawl(admin: dict = Depends(require_admin)):
 
 
 @router.get("/status")
-async def crawler_status(user: dict = Depends(get_current_user)):
-    """采集器状态 — 含最后一次采集摘要和 KG 同步摘要"""
-    status = sync_scheduler.get_status()
+async def crawler_status(
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """采集器状态 — Phase 2：从 crawl_jobs 表读取最近任务历史"""
+    status = sync_scheduler.get_status(db_session=db)
 
-    # 从 history 中提取上次采集和 KG 同步的完整摘要
-    last_scrape = status.get("last_case_scrape")
+    # Phase 2: 优先使用 DB 持久化的最近一次采集
+    db_scrape = crawl_job_store.get_last_scrape_status(db)
+    if db_scrape.get("last_scrape"):
+        status["last_case_scrape"] = db_scrape["last_scrape"]
 
-    # 构建 KG 同步摘要（从最后一次成功的采集统计中提取）
+    # 构建 KG 同步摘要
     kg_sync_summary = None
-    if last_scrape and last_scrape.get("scrape_stats"):
+    last_scrape = status.get("last_case_scrape")
+    if last_scrape:
         kg_sync_summary = {
-            "last_synced_count": last_scrape["scrape_stats"].get("kg_synced", 0),
-            "last_scrape_cases_saved": last_scrape["scrape_stats"].get("cases_saved", 0),
+            "last_synced_count": last_scrape.get("kg_synced", 0),
+            "last_scrape_cases_saved": last_scrape.get("total_saved", 0),
         }
-
     status["kg_sync_summary"] = kg_sync_summary
     return status
+
+
+@router.get("/jobs")
+async def crawler_jobs(
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    """采集任务历史 — 仅管理员可查看（含错误详情）
+
+    普通用户无权查看采集监控数据。
+    """
+    jobs = crawl_job_store.get_recent_jobs(db, limit=limit, job_type="case_scrape")
+    return {
+        "jobs": [
+            crawl_job_store.get_job_detail(db, job.id, is_admin=True)
+            for job in jobs
+            if crawl_job_store.get_job_detail(db, job.id, is_admin=True) is not None
+        ],
+    }
+
+
+@router.get("/jobs/{job_id}")
+async def crawler_job_detail(
+    job_id: int,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    """采集任务明细 — 仅管理员可查看"""
+    from fastapi import HTTPException
+
+    detail = crawl_job_store.get_job_detail(db, job_id, is_admin=True)
+    if not detail:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return detail
 
 
 @router.get("/cases")

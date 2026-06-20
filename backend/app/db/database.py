@@ -7,7 +7,9 @@ from sqlalchemy.pool import NullPool
 from app.core.audit import AuditBase
 from app.core.config import settings
 from app.models.announcement import Base as AnnouncementBase
+from app.models.candidate_rule import Base as CandidateRuleBase
 from app.models.complaint_case import Base as ComplaintCaseBase
+from app.models.crawl_job import Base as CrawlJobBase
 from app.models.document import Base as DocumentBase
 from app.models.rule import Base as RuleBase
 from app.models.subscription import Base as SubscriptionBase
@@ -38,6 +40,8 @@ def init_db():
     AuditBase.metadata.create_all(bind=engine)
     AnnouncementBase.metadata.create_all(bind=engine)
     ComplaintCaseBase.metadata.create_all(bind=engine)
+    CandidateRuleBase.metadata.create_all(bind=engine)
+    CrawlJobBase.metadata.create_all(bind=engine)
     SubscriptionBase.metadata.create_all(bind=engine)
 
 
