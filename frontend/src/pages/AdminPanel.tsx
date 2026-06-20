@@ -7,11 +7,13 @@
 import React, { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Tabs, Typography } from 'antd';
-import { UserOutlined, AuditOutlined, SwapOutlined, DollarOutlined } from '@ant-design/icons';
+import { UserOutlined, AuditOutlined, SwapOutlined, DollarOutlined, FileSearchOutlined, NodeIndexOutlined } from '@ant-design/icons';
 import UserManageTab from '../features/admin/components/UserManageTab';
 import AuditLogTab from '../features/admin/components/AuditLogTab';
 import CompareTab from '../features/admin/components/CompareTab';
 import BillingTab from '../features/admin/components/BillingTab';
+import AdminCaseReviewTab from '../features/admin/components/AdminCaseReviewTab';
+import CandidateRulesTab from '../features/admin/components/CandidateRulesTab';
 
 const { Title } = Typography;
 
@@ -25,6 +27,8 @@ const AdminPanel: React.FC = () => {
       <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
         { key: 'users', label: <span><UserOutlined /> 用户管理</span>, children: <UserManageTab /> },
         { key: 'audit', label: <span><AuditOutlined /> 审计日志</span>, children: <AuditLogTab /> },
+        { key: 'cases', label: <span><FileSearchOutlined /> 案例审核</span>, children: <AdminCaseReviewTab /> },
+        { key: 'candidate-rules', label: <span><NodeIndexOutlined /> 候选规则</span>, children: <CandidateRulesTab /> },
         { key: 'compare', label: <span><SwapOutlined /> 文件对比</span>, children: <CompareTab /> },
         { key: 'billing', label: <span><DollarOutlined /> 计费面板</span>, children: <BillingTab /> },
       ]} />
