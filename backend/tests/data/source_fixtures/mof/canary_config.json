@@ -1,0 +1,14 @@
+{
+  "source": "mof",
+  "version": "2.0.0",
+  "parser_version": "1.5.0",
+  "status": "collecting",
+  "first_run": null,
+  "last_success": null,
+  "last_run": null,
+  "consecutive_failures": 0,
+  "total_runs": 0,
+  "last_error_type": null,
+  "last_error_message": null,
+  "notes": "Canary data collection started 2026-06-20. 7-day continuous stability not yet established."
+}
