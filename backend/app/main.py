@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api import admin, announcements, auth, categories, check, crawler, knowledge_graph, member, report, rules, stats, upload
+from app.api import admin, announcements, auth, candidate_rules, case_review, categories, check, crawler, knowledge_graph, member, report, rules, stats, upload
 from app.core.config import settings
 from app.core.metrics import (
     http_request_duration_seconds,
@@ -331,6 +331,8 @@ app.include_router(announcements.router)
 app.include_router(categories.router)
 app.include_router(knowledge_graph.router)
 app.include_router(crawler.router)
+app.include_router(case_review.router)
+app.include_router(candidate_rules.router)
 
 
 # ═══════════════════════════════════════════════════════════════
