@@ -341,5 +341,6 @@
       "enabled": true,
       "category": "platform"
     }
-  ]
+  ],
+  "rule_count": 26
 }
