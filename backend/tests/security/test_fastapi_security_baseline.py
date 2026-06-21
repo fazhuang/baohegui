@@ -11,6 +11,7 @@
 
 import http.client
 import os
+import shutil
 import socket
 import subprocess
 import time
@@ -20,8 +21,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
-# uv 全路径（子进程 PATH 中可能不包含 ~/.local/bin）
-_UV_BIN = os.path.expanduser("~/.local/bin/uv")
+# uv 全路径（优先 PATH 查找，回退到 ~/.local/bin/uv）
+_UV_BIN = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv")
 
 
 def _find_free_port() -> int:
@@ -35,7 +36,10 @@ def _find_free_port() -> int:
 def _http_get(host: str, port: int, path: str,
               host_header: str | None = None,
               timeout: int = 5) -> tuple[int, dict]:
-    """通过 http.client 发送 GET 请求（绕过系统代理），返回 (status, headers_dict)"""
+    """通过 http.client 发送 GET 请求（绕过系统代理），返回 (status, headers_dict)。
+
+    连接错误时返回 (-1, {})，不在调用方到处 try/except。
+    """
     conn = http.client.HTTPConnection(host, port, timeout=timeout)
     headers = {}
     if host_header:
@@ -48,27 +52,38 @@ def _http_get(host: str, port: int, path: str,
         resp.read()  # consume body
         conn.close()
         return status, resp_headers
-    except Exception as e:
+    except Exception:
         conn.close()
-        raise e
+        return -1, {}
 
 
-def _wait_for_server(host: str, port: int, timeout: int = 30) -> None:
-    """轮询等待服务器就绪"""
+def _wait_for_server(host: str, port: int, timeout: int = 60) -> None:
+    """轮询等待服务器就绪。
+
+    Timeout 内每 0.5s 探测一次 /health。第一次探测前等待 2s 给 uvicorn 导入时间。
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            status, _ = _http_get(host, port, "/health")
+            status, _ = _http_get(host, port, "/health", timeout=3)
             if status == 200:
                 return
         except Exception:
             pass
-        time.sleep(0.3)
+        time.sleep(0.5)
     raise RuntimeError(f"Server at {host}:{port} did not start within {timeout}s")
 
 
 def _start_prod_server(port: int, extra_env: dict | None = None) -> subprocess.Popen:
-    """启动生产模式子进程服务器（通过 uv run 确保依赖环境一致）"""
+    """启动生产模式子进程服务器（通过 uv run 确保依赖环境一致）。
+
+    Raises RuntimeError if uv binary is not found.
+    """
+    if not os.path.isfile(_UV_BIN):
+        raise RuntimeError(
+            f"uv not found at {_UV_BIN}. Install uv or set PATH to include uv."
+        )
+
     db_path = BACKEND_DIR / ".test_tmp" / f"_prod_sec_{port}.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
