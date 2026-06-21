@@ -1,7 +1,7 @@
 # Phase 2 Re-audit — Codex 复核审计简报
 
 > 审计时间：2026-06-22
-> 代码基线：`591de418`（`fix(phase-2): 修复 3 个阻塞项…`）
+> 代码基线：`60cbfe9e`（`docs(phase-2): add Codex re-audit brief…`）
 > 上一轮结论：`PHASE_2_REJECTED`（4 个阻塞项）
 > 本轮请求：对 9 个阻塞项的修复逐一进行攻击式复现验证
 
