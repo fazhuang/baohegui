@@ -12,6 +12,7 @@ import httpx
 from app.services.crawler_service import (
     _save_case,
     _extract_field,
+    _safe_error_summary,
     DECISION_TYPE_MAP,
 )
 from app.services.parse_contract import parse_mof_list_html
@@ -42,7 +43,7 @@ async def fetch_gks_list(fetcher) -> list[dict]:
             return items
         except Exception as e:
             last_error = e
-            logger.warning("财政部列表抓取失败 %s: %s", list_url, e)
+            logger.warning("财政部列表抓取失败 %s: %s", list_url, _safe_error_summary(str(e)))
     if last_error:
         raise last_error
     return items

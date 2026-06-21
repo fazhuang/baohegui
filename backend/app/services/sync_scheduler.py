@@ -140,7 +140,7 @@ class SyncScheduler:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("定时同步异常: %s", e)
+                logger.error("定时同步异常: %s", _safe_error_summary(str(e)))
 
     async def _run_case_scrape_loop(self) -> None:
         """后台循环：按间隔执行案例采集，每次创建独立 DB 会话持久化任务。"""
@@ -164,7 +164,7 @@ class SyncScheduler:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("案例采集异常: %s", e)
+                logger.error("案例采集异常: %s", _safe_error_summary(str(e)))
 
     async def scrape_cases(self, db_session=None, user_id: int | None = None, trigger: str = "manual") -> SyncTaskRecord:
         """执行一轮案例采集，成果持久化至 crawl_jobs / crawl_job_items。
@@ -421,7 +421,7 @@ class SyncScheduler:
             try:
                 self.on_sync_complete(record)
             except Exception as e:
-                logger.error("同步通知回调失败: %s", e)
+                logger.error("同步通知回调失败: %s", _safe_error_summary(str(e)))
 
         logger.info(
             "同步 %s: %s (新增%d 更新%d 错误%d)",

@@ -10,6 +10,7 @@ from typing import Optional
 from app.services.crawler_service import (
     _save_case,
     crawl_ccgp_detail,
+    _safe_error_summary,
     DECISION_TYPE_MAP,
 )
 from app.services.parse_contract import parse_shaanxi_list_html, _compute_completeness as pc
@@ -51,7 +52,7 @@ async def crawl_shaanxi_with_playwright() -> list[dict]:
             # 使用统一生产解析器 parse_shaanxi_list_html
             items = parse_shaanxi_list_html(html)
         except Exception as e:
-            logger.error("陕西 Playwright 采集异常: %s", e)
+            logger.error("陕西 Playwright 采集异常: %s", _safe_error_summary(str(e)))
         finally:
             await browser.close()
     return items
@@ -89,7 +90,7 @@ async def crawl_shaanxi() -> dict:
                 else:
                     parse_failed += 1
             except Exception as e:
-                logger.error("陕西详情采集失败 %s: %s", item["url"], e)
+                logger.error("陕西详情采集失败 %s: %s", item["url"], _safe_error_summary(str(e)))
                 parse_failed += 1
             await asyncio.sleep(0.5)
     return {"saved": saved, "parsed_count": parsed_count,
