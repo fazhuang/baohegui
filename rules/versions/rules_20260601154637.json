@@ -10,7 +10,7 @@
       "rule_type": "chapter",
       "target": "章节完整性",
       "mandatory": true,
-      "description": "招标文件缺少规定章节",
+      "description": "缺少规定章节",
       "version": "1.0",
       "effective_date": "2026-01-01",
       "enabled": true,

@@ -9,7 +9,7 @@
       "rule_type": "chapter",
       "target": "章节完整性",
       "mandatory": true,
-      "description": "国家法规模板 — 禁止擅自修改法定条款",
+      "description": "缺少规定章节",
       "version": "1.0",
       "effective_date": "2026-01-01",
       "enabled": false,
