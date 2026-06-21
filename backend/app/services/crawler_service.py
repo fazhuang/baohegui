@@ -261,7 +261,7 @@ async def crawl_all() -> dict:
                 stats["ccgp"]["error_type"] = "parse_all_failed"
                 stats["ccgp"]["error_message"] = f"全部 {stats['ccgp']['fetched']} 条详情解析失败"
     except SafeFetchError as e:
-        logger.error("CCGP 安全抓取错误: %s", e)
+        logger.error("CCGP 安全抓取错误: %s", _safe_error_summary(str(e)))
         stats["ccgp"]["errors"].append(f"{e.error_type.value}: {e.message}")
         stats["ccgp"]["error_type"] = e.error_type.value
         stats["ccgp"]["error_message"] = _safe_error_summary(str(e))
@@ -410,7 +410,7 @@ async def crawl_all() -> dict:
                 stats["mof"]["error_type"] = "parse_all_failed"
                 stats["mof"]["error_message"] = f"全部 {stats['mof']['fetched']} 条详情解析失败"
     except SafeFetchError as e:
-        logger.error("财政部 安全抓取错误: %s", e)
+        logger.error("财政部 安全抓取错误: %s", _safe_error_summary(str(e)))
         stats["mof"]["errors"].append(f"{e.error_type.value}: {e.message}")
         stats["mof"]["error_type"] = e.error_type.value
         stats["mof"]["error_message"] = _safe_error_summary(str(e))
@@ -488,7 +488,7 @@ def _save_case(data: dict) -> bool:
         return True
     except Exception as e:
         db.rollback()
-        logger.warning("保存案例失败: %s", e)
+        logger.warning("保存案例失败: %s", _safe_error_summary(str(e)))
         return False
     finally:
         db.close()

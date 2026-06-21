@@ -1402,3 +1402,42 @@ class TestShaanxiParseAllFailed:
             "crawl_shaanxi should count parse_failed"
         )
 
+    def test_shaanxi_listed_10_parsed_9_saved_9_is_partial(self):
+        """listed=10, parsed=9, saved=9, parse_failed=1 → partial
+
+        攻击复现：crawl_shaanxi 返回 10 条列表，9 条详情成功、1 条失败。
+        _source_status(fetched=10, parsed=9, saved=9, errors=[...]) → partial。
+        """
+        from app.services.crawler_service import _source_status
+
+        # 模拟 crawl_shaanxi + crawl_all 陕西段的计算
+        fetched = 10          # listed
+        parsed = 9            # 9 of 10 detail pages returned dict
+        saved = 9             # 9 saved to DB (none were duplicates)
+        errors = ["https://xxx: detail fetch 403"]
+
+        status = _source_status(fetched, parsed, saved, errors)
+        assert status == "partial", (
+            f"10 listed, 9 parsed, 9 saved, 1 error should be partial, got {status}"
+        )
+
+    def test_shaanxi_listed_10_parsed_8_saved_8_2_errors_is_partial(self):
+        """listed=10, parsed=8, saved=8, 2 errors → partial"""
+        from app.services.crawler_service import _source_status
+
+        status = _source_status(fetched=10, parsed_count=8, saved=8,
+                                errors=["e1", "e2"])
+        assert status == "partial"
+
+    def test_shaanxi_listed_10_parsed_9_saved_0_all_dupes_is_partial(self):
+        """listed=10, parsed=9, saved=0 (全部重复) → partial
+
+        即使没有 errors，全部重复也应是 partial 而非 success。
+        """
+        from app.services.crawler_service import _source_status
+
+        status = _source_status(fetched=10, parsed_count=9, saved=0, errors=[])
+        assert status == "partial", (
+            f"10 listed, 9 parsed, 0 saved (all dupes) should be partial, got {status}"
+        )
+

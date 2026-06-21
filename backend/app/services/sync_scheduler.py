@@ -57,6 +57,30 @@ OnSyncCallback = Callable[[SyncTaskRecord], None]
 _ALL_SOURCES = ("ccgp", "ningxia", "shaanxi", "mof")
 
 
+# ── 本地脱敏函数（避免循环导入依赖 crawler_service）──────────
+
+def _safe_error_log(message: str) -> str:
+    """截断 + 脱敏，用于日志安全输出。"""
+    import re
+    cleaned = str(message)
+    # Remove auth tokens / keys / passwords
+    patterns = [
+        r'(?:Authorization|Auth)\s*[=:]\s*Bearer\s+\S+',
+        r'(?:Authorization|Auth)\s*[=:]\s*Basic\s+\S+',
+        r'\bBearer\s+[\w\-\.\+/]+',
+        r'\b(?:Token|access_token|refresh_token)\s*[=:]\s*\S+',
+        r'\bapi[_-]?key\s*[=:]\s*\S+',
+        r'\bclient[_-]?secret\s*[=:]\s*\S+',
+        r'\bsecret\s*[=:]\s*\S+',
+        r'\bpassword\s*[=:]\s*\S+',
+    ]
+    for pat in patterns:
+        cleaned = re.sub(pat, '[REDACTED]', cleaned, flags=re.IGNORECASE)
+    if len(cleaned) > 2000:
+        cleaned = cleaned[:2000] + "..."
+    return cleaned
+
+
 class SyncScheduler:
     """
     规则同步调度器。
@@ -140,7 +164,7 @@ class SyncScheduler:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("定时同步异常: %s", _safe_error_summary(str(e)))
+                logger.error("定时同步异常: %s", _safe_error_log(str(e)))
 
     async def _run_case_scrape_loop(self) -> None:
         """后台循环：按间隔执行案例采集，每次创建独立 DB 会话持久化任务。"""
@@ -164,7 +188,7 @@ class SyncScheduler:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("案例采集异常: %s", _safe_error_summary(str(e)))
+                logger.error("案例采集异常: %s", _safe_error_log(str(e)))
 
     async def scrape_cases(self, db_session=None, user_id: int | None = None, trigger: str = "manual") -> SyncTaskRecord:
         """执行一轮案例采集，成果持久化至 crawl_jobs / crawl_job_items。
@@ -421,7 +445,7 @@ class SyncScheduler:
             try:
                 self.on_sync_complete(record)
             except Exception as e:
-                logger.error("同步通知回调失败: %s", _safe_error_summary(str(e)))
+                logger.error("同步通知回调失败: %s", _safe_error_log(str(e)))
 
         logger.info(
             "同步 %s: %s (新增%d 更新%d 错误%d)",
