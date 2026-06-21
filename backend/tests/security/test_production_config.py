@@ -11,8 +11,9 @@
 
 import http.client
 import os
-import subprocess
+import shutil
 import socket
+import subprocess
 import time
 from pathlib import Path
 
@@ -20,7 +21,7 @@ import pytest
 from unittest.mock import patch
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
-_UV_BIN = os.path.expanduser("~/.local/bin/uv")
+_UV_BIN = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv")
 
 
 def _find_free_port() -> int:
@@ -51,16 +52,30 @@ def _http_get(host: str, port: int, path: str,
         raise
 
 
-def _wait_for_server(host: str, port: int, timeout: int = 30) -> None:
+def _wait_for_server(host: str, port: int, proc: subprocess.Popen | None = None,
+                    timeout: int = 30) -> None:
+    """轮询等待服务器就绪。若提供 proc 且进程提前退出，立即报告 stderr。"""
+    time.sleep(2)
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            stderr_output = ""
+            if proc.stderr:
+                try:
+                    stderr_output = proc.stderr.read().decode(errors="replace")
+                except Exception:
+                    pass
+            raise RuntimeError(
+                f"Server process exited with code {proc.returncode} before port {port} became ready.\n"
+                f"stderr: {stderr_output[-2000:]}"
+            )
         try:
-            status, _ = _http_get(host, port, "/health")
+            status, _ = _http_get(host, port, "/health", timeout=3)
             if status == 200:
                 return
         except Exception:
             pass
-        time.sleep(0.3)
+        time.sleep(0.5)
     raise RuntimeError(f"Server at {host}:{port} did not start within {timeout}s")
 
 
@@ -151,7 +166,7 @@ class TestProductionConfig:
             "BHG_MINIO_ENDPOINT": "",
             "BHG_LLM_MOCK_MODE": "true",
             "BHG_LOG_LEVEL": "error",
-            "UV_CACHE_DIR": env.get("UV_CACHE_DIR", "/private/tmp/uv-cache"),
+            "UV_CACHE_DIR": env.get("UV_CACHE_DIR", os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache/uv"))),
         })
         proc = subprocess.Popen(
             [_UV_BIN, "run", "uvicorn", "app.main:app",
@@ -159,12 +174,12 @@ class TestProductionConfig:
              "--log-level", "error"],
             cwd=str(BACKEND_DIR),
             env=env,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         host = "127.0.0.1"
         try:
-            _wait_for_server(host, port)
+            _wait_for_server(host, port, proc=proc)
             status, _ = _http_get(host, port, "/health")
             assert status == 200, f"有效配置应返回 200, got {status}"
         finally:
@@ -183,7 +198,7 @@ class TestProductionConfig:
             "BHG_MINIO_ENDPOINT": "",
             "BHG_LLM_MOCK_MODE": "true",
             "BHG_LOG_LEVEL": "error",
-            "UV_CACHE_DIR": env.get("UV_CACHE_DIR", "/private/tmp/uv-cache"),
+            "UV_CACHE_DIR": env.get("UV_CACHE_DIR", os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache/uv"))),
         })
         proc = subprocess.Popen(
             [_UV_BIN, "run", "uvicorn", "app.main:app",
@@ -191,7 +206,7 @@ class TestProductionConfig:
              "--log-level", "error"],
             cwd=str(BACKEND_DIR),
             env=env,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         try:
