@@ -106,7 +106,7 @@ def _start_prod_server(port: int, extra_env: dict | None = None) -> subprocess.P
         "BHG_MINIO_ENDPOINT": "",  # 本地存储模式
         "BHG_LLM_MOCK_MODE": "true",
         "BHG_LOG_LEVEL": "error",
-        "UV_CACHE_DIR": env.get("UV_CACHE_DIR", "/private/tmp/uv-cache"),
+        "UV_CACHE_DIR": env.get("UV_CACHE_DIR", os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache/uv"))),
     })
     if extra_env:
         env.update(extra_env)
