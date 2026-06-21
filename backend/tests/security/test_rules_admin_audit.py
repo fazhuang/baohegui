@@ -29,44 +29,36 @@ def _isolate_rules_persistence(monkeypatch):
     """monkeypatch 所有写入 rules/versions 的路径，防止测试规则持久化到磁盘。
 
     覆盖的方法：
-    - rule_sync_service._save() → 写入 platform_rules.json
-    - rule_sync_service._save_manifest() → 写入 manifest.json
+    - RuleSyncService._save() → 写入 platform_rules.json
+    - RuleSyncService.add_rule() → 调用 _save，patch 整个方法
+    - RuleSyncService.update_rule() → 调用 _save
+    - RuleSyncService.delete_rule() → 调用 _save
+    - RuleVersionManager._save_manifest() → 写入 manifest.json
     - RuleVersionManager.snapshot() → 写入 rules_*.json + manifest.json
-    - RuleVersionManager._save_manifest() → 与 module-level 同源
     """
-    from app.services.rule_sync import rule_sync_service, RuleVersionManager
+    from app.services.rule_sync import RuleSyncService, RuleVersionManager
 
-    # ── rule_sync_service._save() ─────────────────────────
-    original_save = rule_sync_service._save
-    monkeypatch.setattr(rule_sync_service, "_save", lambda: None)
+    # ── Patch RuleSyncService._save (module-level instance) ─
+    _original_save = RuleSyncService._save
+    monkeypatch.setattr(RuleSyncService, "_save", lambda self: None)
 
-    # ── rule_sync_service._save_manifest() ────────────────
-    # 该方法由 RuleVersionManager._save_manifest 复用，
-    # 但有独立的 module-level 实现。安全起见同时 patch。
-    if hasattr(rule_sync_service, '_save_manifest'):
-        original_save_manifest = rule_sync_service._save_manifest
-        monkeypatch.setattr(
-            rule_sync_service, "_save_manifest", lambda: None
-        )
-
-    # ── RuleVersionManager — 会通过 sync_scheduler 间接调用 ─
-    # 防止 snapshot() 写入 rules_*.json 并回调 _save_manifest
-    original_snapshot = RuleVersionManager.snapshot
-    # snapshot 是实例方法，需要 patch 在类上
+    # ── Patch RuleVersionManager ───────────────────────────
+    _original_snapshot = RuleVersionManager.snapshot
     monkeypatch.setattr(
         RuleVersionManager, "snapshot",
         lambda self, change_log="": "mock-version-id"
     )
 
+    _original_save_manifest = RuleVersionManager._save_manifest
+    monkeypatch.setattr(
+        RuleVersionManager, "_save_manifest", lambda self: None
+    )
+
     yield
 
-    # 恢复
-    monkeypatch.setattr(rule_sync_service, "_save", original_save)
-    if 'original_save_manifest' in dir():
-        monkeypatch.setattr(
-            rule_sync_service, "_save_manifest", original_save_manifest
-        )
-    monkeypatch.setattr(RuleVersionManager, "snapshot", original_snapshot)
+    monkeypatch.setattr(RuleSyncService, "_save", _original_save)
+    monkeypatch.setattr(RuleVersionManager, "snapshot", _original_snapshot)
+    monkeypatch.setattr(RuleVersionManager, "_save_manifest", _original_save_manifest)
 
 
 def _create_user(db, username: str, role: str = "user") -> User:
