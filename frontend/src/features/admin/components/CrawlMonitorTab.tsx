@@ -1,11 +1,12 @@
 /**
  * CrawlMonitorTab — 采集监控面板
  *
- * Phase 2 Block E: 管理后台采集监控 Tab
+ * Phase 2 Block D/E: 管理后台采集监控 Tab
  * - 最近任务状态和触发类型
  * - 四个来源的 fetched/saved/duplicates 明细
- * - 连续失败次数、最近成功时间、健康状态
+ * - 连续失败次数、最近成功时间、健康状态（来自后端 DB）
  * - 管理员可见的简要错误摘要
+ * - 接入 source-health API
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -16,8 +17,9 @@ import {
 import {
   ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ExclamationCircleOutlined, ClockCircleOutlined,
-  SyncOutlined,
+  SyncOutlined, MonitorOutlined,
 } from '@ant-design/icons';
+import type { ColumnsType } from 'antd/es/table';
 import http from '../../../services/http';
 
 const { Text } = Typography;
@@ -56,6 +58,24 @@ interface CrawlJobSummary {
   created_at: string | null;
 }
 
+interface SourceHealthItem {
+  source_name: string;
+  first_run_at: string | null;
+  last_run_at: string | null;
+  last_success_at: string | null;
+  consecutive_failures: number;
+  total_runs: number;
+  successful_runs: number;
+  fetched_count: number;
+  saved_count: number;
+  duplicate_count: number;
+  completeness_rate: number;
+  health_status: string;
+  last_error_type?: string;
+  last_error_message?: string;
+  updated_at: string | null;
+}
+
 interface CrawlStatusData {
   running: boolean;
   case_scrape_enabled: boolean;
@@ -89,11 +109,27 @@ const STATUS_TAG_MAP: Record<string, { color: string; icon: React.ReactNode }> =
   skipped: { color: 'default', icon: <ClockCircleOutlined /> },
 };
 
+const HEALTH_STATUS_COLOR: Record<string, string> = {
+  collecting: '#8c8c8c',
+  not_enough_data: '#faad14',
+  healthy: '#52c41a',
+  degraded: '#fa8c16',
+  failed: '#ff4d4f',
+};
+
 const SOURCE_LABELS: Record<string, string> = {
   ccgp: 'CCGP 全国',
   ningxia: '宁夏政府采购网',
   shaanxi: '陕西政府采购网',
   mof: '财政部国库司',
+};
+
+const HEALTH_LABELS: Record<string, string> = {
+  collecting: '数据收集中',
+  not_enough_data: '数据不足',
+  healthy: '健康',
+  degraded: '降级',
+  failed: '异常',
 };
 
 async function fetchStatus(): Promise<CrawlStatusData> {
@@ -106,9 +142,15 @@ async function fetchJobs(limit: number = 5): Promise<{ jobs: CrawlJobSummary[] }
   return data;
 }
 
+async function fetchSourceHealth(): Promise<{ sources: SourceHealthItem[] }> {
+  const { data } = await http.get('/crawler/source-health');
+  return data;
+}
+
 const CrawlMonitorTab: React.FC = () => {
   const [status, setStatus] = useState<CrawlStatusData | null>(null);
   const [jobs, setJobs] = useState<CrawlJobSummary[]>([]);
+  const [sourceHealth, setSourceHealth] = useState<SourceHealthItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -116,9 +158,14 @@ const CrawlMonitorTab: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [s, j] = await Promise.all([fetchStatus(), fetchJobs(5)]);
+      const [s, j, sh] = await Promise.all([
+        fetchStatus(),
+        fetchJobs(5),
+        fetchSourceHealth(),
+      ]);
       setStatus(s);
       setJobs(j.jobs);
+      setSourceHealth(sh.sources);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : '加载失败');
     } finally {
@@ -130,20 +177,11 @@ const CrawlMonitorTab: React.FC = () => {
 
   const lastScrape = status?.last_case_scrape;
 
-  const healthStatus = lastScrape
-    ? (lastScrape.status === 'failed' ? 'degraded' : lastScrape.status)
-    : 'collecting';
-
-  const healthLabel: Record<string, string> = {
-    success: '正常',
-    partial: '部分成功',
-    failed: '异常',
-    degraded: '降级',
-    collecting: '数据收集中',
-    not_enough_data: '数据不足',
-  };
-
-  const sourceColumns = [
+  const sourceColumns: ColumnsType<{
+    source_name: string; status: string;
+    fetched_count: number; saved_count: number; duplicate_count: number;
+    duration_ms?: number;
+  }> = [
     { title: '来源', dataIndex: 'source_name', key: 'source_name',
       render: (v: string) => SOURCE_LABELS[v] || v },
     { title: '状态', dataIndex: 'status', key: 'status',
@@ -168,6 +206,51 @@ const CrawlMonitorTab: React.FC = () => {
       }))
     : [];
 
+  // 健康状态列
+  const healthColumns: ColumnsType<SourceHealthItem> = [
+    { title: '来源', dataIndex: 'source_name', key: 'source_name',
+      render: (v: string) => SOURCE_LABELS[v] || v },
+    {
+      title: '健康状态', dataIndex: 'health_status', key: 'health_status',
+      render: (s: string) => (
+        <Tag color={HEALTH_STATUS_COLOR[s] || 'default'}>
+          {HEALTH_LABELS[s] || s}
+        </Tag>
+      ),
+    },
+    { title: '运行次数', dataIndex: 'total_runs', key: 'total_runs' },
+    { title: '连续失败', dataIndex: 'consecutive_failures', key: 'consecutive_failures' },
+    {
+      title: '完整率', dataIndex: 'completeness_rate', key: 'completeness_rate',
+      render: (v: number) => v != null ? `${(v * 100).toFixed(1)}%` : '-',
+    },
+    {
+      title: '最近成功', dataIndex: 'last_success_at', key: 'last_success_at',
+      render: (v: string | null) => v ? new Date(v).toLocaleString() : '-',
+    },
+    {
+      title: '累计抓取/保存', key: 'counts',
+      render: (_: unknown, r: SourceHealthItem) =>
+        `${r.fetched_count} / ${r.saved_count}`,
+    },
+    {
+      title: '错误', dataIndex: 'last_error_type', key: 'last_error_type',
+      render: (v: string | undefined, r: SourceHealthItem) => {
+        if (!v) return '-';
+        return (
+          <Space direction="vertical" size={0}>
+            <Tag color="red">{v}</Tag>
+            {r.last_error_message && (
+              <Text type="secondary" style={{ fontSize: 11, maxWidth: 200 }} ellipsis>
+                {r.last_error_message}
+              </Text>
+            )}
+          </Space>
+        );
+      },
+    },
+  ];
+
   return (
     <div style={{ padding: 16 }}>
       <Spin spinning={loading}>
@@ -182,10 +265,10 @@ const CrawlMonitorTab: React.FC = () => {
           <Col span={6}>
             <Card size="small">
               <Statistic
-                title="采集状态"
+                title="最近采集状态"
                 value={lastScrape
-                  ? healthLabel[lastScrape.status] || lastScrape.status
-                  : healthLabel.collecting}
+                  ? (HEALTH_LABELS[lastScrape.status] || lastScrape.status)
+                  : '尚未执行'}
                 valueStyle={{
                   color: lastScrape?.status === 'failed' ? 'red'
                     : lastScrape?.status === 'partial' ? 'orange' : 'green',
@@ -212,22 +295,40 @@ const CrawlMonitorTab: React.FC = () => {
           </Col>
         </Row>
 
+        {/* 来源健康状态（来自后端 DB） */}
+        <Card
+          title={<span><MonitorOutlined /> 来源健康状态</span>}
+          size="small"
+          style={{ marginBottom: 16 }}
+        >
+          {sourceHealth.length > 0 ? (
+            <Table
+              dataSource={sourceHealth}
+              columns={healthColumns}
+              rowKey="source_name"
+              pagination={false}
+              size="small"
+            />
+          ) : (
+            <Empty description="暂无健康数据（来源尚未开始采集）" />
+          )}
+          <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>
+            健康状态由后端根据连续运行天数、成功率、字段完整率计算。
+            采集运行不足 7 天时显示"数据不足"；连续失败超过阈值显示"异常"。
+          </Text>
+        </Card>
+
         <Row gutter={16} style={{ marginBottom: 16 }}>
           <Col span={8}>
-            <Statistic title="健康状态" value={healthLabel[healthStatus] || healthStatus}
-              valueStyle={{ fontSize: 16 }} />
-            {healthStatus === 'collecting' && (
-              <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-                需要至少 7 天连续稳定运行数据才能显示 healthy
-              </Text>
-            )}
-          </Col>
-          <Col span={8}>
-            <Statistic title="最近任务" value={lastScrape?.trigger_type ?? '-'} />
+            <Statistic title="最近任务类型" value={lastScrape?.trigger_type ?? '-'} />
           </Col>
           <Col span={8}>
             <Statistic title="最近运行" value={lastScrape?.finished_at
               ? new Date(lastScrape.finished_at).toLocaleString() : '-'} />
+          </Col>
+          <Col span={8}>
+            <Statistic title="开始时间" value={lastScrape?.started_at
+              ? new Date(lastScrape.started_at).toLocaleString() : '-'} />
           </Col>
         </Row>
 

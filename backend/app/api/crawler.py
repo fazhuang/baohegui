@@ -1,4 +1,4 @@
-"""案例采集 API 路由 — 手动触发 + 状态查看 + 规则分析 + 任务历史
+"""案例采集 API 路由 — 手动触发 + 状态查看 + 规则分析 + 任务历史 + 来源健康
 
 安全基线：管理操作（trigger/analyze）仅管理员可访问。
 读取端点（cases/stats/status）仍需要认证但普通用户可用。
@@ -6,7 +6,8 @@
 
 Phase 2：采集任务持久化至 crawl_jobs / crawl_job_items，
   /api/crawler/status 从数据库读取最近任务，
-  /api/crawler/jobs 提供管理员采集监控数据。
+  /api/crawler/jobs 提供管理员采集监控数据，
+  /api/crawler/source-health 提供运行时来源健康状态。
 """
 
 from fastapi import APIRouter, Depends, Query
@@ -49,11 +50,34 @@ async def trigger_crawl(
             "scrape_stats": record.scrape_stats,
         },
     )
+    # 返回状态与数据库一致（最终状态使用 aggregate_job_status 计算）
     return {
         "status": record.status.value,
         "error": record.error_message or None,
         "finished_at": record.finished_at,
         "scrape_stats": record.scrape_stats,
+    }
+
+
+@router.get("/source-health")
+async def source_health(
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """来源运行时健康状态 — 管理员可见错误摘要，普通用户不可见。
+
+    Phase 2 Block C: 返回 4 个来源的持久化运行时健康记录，
+    替代静态 canary_config.json fixture。
+    """
+    from app.services.source_health_service import get_all_source_health, ensure_all_sources_exist
+
+    is_admin = user.get("role") == "admin"
+    ensure_all_sources_exist(db)
+    db.commit()
+
+    records = get_all_source_health(db)
+    return {
+        "sources": [r.to_dict(is_admin=is_admin) for r in records],
     }
 
 
@@ -67,6 +91,7 @@ async def crawler_status(
 
     # Phase 2: 优先使用 DB 持久化的最近一次采集（普通用户不暴露错误正文）
     is_admin = user.get("role") == "admin"
+    # Phase 2: 管理员可看 partial 和 failed 错误
     db_scrape = crawl_job_store.get_last_scrape_status(db, is_admin=is_admin)
     if db_scrape.get("last_scrape"):
         status["last_case_scrape"] = db_scrape["last_scrape"]

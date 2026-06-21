@@ -120,6 +120,10 @@ _TABLES_TO_CLEAN = [
     "complaint_cases",
     "kg_edges",
     "kg_nodes",
+    "crawl_jobs",
+    "crawl_job_items",
+    "crawl_source_health",
+    "daily_health_snapshots",
 ]
 
 
@@ -131,9 +135,11 @@ def _ensure_tables(engine):
     from app.models.knowledge_graph import KGNode, KGEdge  # noqa: F401
     from app.models.rule import Base as RuleBase
     from app.models.subscription import Base as SubscriptionBase
+    from app.models.crawl_job import Base as CrawlJobBase
+    from app.models.crawl_source_health import Base as CrawlSourceHealthBase
     from app.services.feedback_service import FeedbackRecord, RuleConfidence  # noqa: F401
 
-    for base in [DocumentBase, RuleBase, AuditBase, AnnouncementBase, SubscriptionBase]:
+    for base in [DocumentBase, RuleBase, AuditBase, AnnouncementBase, SubscriptionBase, CrawlJobBase, CrawlSourceHealthBase]:
         base.metadata.create_all(bind=engine, checkfirst=True)
 
     # 应用增量迁移（索引、约束等 — 幂等，使用 IF NOT EXISTS）
@@ -162,6 +168,8 @@ def _apply_migration_upgrades(engine):
     # Import migration upgrade functions by revision
     _MIGRATION_MODULES = [
         "app.db.migrations.versions.20260619_1000_complaint_cases_indexes",
+        "app.db.migrations.versions.20260621_1000_crawl_source_health",
+        "app.db.migrations.versions.20260621_1100_daily_health_snapshot",
     ]
 
     for mod_name in _MIGRATION_MODULES:

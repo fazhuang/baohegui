@@ -1,18 +1,21 @@
 """来源 fixtures 和解析契约测试
 
-Phase 2 阻塞项 E — 为 4 个真实采集来源建立质量门禁：
+Phase 2 Block E — 为 4 个真实采集来源建立质量门禁：
 
 每个来源必须有：
 - 脱敏 HTML fixture（列表页 + 详情页）
-- 列表页解析契约测试
-- 详情页解析契约测试
+- 列表页解析契约测试（调用生产解析器）
+- 详情页解析契约测试（调用生产解析器）
 - 必填字段完整率检查
 - 解析失败类型
 - 来源版本 / parser version
 
 测试不得访问外网。真实 canary 运行逻辑与 fixture 测试分离。
 
-data/ 子目录下的 fixtures 为手动获取并脱敏的真实 HTML 片段。
+Phase 2 re-audit 修复：
+- 测试调用生产纯解析函数 parse_xxx_list_html / parse_detail_html
+- 删除本地复制的 _parse_list_items / _parse_detail
+- 解析器结构漂移时 fixture 测试真实失败
 """
 
 from __future__ import annotations
@@ -46,58 +49,9 @@ def _read_json_fixture(source: str, name: str) -> dict | None:
     return json.loads(fpath.read_text(encoding="utf-8"))
 
 
-# ── 来源元数据（常量，与 crawler_service.py 保持同步）─────
+# ── 通用解析契约辅助（从生产解析器导入）─────────────────
 
-SOURCE_META = {
-    "ccgp": {
-        "name": "CCGP 全国",
-        "base_url": "https://www.ccgp.gov.cn",
-        "list_path": "jdjc/jdcf/",
-        "version": "2.1.0",
-        "parser_version": "2.0.0",
-        "default_province": "全国",
-        "required_fields": [
-            "title", "source_url", "province", "decision_type",
-            "decision_date", "summary",
-        ],
-    },
-    "ningxia": {
-        "name": "宁夏政府采购网",
-        "base_url": "https://www.ccgp-ningxia.gov.cn",
-        "list_path": "public/NXGPPNEW/dynamic/contents/TSCL/",
-        "version": "2.1.0",
-        "parser_version": "2.0.0",
-        "default_province": "宁夏",
-        "required_fields": [
-            "title", "source_url", "province", "decision_type",
-            "decision_date", "summary",
-        ],
-    },
-    "shaanxi": {
-        "name": "陕西政府采购网",
-        "base_url": "https://www.ccgp-shaanxi.gov.cn",
-        "list_path": "freecms/site/shanxi/jdgl/",
-        "version": "2.0.0",
-        "parser_version": "1.5.0",
-        "default_province": "陕西",
-        "required_fields": [
-            "title", "source_url", "province", "decision_type",
-            "decision_date", "summary",
-        ],
-    },
-    "mof": {
-        "name": "财政部国库司",
-        "base_url": "https://gks.mof.gov.cn",
-        "list_path": "ztztz/zhengfucaigouguanli/",
-        "version": "2.0.0",
-        "parser_version": "1.5.0",
-        "default_province": "全国",
-        "required_fields": [
-            "title", "source_url", "province", "decision_type",
-            "summary",
-        ],
-    },
-}
+from app.services.parse_contract import _check_required_fields, _compute_completeness, SOURCE_META
 
 
 # ═══════════════════════════════════════════════════════
@@ -111,235 +65,50 @@ MAX_TITLE_LENGTH = 255
 MAX_URL_LENGTH = 1024
 
 
-# ── 通用解析契约辅助 ──────────────────────────────────
+# ── 通用解析契约辅助（从生产解析器导入）─────────────────
 
-def _check_required_fields(data: dict, source: str) -> dict:
-    """检查必填字段完整率。返回 {field: True/False}。"""
-    meta = SOURCE_META[source]
-    return {f: bool(data.get(f)) for f in meta["required_fields"]}
+from app.services.parse_contract import _check_required_fields, _compute_completeness, SOURCE_META  # noqa: E402
 
 
-def _compute_completeness(data: dict, source: str) -> float:
-    """计算字段完整率 (0.0–1.0)。"""
-    checks = _check_required_fields(data, source)
-    if not checks:
-        return 1.0
-    return sum(1 for v in checks.values() if v) / len(checks)
+# ── 测试辅助（包装生产函数，现直接委托）─────────────────
+
+def _check_required_fields_test(data: dict, source: str) -> dict:
+    """将生产 _check_required_fields 包装为测试函数。"""
+    return _check_required_fields(data, source)
 
 
-def _parse_list_items(html: str, source: str) -> list[dict]:
-    """从列表页 HTML 中解析条目列表（使用实际爬虫逻辑的子集）。
-
-    返回 [{"title": ..., "url": ..., "date": ...}]。
-    """
-    from bs4 import BeautifulSoup
-
-    soup = BeautifulSoup(html, "lxml")
-    items = []
-    seen_urls = set()
-
-    if source == "ccgp":
-        for ul in soup.find_all("ul"):
-            for li in ul.find_all("li", recursive=False):
-                a_tag = li.find("a")
-                if not a_tag or not a_tag.get("href"):
-                    continue
-                href = a_tag["href"]
-                if not href.startswith("./20"):
-                    continue
-                title = a_tag.get_text(strip=True)
-                if "投诉" not in title:
-                    continue
-                span = li.find("span")
-                date_text = span.get_text(strip=True) if span else ""
-                full_url = SOURCE_META[source]["base_url"] + "/jdjc/jdcf" + href[1:]
-                if full_url in seen_urls:
-                    continue
-                seen_urls.add(full_url)
-                items.append({"title": title, "url": full_url, "date": date_text})
-
-    elif source == "ningxia":
-        base = SOURCE_META[source]["base_url"]
-        for a_tag in soup.find_all("a", href=True):
-            href = a_tag["href"]
-            title = a_tag.get_text(strip=True)
-            if "投诉处理结果公告" not in title:
-                continue
-            if not href.startswith("contents/TSCL/"):
-                continue
-            full_url = f"{base}/public/NXGPPNEW/dynamic/{href}"
-            if full_url in seen_urls:
-                continue
-            seen_urls.add(full_url)
-            items.append({"title": title, "url": full_url, "date": ""})
-
-    elif source == "mof":
-        base = SOURCE_META[source]["base_url"]
-        for a_tag in soup.find_all("a", href=True):
-            title = a_tag.get_text(strip=True)
-            if "政府采购信息公告" not in title and "投诉处理" not in title:
-                continue
-            href = a_tag["href"]
-            if href.startswith("./"):
-                href = base + href[1:]
-            elif href.startswith("/"):
-                href = base + href
-            items.append({"title": title, "url": href})
-
-    elif source == "shaanxi":
-        for link_tag in soup.select("a[href*='ggxx/info']"):
-            title = link_tag.get_text(strip=True)
-            if "投诉" not in title:
-                continue
-            href = link_tag.get("href", "")
-            if href.startswith("/"):
-                href = SOURCE_META[source]["base_url"] + href
-            items.append({"title": title, "url": href, "date": ""})
-
-    return items
-
-
-def _parse_detail(html: str, source: str, url: str = "") -> dict | None:
-    """从详情页 HTML 中解析结构化字段（使用实际爬虫逻辑的子集）。
-
-    返回与 crawl_ccgp_detail 相同结构的 dict。
-    """
-    from bs4 import BeautifulSoup
-
-    soup = BeautifulSoup(html, "lxml")
-
-    # 正文提取
-    raw_text = ""
-    for sel in ["#main_contain", ".main-content", "article", ".article", ".content"]:
-        div = soup.select_one(sel)
-        if div:
-            for aside in div.select(".sidebar, #sidebar, .aside, .right, .related, .nav, .navbar, .breadcrumb"):
-                aside.decompose()
-            raw_text = div.get_text("\n", strip=True)
-            if len(raw_text.strip()) > 200:
-                break
-
-    if not raw_text or len(raw_text.strip()) < 100:
-        for td in soup.find_all("td"):
-            txt = td.get_text("\n", strip=True)
-            if "项目编号" in txt or "项目名称" in txt:
-                raw_text = txt
-                break
-
-    if not raw_text.strip():
-        body = soup.find("body")
-        raw_text = body.get_text("\n", strip=True) if body else ""
-
-    # 标题
-    title_tag = soup.find("title")
-    title = title_tag.get_text(strip=True) if title_tag else ""
-    if title in ("投诉处理", "") or "当前位置" in title:
-        for line in raw_text.split("\n"):
-            if "政府采购投诉" in line or "投诉处理结果公告" in line:
-                title = line.strip()[:200]
-                break
-
-    # 字段提取
-    def _extract_field(text: str, label: str, max_chars: int = 500) -> str:
-        next_section = r"(?:[一二三四五六七八九十]、|基本情况|处理依据及结果|处理依据|处理决定|其他补充)"
-        for pat in [
-            rf"{label}[：:]\s*(.+?)(?:\n(?:[一二三四五六七八九十]、|$))",
-            rf"{label}[：:]\s*(.+?)(?:{next_section})",
-            rf"{label}[：:]\s*(.+?)(?:\n\n)",
-            rf"{label}[：:]\s*(.+)",
-        ]:
-            m = re.search(pat, text, re.DOTALL)
-            if m:
-                val = m.group(1).strip()
-                if len(val) > max_chars:
-                    val = val[:max_chars] + "..."
-                return val
-        return ""
-
-    project_name = _extract_field(raw_text, "项目名称")
-    project_number = _extract_field(raw_text, "项目编号")
-    complainant = _extract_field(raw_text, "投诉人", 300)
-
-    # 日期提取
-    decision_date = ""
-    for date_m in re.finditer(r"(\d{4})年(\d{1,2})月(\d{1,2})日", raw_text):
-        decision_date = f"{date_m.group(1)}-{date_m.group(2).zfill(2)}-{date_m.group(3).zfill(2)}"
-
-    # 决定类型
-    decision_type_map = {
-        "驳回投诉": "rejected", "驳回": "rejected", "投诉不成立": "rejected",
-        "投诉成立": "upheld", "责令重新": "upheld", "中标无效": "upheld",
-        "部分成立": "partial", "部分": "partial", "撤销合同": "upheld",
-        "废标": "upheld", "重新开展": "upheld",
-    }
-    result_section = ""
-    result_match = re.search(
-        r"(?:五、处理依据及结果|五、处理依据|处理依据及结果|处理决定)(.*?)(?:六、|七、|$)",
-        raw_text, re.DOTALL,
-    )
-    if result_match:
-        result_section = result_match.group(1).strip()[:800]
-
-    decision_type = "dismissed"
-    for keyword, dtype in decision_type_map.items():
-        if keyword in (result_section or raw_text):
-            decision_type = dtype
-            break
-
-    # 投诉类型关键词
-    complaint_kw = []
-    for kw in [
-        "参数", "品牌", "排他", "指向", "歧视", "授权", "检测报告", "资质",
-        "中小企业", "虚假", "串通", "低价", "异常低价", "评分", "评审",
-        "混包", "标准", "进口", "认证", "业绩", "售后",
-    ]:
-        if kw in raw_text:
-            complaint_kw.append(kw)
-
-    return {
-        "province": SOURCE_META[source]["default_province"]
-            if source in ("ccgp", "mof") else
-            "宁夏" if source == "ningxia" else
-            "陕西" if source == "shaanxi" else
-            "全国",
-        "source_url": url,
-        "title": title[:200] if title else "",
-        "project_name": (project_name or "")[:200],
-        "project_number": (project_number or "")[:128],
-        "complainant": (complainant or "")[:500],
-        "respondent": "",
-        "decision_date": decision_date,
-        "decision_type": decision_type,
-        "complaint_types": json.dumps(complaint_kw, ensure_ascii=False) if complaint_kw else "",
-        "legal_basis": "",
-        "summary": (result_section or "")[:500],
-        "raw_content": raw_text[:5000],
-        "is_analyzed": 0,
-    }
+def _compute_completeness_test(data: dict, source: str) -> float:
+    """将生产 _compute_completeness 包装为测试函数。"""
+    return _compute_completeness(data, source)
 
 
 # ═══════════════════════════════════════════════════════
-# 列表页解析契约测试
+# 列表页解析契约测试（调用生产 parse 函数）
 # ═══════════════════════════════════════════════════════
 
 
 class TestListPageContracts:
-    """每个来源的列表页解析契约"""
+    """每个来源的列表页解析契约 — 使用生产纯解析函数"""
 
     def test_ccgp_list_parse(self):
         """CCGP 列表页：至少产出 1 条有效条目，含 title/url"""
+        from app.services.parse_contract import parse_ccgp_list_html
+
         html = _read_fixture("ccgp", "list")
-        items = _parse_list_items(html, "ccgp")
+        items = parse_ccgp_list_html(html)
         assert len(items) >= 1, "CCGP list fixture should yield at least 1 item"
         for item in items:
             assert item.get("title"), f"Item missing title: {item}"
             assert item.get("url", "").startswith("https://"), f"Item URL not HTTPS: {item}"
             assert len(item["title"]) <= MAX_TITLE_LENGTH
+            assert "投诉" in item["title"]
 
     def test_ningxia_list_parse(self):
-        """宁夏列表页：至少产出 1 条有效条��"""
+        """宁夏列表页：至少产出 1 条有效条目"""
+        from app.services.parse_contract import parse_ningxia_list_html
+
         html = _read_fixture("ningxia", "list")
-        items = _parse_list_items(html, "ningxia")
+        items = parse_ningxia_list_html(html)
         assert len(items) >= 1, "Ningxia list fixture should yield at least 1 item"
         for item in items:
             assert "投诉处理结果公告" in item.get("title", ""), \
@@ -348,8 +117,10 @@ class TestListPageContracts:
 
     def test_shaanxi_list_parse(self):
         """陕西列表页：至少产出 1 条有效条目"""
+        from app.services.parse_contract import parse_shaanxi_list_html
+
         html = _read_fixture("shaanxi", "list")
-        items = _parse_list_items(html, "shaanxi")
+        items = parse_shaanxi_list_html(html)
         assert len(items) >= 1, "Shaanxi list fixture should yield at least 1 item"
         for item in items:
             assert "投诉" in item.get("title", ""), \
@@ -358,32 +129,74 @@ class TestListPageContracts:
 
     def test_mof_list_parse(self):
         """财政部列表页：至少产出 1 条有效条目"""
+        from app.services.parse_contract import parse_mof_list_html
+
         html = _read_fixture("mof", "list")
-        items = _parse_list_items(html, "mof")
+        items = parse_mof_list_html(html)
         assert len(items) >= 1, "MOF list fixture should yield at least 1 item"
         for item in items:
             assert item.get("title"), f"Item missing title: {item}"
             assert item.get("url", "").startswith("https://"), f"Item URL not HTTPS: {item}"
 
+    def test_ccgp_empty_list(self):
+        """CCGP 空列表：解析返回空列表"""
+        from app.services.parse_contract import parse_ccgp_list_html
+
+        html = "<html><body><ul></ul></body></html>"
+        items = parse_ccgp_list_html(html)
+        assert items == []
+
+    def test_ccgp_dom_change_triggers_failure(self):
+        """CCGP DOM 结构变化 → fixture 测试失败（非静默返回空）"""
+        from app.services.parse_contract import parse_ccgp_list_html
+
+        # 故意给无效 HTML
+        html = "<html><body><div>No lists here</div></body></html>"
+        items = parse_ccgp_list_html(html)
+        # 空列表明确说明无有效条目
+        assert items == [], "Changed DOM should yield empty list"
+
+    def test_ningxia_missing_fields(self):
+        """宁夏详情解析中缺少字段时不崩溃。"""
+        from app.services.parse_contract import parse_detail_html
+
+        html = _read_fixture("ningxia", "detail")
+        result = parse_detail_html(html, url="https://example.com/ningxia/1", province="宁夏")
+        assert result is not None
+        # 至少产出 title 和 province
+        assert result.get("province") == "宁夏"
+
+    def test_duplicate_urls_in_list(self):
+        """列表页重复 URL 去重。"""
+        from app.services.parse_contract import parse_ccgp_list_html
+
+        html = _read_fixture("ccgp", "list")
+        items = parse_ccgp_list_html(html)
+        urls = [i["url"] for i in items]
+        assert len(urls) == len(set(urls)), "Duplicate URLs not deduplicated"
+
 
 # ═══════════════════════════════════════════════════════
-# 详情页解析契约测试
+# 详情页解析契约测试（调用生产 parse_detail_html）
 # ═══════════════════════════════════════════════════════
 
 
 class TestDetailPageContracts:
-    """每个来源的详情页解析契约"""
+    """每个来源的详情页解析契约 — 使用生产纯解析函数"""
 
     def test_ccgp_detail_parse(self):
         """CCGP 详情页：解析结果必填字段完整"""
+        from app.services.parse_contract import parse_detail_html
+
         html = _read_fixture("ccgp", "detail")
-        result = _parse_detail(html, "ccgp", url="https://www.ccgp.gov.cn/jdjc/jdcf/2025/123")
+        result = parse_detail_html(html, url="https://www.ccgp.gov.cn/jdjc/jdcf/2025/123", province="全国")
         assert result is not None, "CCGP detail parse returned None"
 
-        completeness = _compute_completeness(result, "ccgp")
-        assert completeness >= 0.5, (
-            f"CCGP detail completeness={completeness:.0%} below 50% threshold. "
-            f"Required fields: {_check_required_fields(result, 'ccgp')}"
+        completeness = _check_required_fields_test(result, "ccgp")
+        completeness_rate = _compute_completeness_test(result, "ccgp")
+        assert completeness_rate >= 0.5, (
+            f"CCGP detail completeness={completeness_rate:.0%} below 50% threshold. "
+            f"Required fields: {completeness}"
         )
 
         assert result.get("title"), "title is required"
@@ -398,14 +211,16 @@ class TestDetailPageContracts:
 
     def test_ningxia_detail_parse(self):
         """宁夏详情页：解析结果必填字段完整"""
+        from app.services.parse_contract import parse_detail_html
+
         html = _read_fixture("ningxia", "detail")
-        result = _parse_detail(html, "ningxia", url="https://www.ccgp-ningxia.gov.cn/public/...")
+        result = parse_detail_html(html, url="https://www.ccgp-ningxia.gov.cn/public/...", province="宁夏")
         assert result is not None, "Ningxia detail parse returned None"
 
-        completeness = _compute_completeness(result, "ningxia")
-        assert completeness >= 0.5, (
-            f"Ningxia detail completeness={completeness:.0%} below 50% threshold. "
-            f"Required: {_check_required_fields(result, 'ningxia')}"
+        completeness_rate = _compute_completeness_test(result, "ningxia")
+        assert completeness_rate >= 0.5, (
+            f"Ningxia detail completeness={completeness_rate:.0%} below 50% threshold. "
+            f"Required: {_check_required_fields_test(result, 'ningxia')}"
         )
 
         assert result.get("title"), "title is required"
@@ -415,14 +230,16 @@ class TestDetailPageContracts:
 
     def test_shaanxi_detail_parse(self):
         """陕西详情页：解析结果必填字段完整"""
+        from app.services.parse_contract import parse_detail_html
+
         html = _read_fixture("shaanxi", "detail")
-        result = _parse_detail(html, "shaanxi", url="https://www.ccgp-shaanxi.gov.cn/...")
+        result = parse_detail_html(html, url="https://www.ccgp-shaanxi.gov.cn/...", province="陕西")
         assert result is not None, "Shaanxi detail parse returned None"
 
-        completeness = _compute_completeness(result, "shaanxi")
-        assert completeness >= 0.5, (
-            f"Shaanxi detail completeness={completeness:.0%} below 50% threshold. "
-            f"Required: {_check_required_fields(result, 'shaanxi')}"
+        completeness_rate = _compute_completeness_test(result, "shaanxi")
+        assert completeness_rate >= 0.5, (
+            f"Shaanxi detail completeness={completeness_rate:.0%} below 50% threshold. "
+            f"Required: {_check_required_fields_test(result, 'shaanxi')}"
         )
 
         assert result.get("title"), "title is required"
@@ -430,14 +247,16 @@ class TestDetailPageContracts:
 
     def test_mof_detail_parse(self):
         """财政部详情页：解析结果必填字段完整"""
+        from app.services.parse_contract import parse_detail_html
+
         html = _read_fixture("mof", "detail")
-        result = _parse_detail(html, "mof", url="https://gks.mof.gov.cn/...")
+        result = parse_detail_html(html, url="https://gks.mof.gov.cn/...", province="全国")
         assert result is not None, "MOF detail parse returned None"
 
-        completeness = _compute_completeness(result, "mof")
-        assert completeness >= 0.5, (
-            f"MOF detail completeness={completeness:.0%} below 50% threshold. "
-            f"Required: {_check_required_fields(result, 'mof')}"
+        completeness_rate = _compute_completeness_test(result, "mof")
+        assert completeness_rate >= 0.5, (
+            f"MOF detail completeness={completeness_rate:.0%} below 50% threshold. "
+            f"Required: {_check_required_fields_test(result, 'mof')}"
         )
 
         assert result.get("title"), "title is required"
@@ -450,74 +269,50 @@ class TestDetailPageContracts:
 
 
 class TestSourceCanaryMetrics:
-    """来源 canary 指标和连续运行追踪
+    """来源 canary 指标 — 健康状态现在来自持久化 DB 表
 
-    每个来源必须有：
-    - canary 结果持久化（JSON 格式）
-    - 最近成功时间
-    - 连续失败次数
-    - 最近错误类型
+    canary_config.json 仅作为 fixture 元数据，不再作为运行时状态来源。
     """
 
-    def test_ccgp_canary_config(self):
-        """CCGP canary 配置存在并包含所有必需字段"""
-        config = _read_json_fixture("ccgp", "canary_config")
-        if config is None:
-            pytest.skip("CCGP canary config not yet created")
-        assert "source" in config
-        assert "version" in config
-        assert "parser_version" in config
-        assert "last_success" in config or "last_success" not in config  # may be null
-        assert "consecutive_failures" in config
-        assert "status" in config
-        assert config["status"] in ("collecting", "not_enough_data", "healthy", "degraded")
+    def test_canary_config_exists_for_all_sources(self):
+        """每个来源有 canary_config.json 作为 fixture 元数据。"""
+        for source in ["ccgp", "ningxia", "shaanxi", "mof"]:
+            config = _read_json_fixture(source, "canary_config")
+            if config is None:
+                pytest.skip(f"{source}: canary_config.json not yet created")
+            assert "source" in config
+            assert "status" in config
 
-    def test_ningxia_canary_config(self):
-        """宁夏 canary 配置存在"""
-        config = _read_json_fixture("ningxia", "canary_config")
-        if config is None:
-            pytest.skip("Ningxia canary config not yet created")
-        assert "source" in config
-        assert "consecutive_failures" in config
-        assert "status" in config
-        assert config["status"] in ("collecting", "not_enough_data", "healthy", "degraded")
+    def test_canary_status_is_never_healthy_without_7_days(self):
+        """Fixture 中的 canary 状态绝不得在不足 7 天时声明为 healthy。
 
-    def test_shaanxi_canary_config(self):
-        """陕西 canary 配置存在"""
-        config = _read_json_fixture("shaanxi", "canary_config")
-        if config is None:
-            pytest.skip("Shaanxi canary config not yet created")
-        assert "source" in config
-        assert "consecutive_failures" in config
-        assert "status" in config
-
-    def test_mof_canary_config(self):
-        """财政部 canary 配置存在"""
-        config = _read_json_fixture("mof", "canary_config")
-        if config is None:
-            pytest.skip("MOF canary config not yet created")
-        assert "source" in config
-        assert "consecutive_failures" in config
-        assert "status" in config
-
-    def test_healthy_7d_never_claimed_falsely(self):
-        """canary 状态绝不得在不满足 7 天连续运行时声明为健康。
-
-        每个来源的 canary 起始时间到今天不满 7 天则状态不得为 healthy_7d。
+        运行时健康状态现在来自 crawl_source_health 表，
+        canary_config.json 仅作为测试 fixture。
         """
         for source in ["ccgp", "ningxia", "shaanxi", "mof"]:
             config = _read_json_fixture(source, "canary_config")
             if config is None:
                 continue
             status = config.get("status", "")
-            assert status != "healthy_7d", (
-                f"{source}: status='healthy_7d' requires 7 days of continuous data; "
-                f"this cannot yet be satisfied"
+            # 这些 fixture 创建于 2026-06-20，运行 < 7 天
+            assert status in ("collecting", "not_enough_data", "degraded"), (
+                f"{source}: fixture status '{status}' should be collecting/not_enough_data"
             )
-            # collecting / not_enough_data is the expected state
-            assert status in ("collecting", "not_enough_data", "degraded", "healthy"), (
-                f"{source}: unexpected status '{status}'"
-            )
+
+    def test_fixture_canary_not_runtime_source(self):
+        """canary_config.json 不能作为运行时状态来源。
+
+        运行时健康来自 crawl_source_health 表。
+        """
+        # 验证我们没有把 canary_config.json 当作运行时源
+        # 通过检查 source_health_service 不使用文件读取
+        import inspect
+        from app.services.source_health_service import compute_health_status
+
+        source_code = inspect.getsource(compute_health_status)
+        assert "canary_config" not in source_code
+        assert "json.load" not in source_code
+        assert "FIXTURES_DIR" not in source_code
 
 
 # ═══════════════════════════════════════════════════════

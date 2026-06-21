@@ -168,11 +168,11 @@ class CrawlJobStore:
                 "duplicates": item.duplicate_count,
                 "duration_ms": item.duration_ms,
             }
-            # 仅管理员可看错误类型和错误正文
+            # 仅管理员可看错误类型和错误正文（partial 和 failed 均可看）
             if is_admin:
                 per_source[item.source_name]["error_type"] = item.error_type
                 per_source[item.source_name]["error_message"] = (
-                    item.error_message if item.status == "failed" else None
+                    item.error_message if item.status in ("failed", "partial") else None
                 )
 
         result = {

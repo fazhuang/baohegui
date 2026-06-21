@@ -212,13 +212,14 @@ class TestAlembicSchemaVsOrm:
     def test_alembic_tables_only(self, alembic_engine):
         """纯 Alembic 库仅应有核心表 + alembic_version。
         此断言确保 create_all 没有被执行，否则会多出 users / announcements 等表。
-        Phase 2: 新增 crawl_jobs + crawl_job_items。"""
+        Phase 2: 新增 crawl_jobs + crawl_job_items + crawl_source_health。"""
         inspector = inspect(alembic_engine)
         tables = set(inspector.get_table_names())
         core = {
             "alembic_version",
             "complaint_cases", "kg_edges", "kg_nodes",
             "candidate_rules", "crawl_jobs", "crawl_job_items",
+            "crawl_source_health", "daily_health_snapshots",
         }
         extra = tables - core
         unexpected = extra - {"audit_logs", "sqlite_sequence"}

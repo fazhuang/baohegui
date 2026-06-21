@@ -6,6 +6,7 @@
 3. 同步结果通知（日志 + 回调钩子）
 4. 手动触发同步
 5. 同步状态追踪
+6. Phase 2: 统一状态聚合 + 持久化来源健康
 """
 
 from __future__ import annotations
@@ -51,6 +52,9 @@ class SyncTaskRecord:
 # ── 通知回调类型 ────────────────────────────────────────────
 
 OnSyncCallback = Callable[[SyncTaskRecord], None]
+
+# 所有采集来源
+_ALL_SOURCES = ("ccgp", "ningxia", "shaanxi", "mof")
 
 
 class SyncScheduler:
@@ -156,7 +160,6 @@ class SyncScheduler:
                         trigger="scheduled",
                     )
                 finally:
-                    # C-3: 无论成功、部分失败、完全失败或异常，都必须关闭会话
                     db_session.close()
             except asyncio.CancelledError:
                 break
@@ -166,10 +169,14 @@ class SyncScheduler:
     async def scrape_cases(self, db_session=None, user_id: int | None = None, trigger: str = "manual") -> SyncTaskRecord:
         """执行一轮案例采集，成果持久化至 crawl_jobs / crawl_job_items。
 
-        如果未提供 db_session，只写在内存 history（向后兼容后台循环）。
+        如果未提供 db_session，只写在内存 history（向后兼容）。
+
+        Phase 2: 统一状态聚合 + 持久化来源健康。
         """
-        from app.services.crawler_service import crawl_all
+        from app.services.crawler_service import crawl_all, _ALL_SOURCES
         from app.services.crawl_job_store import crawl_job_store
+        from app.services.task_status_aggregator import aggregate_job_status
+        from app.services.crawler_service import _safe_error_summary
 
         record = SyncTaskRecord(
             id=self._next_id(),
@@ -180,9 +187,7 @@ class SyncScheduler:
 
         # ── 持久化：创建任务和明细 ──
         db_job = None
-        db_items: dict[str, any] = {}
-        job_status = SyncStatus.SUCCESS
-        job_error = None
+        db_items: dict[str, Any] = {}
 
         if db_session:
             db_job = crawl_job_store.create_job(
@@ -191,22 +196,115 @@ class SyncScheduler:
                 trigger_type=trigger,
                 created_by=user_id,
             )
-            # 为每个已知来源创建初始明细
-            for src in ("ccgp", "ningxia", "shaanxi", "mof"):
+            for src in _ALL_SOURCES:
                 db_items[src] = crawl_job_store.create_item(db_session, db_job.id, src)
             db_session.commit()
 
         try:
             stats = await crawl_all()
-            has_errors = bool(stats.get("errors"))
-            record.status = SyncStatus.PARTIAL if has_errors else SyncStatus.SUCCESS
-            job_status = record.status
+
+            # ── 持久化各来源明细 ──────────────────────────
+            if db_session and db_job:
+                for src_key in _ALL_SOURCES:
+                    item = db_items[src_key]
+                    src_stat = stats.get(src_key, {})
+
+                    if isinstance(src_stat, dict):
+                        src_fetched = src_stat.get("fetched", 0)
+                        src_saved = src_stat.get("saved", 0)
+                        src_dups = src_stat.get("duplicates", 0)
+                        src_errors = src_stat.get("errors", [])
+                        src_error_type = src_stat.get("error_type")
+                        src_error_message = src_stat.get("error_message")
+
+                        # 使用统一来源状态规则
+                        # errors 非空且 status=success → 修正为 partial
+                        src_status = src_stat.get("status", "success")
+                        if src_errors and src_status == "success":
+                            src_status = "partial"
+                            src_error_type = src_error_type or "item_errors"
+                            src_error_message = src_error_message or _safe_error_summary(
+                                "; ".join(str(e) for e in src_errors[:3])
+                            )
+
+                        crawl_job_store.complete_item(
+                            db_session, item,
+                            status=src_status,
+                            fetched_count=src_fetched,
+                            saved_count=src_saved,
+                            duplicate_count=src_dups,
+                            error_type=src_error_type,
+                            error_message=src_error_message,
+                        )
+                    else:
+                        # 向后兼容：int 类型 → 视为 success
+                        src_saved = src_stat if isinstance(src_stat, int) else 0
+                        crawl_job_store.complete_item(
+                            db_session, item,
+                            status="success",
+                            fetched_count=src_saved,
+                            saved_count=src_saved,
+                            duplicate_count=0,
+                        )
+
+                db_session.flush()
+
+                # ── 统一任务状态聚合（唯一入口）─────────────
+                # 提取全局错误（如 kg_sync 失败）
+                task_errors = [
+                    e for e in stats.get("errors", [])
+                    if isinstance(e, str) and ("kg_sync:" in e or "kg_sync " in e.lower())
+                ]
+                item_statuses = [i.status for i in db_items.values()]
+                total_saved = stats.get("cases_saved", 0)
+                job_status_str = aggregate_job_status(
+                    item_statuses, task_errors=task_errors, total_saved=total_saved)
+                record.status = SyncStatus(job_status_str)
+
+                # 顶级错误摘要写入 crawl_jobs.error_message（脱敏+限长）
+                job_error_msg = None
+                global_errors = [e for e in stats.get("errors", [])
+                                 if not isinstance(e, str) or ("kg_sync:" not in e and "kg_sync " not in e.lower())]
+                if task_errors and job_status_str == "partial":
+                    job_error_msg = _safe_error_summary("; ".join(str(e) for e in task_errors[:3]))
+                    if len(job_error_msg) > 500:
+                        job_error_msg = job_error_msg[:500]
+
+                crawl_job_store.complete_job(
+                    db_session, db_job,
+                    status=job_status_str,
+                    items=list(db_items.values()),
+                    error_message=job_error_msg,
+                    kg_synced=stats.get("kg_synced", 0),
+                )
+
+                # ── 更新来源健康记录 ──────────────────────
+                _update_source_health_from_stats(db_session, stats)
+
+                db_session.commit()
+
+            else:
+                # 无 db_session：仅内存状态（使用同一个聚合函数）
+                src_statuses = []
+                for src_key in _ALL_SOURCES:
+                    s = stats.get(src_key, {})
+                    st = s.get("status", "success") if isinstance(s, dict) else "success"
+                    src_statuses.append(st)
+                # 提取全局错误（kg_sync 等）传入聚合
+                task_errors = [
+                    e for e in stats.get("errors", [])
+                    if isinstance(e, str) and ("kg_sync:" in e or "kg_sync " in e.lower())
+                ]
+                total_saved = stats.get("cases_saved", 0)
+                record.status = SyncStatus(aggregate_job_status(
+                    src_statuses, task_errors=task_errors, total_saved=total_saved))
+
+            # 记录结果摘要
             record.result = SyncResult(
                 new_rules=0,
                 updated_rules=0,
                 errors=stats.get("errors", []),
             )
-            # Phase 1: 兼容旧 consumer（展平 dict → 旧 int 格式）
             record.scrape_stats = {
                 "ccgp": stats["ccgp"]["saved"] if isinstance(stats.get("ccgp"), dict) else stats.get("ccgp", 0),
                 "ningxia": stats["ningxia"]["saved"] if isinstance(stats.get("ningxia"), dict) else stats.get("ningxia", 0),
@@ -216,78 +314,21 @@ class SyncScheduler:
                 "kg_synced": stats.get("kg_synced", 0),
             }
 
-            # ── 持久化各来源明细（Phase 2 D: 正确状态规则）───
-            if db_session and db_job:
-                for src_key, item in db_items.items():
-                    src_stat = stats.get(src_key, {})
-                    if isinstance(src_stat, dict):
-                        src_saved = src_stat.get("saved", 0)
-                        src_fetched = src_stat.get("fetched", src_saved)
-                        src_dups = src_stat.get("duplicates", 0)
-                        src_errors = src_stat.get("errors", [])
-                        src_status = src_stat.get("status", "success")
-                        # D-1/D-2: errors 非空 → 不是 success
-                        if src_errors and src_status == "success":
-                            src_status = "partial"
-                        # D-3: 来源级连接失败 → failed
-                        if src_stat.get("error"):
-                            src_status = "failed"
-
-                        crawl_job_store.complete_item(
-                            db_session, item,
-                            status=src_status,
-                            fetched_count=src_fetched,
-                            saved_count=src_saved,
-                            duplicate_count=src_dups,
-                            error_type=src_stat.get("error_type"),
-                            error_message=src_stat.get("error"),
-                        )
-                    else:
-                        src_saved = src_stat if isinstance(src_stat, int) else 0
-                        src_fetched = src_saved
-                        src_dups = 0
-                        crawl_job_store.complete_item(
-                            db_session, item,
-                            status="success",
-                            fetched_count=src_fetched,
-                            saved_count=src_saved,
-                            duplicate_count=src_dups,
-                        )
-
-                # D-6: 全局任务状态聚合
-                item_statuses = [i.status for i in db_items.values()]
-                if "failed" in item_statuses:
-                    job_status = SyncStatus.FAILED
-                elif "partial" in item_statuses:
-                    job_status = SyncStatus.PARTIAL
-                else:
-                    job_status = SyncStatus.SUCCESS
-
-                crawl_job_store.complete_job(
-                    db_session, db_job,
-                    status=job_status.value,
-                    items=list(db_items.values()),
-                    error_message=job_error,
-                    kg_synced=stats.get("kg_synced", 0),
-                )
-                db_session.commit()
-
             logger.info(
-                "案例采集完成: CCGP=%d 宁夏=%d 陕西=%d 财政部=%d 总保存=%d KG同步=%d errors=%d",
+                "案例采集完成: status=%s CCGP=%d 宁夏=%d 陕西=%d 财政部=%d 总保存=%d KG同步=%d",
+                record.status.value,
                 record.scrape_stats["ccgp"],
                 record.scrape_stats["ningxia"],
                 record.scrape_stats["shaanxi"],
                 record.scrape_stats["mof"],
                 record.scrape_stats["cases_saved"],
                 record.scrape_stats["kg_synced"],
-                len(stats.get("errors", [])),
             )
         except Exception as e:
+            safe_msg = _safe_error_summary(str(e))
             record.status = SyncStatus.FAILED
-            record.error_message = str(e)
-            job_status = SyncStatus.FAILED
-            job_error = str(e)
-            logger.error("案例采集失败: %s", e)
+            record.error_message = safe_msg
+            logger.error("案例采集失败: %s", safe_msg)
 
             # ── 失败也持久化 ──
             if db_session and db_job:
@@ -297,14 +338,17 @@ class SyncScheduler:
                             db_session, item,
                             status="failed",
                             error_type="task_error",
-                            error_message=job_error,
+                            error_message=safe_msg,
                         )
                 crawl_job_store.complete_job(
                     db_session, db_job,
                     status="failed",
                     items=list(db_items.values()),
-                    error_message=job_error,
+                    error_message=safe_msg,
                 )
+                # 更新来源健康：全部标记为 failed
+                for src_key in _ALL_SOURCES:
+                    _update_single_source_health(db_session, src_key, "failed", error_type="task_error", error_message=safe_msg)
                 db_session.commit()
 
         record.finished_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -336,12 +380,10 @@ class SyncScheduler:
             result = rule_sync_service.sync_from_platform(platform)
 
             if not result.errors:
-                # 同步成功
                 record.status = SyncStatus.SUCCESS
                 record.result = result
                 record.retry_count = attempt - 1
 
-                # 创建版本快照
                 version = rule_version_manager.snapshot(
                     change_log=f"同步 {platform} — "
                     f"新增{result.new_rules} 更新{result.updated_rules}"
@@ -350,7 +392,6 @@ class SyncScheduler:
                 break
 
             elif attempt < self.max_retries:
-                # 有错误但还有重试次数
                 logger.warning(
                     "同步 %s 失败 (attempt %d/%d): %s",
                     platform, attempt, self.max_retries,
@@ -359,7 +400,6 @@ class SyncScheduler:
                 await asyncio.sleep(2 ** attempt)
 
             else:
-                # 所有重试都失败
                 record.status = SyncStatus.FAILED
                 record.result = result
                 record.error_message = "; ".join(result.errors)
@@ -367,18 +407,16 @@ class SyncScheduler:
 
         record.finished_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-        # 部分成功
         if record.status == SyncStatus.SUCCESS and record.result:
             if record.result.errors:
                 record.status = SyncStatus.PARTIAL
             elif record.result.new_rules == 0 and record.result.updated_rules == 0:
-                record.status = SyncStatus.SUCCESS  # 无变更也视为成功
+                record.status = SyncStatus.SUCCESS
 
         self._history.append(record)
         if len(self._history) > self._max_history:
             self._history.pop(0)
 
-        # 通知回调
         if self.on_sync_complete:
             try:
                 self.on_sync_complete(record)
@@ -423,7 +461,7 @@ class SyncScheduler:
                     if last_scrape.get("kg_synced"):
                         last_case_summary["kg_synced"] = last_scrape["kg_synced"]
             except Exception:
-                pass  # 表不存在等回退
+                pass
 
         # 回退到内存历史
         if not last_case_summary:
@@ -511,9 +549,63 @@ def _check_crawler_health() -> dict:
     # httpx (TLS support)
     try:
         import httpx
-        # 快速验证 TLS 是否可用
         health["httpx_tls"] = "ok"
     except Exception:
         health["httpx_tls"] = "unavailable"
 
     return health
+
+
+# ── 来源健康更新工具 ──────────────────────────────────────
+
+
+def _update_source_health_from_stats(db_session, stats: dict) -> None:
+    """从 crawl_all() 返回的 stats 更新所有来源的健康记录。"""
+    from app.services.source_health_service import update_source_health, ensure_all_sources_exist
+
+    ensure_all_sources_exist(db_session)
+
+    for src_key in _ALL_SOURCES:
+        src_stat = stats.get(src_key, {})
+        if not isinstance(src_stat, dict):
+            continue
+
+        src_status = src_stat.get("status", "success")
+        src_fetched = src_stat.get("fetched", 0)
+        src_saved = src_stat.get("saved", 0)
+        src_dups = src_stat.get("duplicates", 0)
+        src_error_type = src_stat.get("error_type")
+        src_error_message = src_stat.get("error_message")
+
+        # 字段完整率：优先使用 crawler 返回的真实 completeness_rate
+        # (= sum of per-item completeness / parsed_count)，而非 saved/fetched
+        completeness = src_stat.get("completeness_rate")
+        if completeness is None or completeness < 0:
+            # 没有解析结果 → 0（不代表 100%）
+            completeness = 0.0
+
+        update_source_health(
+            db_session,
+            source_name=src_key,
+            status=src_status,
+            fetched=src_fetched,
+            saved=src_saved,
+            duplicates=src_dups,
+            error_type=src_error_type,
+            error_message=src_error_message,
+            completeness=completeness,
+        )
+
+
+def _update_single_source_health(db_session, src_key: str, status: str, error_type: str = None, error_message: str = None) -> None:
+    """更新单个来源健康为 failed 状态。"""
+    from app.services.source_health_service import update_source_health, ensure_all_sources_exist
+
+    ensure_all_sources_exist(db_session)
+    update_source_health(
+        db_session,
+        source_name=src_key,
+        status=status,
+        error_type=error_type,
+        error_message=error_message,
+    )

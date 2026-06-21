@@ -666,10 +666,10 @@ class TestCrawlTaskStatus:
 
         async def _fake_crawl_all():
             return {
-                "ccgp": {"saved": 3, "errors": []},
-                "ningxia": {"saved": 0, "errors": ["ningxia: 连接超时"]},
-                "shaanxi": {"saved": 1, "errors": []},
-                "mof": {"saved": 0, "errors": []},
+                "ccgp": {"saved": 3, "errors": [], "status": "success"},
+                "ningxia": {"saved": 0, "errors": ["ningxia: 连接超时"], "status": "partial"},
+                "shaanxi": {"saved": 1, "errors": [], "status": "success"},
+                "mof": {"saved": 0, "errors": [], "status": "success"},
                 "kg_synced": 4,
                 "errors": ["ningxia: ningxia: 连接超时"],
                 "cases_saved": 4,
@@ -710,10 +710,10 @@ class TestCrawlTaskStatus:
 
         async def _fake_crawl_all():
             return {
-                "ccgp": {"saved": 3, "errors": []},
-                "ningxia": {"saved": 2, "errors": []},
-                "shaanxi": {"saved": 0, "errors": []},
-                "mof": {"saved": 0, "errors": []},
+                "ccgp": {"saved": 3, "fetched": 5, "duplicates": 0, "errors": [], "status": "success", "error_type": None, "error_message": None},
+                "ningxia": {"saved": 2, "fetched": 5, "duplicates": 0, "errors": [], "status": "success", "error_type": None, "error_message": None},
+                "shaanxi": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success", "error_type": None, "error_message": None},
+                "mof": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success", "error_type": None, "error_message": None},
                 "kg_synced": 0,
                 "errors": ["kg_sync: 数据库连接失败"],
                 "cases_saved": 5,

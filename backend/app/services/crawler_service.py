@@ -4,40 +4,49 @@
 1. ccgp.gov.cn/jdjc/jdcf/ — 全国综合（3页，约60条）
 2. ccgp-ningxia.gov.cn — 宁夏区本级投诉处理（23条）
 3. 财政部信息公告 gks.mof.gov.cn（扩展中）
+
+解析职责委托至 app.services.parse_contract（纯函数，无网络 I/O）。
+网络 I/O 留在本模块。
 """
 
 from __future__ import annotations
 
-import json
 import asyncio
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Optional
 
-import httpx
-from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.database import SessionLocal
 from app.models.complaint_case import ComplaintCase
+from app.services.parse_contract import (
+    CCGP_BASE,
+    DECISION_TYPE_MAP,
+    NINGXIA_BASE,
+    SOURCE_META,
+    _compute_completeness,
+    extract_decision_type,
+    extract_field,
+    parse_ccgp_list_html,
+    parse_detail_html,
+    parse_ningxia_list_html,
+)
 
 logger = logging.getLogger(__name__)
 
 # ── 常量 ──────────────────────────────────────────────────────
 
-CCGP_BASE = "https://www.ccgp.gov.cn"
 CCGP_JDJC_PAGES = [
     f"{CCGP_BASE}/jdjc/jdcf/index.htm",
     f"{CCGP_BASE}/jdjc/jdcf/index_1.htm",
 ]
 
-NINGXIA_BASE = "https://www.ccgp-ningxia.gov.cn"
 NINGXIA_TS_PAGES = [
     f"{NINGXIA_BASE}/public/NXGPPNEW/dynamic/contents/TSCL/index.jsp?cid=2065&sid=1&tab=Q",
-    f"{NINGXIA_BASE}/public/NXGPPNEW/dynamic/contents/TSCL/index.jsp?cid=2065&sid=1&pageNo=2&tab=Q",  # 第2页区本级
-    f"{NINGXIA_BASE}/public/NXGPPNEW/dynamic/contents/TSCL/index.jsp?cid=2065&sid=1&tab=S",  # 市县
+    f"{NINGXIA_BASE}/public/NXGPPNEW/dynamic/contents/TSCL/index.jsp?cid=2065&sid=1&pageNo=2&tab=Q",
+    f"{NINGXIA_BASE}/public/NXGPPNEW/dynamic/contents/TSCL/index.jsp?cid=2065&sid=1&tab=S",
 ]
 
 SHAANXI_BASE = "https://www.ccgp-shaanxi.gov.cn"
@@ -50,52 +59,14 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-DECISION_TYPE_MAP = {
-    "驳回投诉": "rejected",
-    "驳回": "rejected",
-    "投诉不成立": "rejected",
-    "投诉成立": "upheld",
-    "责令重新": "upheld",
-    "中标无效": "upheld",
-    "部分成立": "partial",
-    "部分": "partial",
-    "撤销合同": "upheld",
-    "废标": "upheld",
-    "重新开展": "upheld",
-}
+# ── 重新导出纯解析函数，保持向后兼容 ──────────────────────────
 
-# ── 工具函数 ──────────────────────────────────────────────────
+_extract_decision_type = extract_decision_type
+_extract_field = extract_field
+_compute_completeness = _compute_completeness  # re-export for browser_crawler / mof_crawler
+DECISION_TYPE_MAP = DECISION_TYPE_MAP  # noqa: F811 (re-export)
 
-
-def _extract_decision_type(text: str) -> str:
-    """从处理结果中提取决定类型"""
-    for keyword, dtype in DECISION_TYPE_MAP.items():
-        if keyword in text:
-            return dtype
-    return "dismissed"
-
-
-def _extract_field(text: str, label: str, max_chars: int = 500) -> str:
-    """从文本中提取指定标签后的内容"""
-    # 优先使用序号标题作为结束标记
-    next_section = r"(?:[一二三四五六七八九十]、|基本情况|处理依据及结果|处理依据|处理决定|其他补充)"
-    patterns = [
-        rf"{label}[：:]\s*(.+?)(?:\n(?:[一二三四五六七八九十]、|$))",
-        rf"{label}[：:]\s*(.+?)(?:{next_section})",
-        rf"{label}[：:]\s*(.+?)(?:\n\n)",
-        rf"{label}[：:]\s*(.+)",
-    ]
-    for pat in patterns:
-        m = re.search(pat, text, re.DOTALL)
-        if m:
-            val = m.group(1).strip()
-            if len(val) > max_chars:
-                val = val[:max_chars] + "..."
-            return val
-    return ""
-
-
-# ── CCGP 爬虫 ────────────────────────────────────────────────
+# ── CCGP 列表爬虫（网络 I/O 包装纯函数） ─────────────────────
 
 
 async def _fetch_text(url: str, fetcher) -> str:
@@ -131,172 +102,111 @@ async def _fetch_text(url: str, fetcher) -> str:
 
 
 async def crawl_ccgp_list(fetcher) -> list[dict]:
-    """爬取 ccgp.gov.cn 监督处罚列表页"""
+    """爬取 ccgp.gov.cn 监督处罚列表页（网络 I/O + 纯解析）"""
     items: list[dict] = []
     seen_hrefs: set = set()
     for page_url in CCGP_JDJC_PAGES:
         html = await _fetch_text(page_url, fetcher)
         if not html:
             continue
-        soup = BeautifulSoup(html, "lxml")
-        # CCGP 列表：<li><a href="...">标题</a><span>日期</span></li>
-        for ul in soup.find_all("ul"):
-            for li in ul.find_all("li", recursive=False):
-                a_tag = li.find("a")
-                span = li.find("span")
-                if not a_tag or not a_tag.get("href"):
-                    continue
-                href = a_tag["href"]
-                if not href.startswith("./20"):
-                    continue  # 只处理 ./2025/ ./2026/ 格式的链接
-                title = a_tag.get_text(strip=True)
-                if "投诉" not in title:
-                    continue  # 只采集投诉处理公告
-                full_href = CCGP_BASE + "/jdjc/jdcf" + href[1:]
-                if full_href in seen_hrefs:
-                    continue
-                seen_hrefs.add(full_href)
-                date_text = span.get_text(strip=True) if span else ""
-                items.append({"title": title, "url": full_href, "date": date_text})
+        page_items = parse_ccgp_list_html(html)
+        for item in page_items:
+            if item["url"] in seen_hrefs:
+                continue
+            seen_hrefs.add(item["url"])
+            items.append(item)
     return items
 
 
 async def crawl_ccgp_detail(url: str, fetcher) -> Optional[dict]:
-    """爬取单条投诉详情并结构化提取"""
+    """爬取单条投诉详情并结构化提取（网络 I/O + 纯解析）"""
     html = await _fetch_text(url, fetcher)
     if not html:
         return None
-    soup = BeautifulSoup(html, "lxml")
-
-    # 提取正文 — CCGP 页面 <ul class="list-content"> 中 <li> 是标题列表，
-    # 详情页正文在 <div class="main-content"> 或直接 <body>
-    raw_text = ""
-    for sel in ["#main_contain", ".main-content", "article", ".article", ".content"]:
-        div = soup.select_one(sel)
-        if div:
-            for aside in div.select(".sidebar, #sidebar, .aside, .right, .related, .nav, .navbar, .breadcrumb"):
-                aside.decompose()
-            raw_text = div.get_text("\n", strip=True)
-            if len(raw_text.strip()) > 200:
-                break
-    # 宁夏 fallback: 取包含项目编号的 td
-    if not raw_text or len(raw_text.strip()) < 100:
-        for td in soup.find_all("td"):
-            txt = td.get_text("\n", strip=True)
-            if "项目编号" in txt or "项目名称" in txt:
-                raw_text = txt
-                break
-    if not raw_text.strip():
-        body = soup.find("body")
-        raw_text = body.get_text("\n", strip=True) if body else ""
-    # 确保文本长度
-    if not raw_text.strip():
-        raw_text = soup.find("body").get_text("\n", strip=True) if soup.find("body") else ""
-
-    # 结构化字段提取
-    title_tag = soup.find("title")
-    title = title_tag.get_text(strip=True) if title_tag else ""
-    # 宁夏页面标题是"投诉处理"，用正文第一行含"公告"的句子
-    if title in ("投诉处理", "") or "当前位置" in title:
-        title_lines = raw_text.split("\n")
-        for line in title_lines:
-            if "政府采购投诉" in line or "投诉处理结果公告" in line:
-                title = line.strip()[:200]
-                break
-
-    project_name = _extract_field(raw_text, "项目名称")
-    project_number = _extract_field(raw_text, "项目编号")
-    complainant = _extract_field(raw_text, "投诉人", 300)
-    decision_date = ""
-    for date_m in re.finditer(r"(\d{4})年(\d{1,2})月(\d{1,2})日", raw_text):
-        candidate = f"{date_m.group(1)}-{date_m.group(2).zfill(2)}-{date_m.group(3).zfill(2)}"
-        decision_date = candidate  # 取最后出现的日期（处理决定日期）
-
-    # 提取处理依据及结果
-    result_section = ""
-    result_match = re.search(
-        r"(?:五、处理依据及结果|五、处理依据|处理依据及结果|处理决定)(.*?)(?:六、|七、|$)",
-        raw_text, re.DOTALL,
-    )
-    if result_match:
-        result_section = result_match.group(1).strip()[:800]
-
-    decision_type = _extract_decision_type(result_section or raw_text)
-
-    # 提取投诉类型关键词
-    complaint_kw = []
-    for kw in [
-        "参数", "品牌", "排他", "指向", "歧视", "授权", "检测报告", "资质",
-        "中小企业", "虚假", "串通", "低价", "异常低价", "评分", "评审",
-        "混包", "标准", "进口", "认证", "业绩", "售后",
-    ]:
-        if kw in raw_text:
-            complaint_kw.append(kw)
-
-    return {
-        "province": "全国",
-        "source_url": url,
-        "title": title[:200],
-        "project_name": (project_name or "")[:200],
-        "project_number": (project_number or "")[:128],
-        "complainant": (complainant or "")[:500],
-        "respondent": "",
-        "decision_date": decision_date,
-        "decision_type": decision_type,
-        "complaint_types": json.dumps(complaint_kw, ensure_ascii=False) if complaint_kw else "",
-        "legal_basis": "",
-        "summary": (result_section or "")[:500],
-        "raw_content": raw_text[:5000],
-        "is_analyzed": 0,
-    }
+    return parse_detail_html(html, url=url, province="全国")
 
 
 # ── 宁夏爬虫 ──────────────────────────────────────────────────
 
 
 async def crawl_ningxia_list(fetcher) -> list[dict]:
-    """爬取宁夏投诉处理列表页"""
+    """爬取宁夏投诉处理列表页（网络 I/O + 纯解析）"""
     items: list[dict] = []
     seen_urls: set = set()
     for page_url in NINGXIA_TS_PAGES:
         html = await _fetch_text(page_url, fetcher)
         if not html:
             continue
-        soup = BeautifulSoup(html, "lxml")
-        for a_tag in soup.find_all("a", href=True):
-            href = a_tag["href"]
-            title = a_tag.get_text(strip=True)
-            if "投诉处理结果公告" not in title:
+        page_items = parse_ningxia_list_html(html)
+        for item in page_items:
+            if item["url"] in seen_urls:
                 continue
-            if not href.startswith("contents/TSCL/"):
-                continue
-            full_url = f"{NINGXIA_BASE}/public/NXGPPNEW/dynamic/{href}"
-            if full_url in seen_urls:
-                continue
-            seen_urls.add(full_url)
-            items.append({"title": title, "url": full_url, "date": ""})
+            seen_urls.add(item["url"])
+            items.append(item)
     return items
+
+
+# ── 来源状态判定 ──────────────────────────────────────────────
+
+def _source_status(fetched: int, parsed_count: int, saved: int, errors: list) -> str:
+    """根据抓取、解析、保存产出判定来源最终状态。
+
+    规则：
+    - errors 非空 → "failed"（明细错误视为该来源不可恢复）
+    - fetched > 0 且 parsed_count == 0 → "failed"（全部解析失败）
+    - fetched > 0 且 saved == 0 但 parsed_count > 0 → "partial"（解析成功但全部重复）
+    - errors 为空且 saved > 0 → "success"
+    - fetched == 0 → "success"（暂无新内容，非失败）
+    """
+    if errors:
+        return "failed"
+    if fetched > 0 and parsed_count == 0:
+        return "failed"
+    if fetched > 0 and saved == 0 and parsed_count > 0:
+        return "partial"
+    return "success"
 
 
 # ── 统一入口 ──────────────────────────────────────────────────
 
+# 所有采集来源
+_ALL_SOURCES = ("ccgp", "ningxia", "shaanxi", "mof")
+
+
+def _new_source_stats() -> dict:
+    """创建统一的来源统计结构。
+
+    Returns dict with keys: saved, fetched, duplicates, errors, status,
+    error_type, error_message, completeness_rate, parsed_count,
+    completeness_sum, parse_failed_count。总是同一结构。
+    """
+    return {
+        "saved": 0, "fetched": 0, "duplicates": 0,
+        "errors": [], "status": "success",
+        "error_type": None, "error_message": None,
+        "completeness_rate": None,  # 字段完整率 (0.0–1.0), None=无解析结果
+        "parsed_count": 0,           # 成功解析的条目数
+        "completeness_sum": 0.0,     # 所有解析条目的完整度之和
+        "parse_failed_count": 0,     # 解析失败的条目数
+    }
+
 
 async def crawl_all() -> dict:
-    """执行全部可爬取数据源的采集（Phase 2：来源级错误 + 统计）
+    """执行全部可爬取数据源的采集。
 
     每个来源使用独立的 SafeFetcher（自带域名白名单 + DNS 校验）。
     来源失败时，记录具体错误但继续采集其他来源。
 
-    Phase 2 增强：返回 per-source fetched/duplicates 统计，
-    供 sync_scheduler 写入 crawl_job_items 持久化明细。
+    每个来源始终有统一统计结构：saved, fetched, duplicates, errors,
+    status, error_type, error_message。
     """
     from app.services.safe_fetcher import SafeFetchError, fetcher_for_source
 
     stats = {
-        "ccgp": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success"},
-        "ningxia": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success"},
-        "shaanxi": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success"},
-        "mof": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success"},
+        "ccgp": _new_source_stats(),
+        "ningxia": _new_source_stats(),
+        "shaanxi": _new_source_stats(),
+        "mof": _new_source_stats(),
         "kg_synced": 0,
         "errors": [],
         "cases_saved": 0,
@@ -308,29 +218,55 @@ async def crawl_all() -> dict:
             ccgp_items = await crawl_ccgp_list(fetcher)
             logger.info("CCGP 列表: %d 条", len(ccgp_items))
             saved = 0
+            parsed_count = 0
+            completeness_sum = 0.0
+            parse_failed = 0
             for item in ccgp_items:
                 try:
                     d = await crawl_ccgp_detail(item["url"], fetcher)
-                    if d and _save_case(d):
-                        saved += 1
+                    if d:
+                        parsed_count += 1
+                        # 计算每条案例的字段完整度
+                        item_completeness = _compute_completeness(d, "ccgp")
+                        completeness_sum += item_completeness
+                        if _save_case(d):
+                            saved += 1
+                    else:
+                        # 详情页返回 None（HTML 为空或解析完全失败）
+                        parse_failed += 1
                 except SafeFetchError as e:
                     stats["ccgp"]["errors"].append(f"{item['url']}: {e.error_type.value}={e.message}")
+                    parse_failed += 1
                 await asyncio.sleep(0.3)
             stats["ccgp"]["saved"] = saved
             stats["ccgp"]["fetched"] = len(ccgp_items)
-            # D: 来源状态规则 — errors 非空则为 partial
-            stats["ccgp"]["status"] = "partial" if stats["ccgp"]["errors"] else "success"
+            stats["ccgp"]["parsed_count"] = parsed_count
+            stats["ccgp"]["completeness_sum"] = completeness_sum
+            stats["ccgp"]["completeness_rate"] = (
+                round(completeness_sum / parsed_count, 4) if parsed_count > 0 else None
+            )
+            stats["ccgp"]["parse_failed_count"] = parse_failed
+            stats["ccgp"]["status"] = _source_status(
+                stats["ccgp"]["fetched"], stats["ccgp"]["parsed_count"],
+                stats["ccgp"]["saved"], stats["ccgp"]["errors"])
+            if stats["ccgp"]["errors"]:
+                stats["ccgp"]["error_type"] = "item_errors"
+                stats["ccgp"]["error_message"] = _summarize_errors(stats["ccgp"]["errors"])
+            elif stats["ccgp"]["status"] == "failed" and stats["ccgp"]["fetched"] > 0:
+                stats["ccgp"]["error_type"] = "parse_all_failed"
+                stats["ccgp"]["error_message"] = f"全部 {stats['ccgp']['fetched']} 条详情解析失败"
     except SafeFetchError as e:
         logger.error("CCGP 安全抓取错误: %s", e)
         stats["ccgp"]["errors"].append(f"{e.error_type.value}: {e.message}")
-        stats["ccgp"]["error"] = str(e)
         stats["ccgp"]["error_type"] = e.error_type.value
+        stats["ccgp"]["error_message"] = _safe_error_summary(str(e))
         stats["ccgp"]["status"] = "failed"
     except Exception as e:
-        logger.error("CCGP 异常: %s", e)
-        stats["ccgp"]["errors"].append(f"exception: {e}")
-        stats["ccgp"]["error"] = str(e)
+        safe_e = _safe_error_summary(str(e))
+        logger.error("CCGP 异常: %s", safe_e)
+        stats["ccgp"]["errors"].append(f"exception: {safe_e}")
         stats["ccgp"]["error_type"] = "exception"
+        stats["ccgp"]["error_message"] = safe_e
         stats["ccgp"]["status"] = "failed"
 
     # ── 宁夏 ────────────────────────────────────────────
@@ -339,40 +275,79 @@ async def crawl_all() -> dict:
             nx_items = await crawl_ningxia_list(fetcher)
             logger.info("宁夏列表: %d 条", len(nx_items))
             saved = 0
+            parsed_count = 0
+            completeness_sum = 0.0
+            parse_failed = 0
             for item in nx_items:
                 try:
                     d = await crawl_ccgp_detail(item["url"], fetcher)
                     if d:
                         d["province"] = "宁夏"
+                        parsed_count += 1
+                        item_completeness = _compute_completeness(d, "ningxia")
+                        completeness_sum += item_completeness
                         if _save_case(d):
                             saved += 1
+                    else:
+                        parse_failed += 1
                 except SafeFetchError as e:
                     stats["ningxia"]["errors"].append(f"{item['url']}: {e.error_type.value}={e.message}")
+                    parse_failed += 1
                 await asyncio.sleep(0.3)
             stats["ningxia"]["saved"] = saved
             stats["ningxia"]["fetched"] = len(nx_items)
-            stats["ningxia"]["status"] = "partial" if stats["ningxia"]["errors"] else "success"
+            stats["ningxia"]["parsed_count"] = parsed_count
+            stats["ningxia"]["completeness_sum"] = completeness_sum
+            stats["ningxia"]["completeness_rate"] = (
+                round(completeness_sum / parsed_count, 4) if parsed_count > 0 else None
+            )
+            stats["ningxia"]["parse_failed_count"] = parse_failed
+            stats["ningxia"]["status"] = _source_status(
+                stats["ningxia"]["fetched"], stats["ningxia"]["parsed_count"],
+                stats["ningxia"]["saved"], stats["ningxia"]["errors"])
+            if stats["ningxia"]["errors"]:
+                stats["ningxia"]["error_type"] = "item_errors"
+                stats["ningxia"]["error_message"] = _summarize_errors(stats["ningxia"]["errors"])
+            elif stats["ningxia"]["status"] == "failed" and stats["ningxia"]["fetched"] > 0:
+                stats["ningxia"]["error_type"] = "parse_all_failed"
+                stats["ningxia"]["error_message"] = f"全部 {stats['ningxia']['fetched']} 条详情解析失败"
     except SafeFetchError as e:
         stats["ningxia"]["errors"].append(f"{e.error_type.value}: {e.message}")
-        stats["ningxia"]["error"] = str(e)
         stats["ningxia"]["error_type"] = e.error_type.value
+        stats["ningxia"]["error_message"] = _safe_error_summary(str(e))
         stats["ningxia"]["status"] = "failed"
     except Exception as e:
-        logger.error("宁夏 异常: %s", e)
-        stats["ningxia"]["errors"].append(f"exception: {e}")
-        stats["ningxia"]["error"] = str(e)
+        safe_e = _safe_error_summary(str(e))
+        logger.error("宁夏 异常: %s", safe_e)
+        stats["ningxia"]["errors"].append(f"exception: {safe_e}")
         stats["ningxia"]["error_type"] = "exception"
+        stats["ningxia"]["error_message"] = safe_e
         stats["ningxia"]["status"] = "failed"
 
     # ── 陕西（Playwright，独立 client） ──────────────────
     try:
         from app.services.browser_crawler import crawl_shaanxi
-        stats["shaanxi"]["saved"] = await crawl_shaanxi()
+        shaanxi_result = await crawl_shaanxi()
+        if isinstance(shaanxi_result, dict):
+            stats["shaanxi"]["saved"] = shaanxi_result.get("saved", 0)
+            stats["shaanxi"]["parsed_count"] = shaanxi_result.get("parsed_count", 0)
+            stats["shaanxi"]["completeness_sum"] = shaanxi_result.get("completeness_sum", 0.0)
+            stats["shaanxi"]["completeness_rate"] = (
+                round(stats["shaanxi"]["completeness_sum"] / stats["shaanxi"]["parsed_count"], 4)
+                if stats["shaanxi"]["parsed_count"] > 0 else None
+            )
+            stats["shaanxi"]["fetched"] = shaanxi_result.get("parsed_count", 0)
+        else:
+            # 向后兼容：旧 int 返回值
+            stats["shaanxi"]["saved"] = shaanxi_result
+            stats["shaanxi"]["fetched"] = shaanxi_result
+        stats["shaanxi"]["status"] = "success"
     except Exception as e:
-        logger.error("陕西 异常: %s", e)
-        stats["shaanxi"]["errors"].append(f"exception: {e}")
-        stats["shaanxi"]["error"] = str(e)
+        safe_e = _safe_error_summary(str(e))
+        logger.error("陕西 异常: %s", safe_e)
+        stats["shaanxi"]["errors"].append(f"exception: {safe_e}")
         stats["shaanxi"]["error_type"] = "exception"
+        stats["shaanxi"]["error_message"] = safe_e
         stats["shaanxi"]["status"] = "failed"
 
     # ── 财政部信息公告（独立处理） ───────────────────────
@@ -383,30 +358,54 @@ async def crawl_all() -> dict:
             mof_items = await fetch_gks_list(fetcher)
             logger.info("财政部列表: %d 条", len(mof_items))
             saved = 0
+            parsed_count = 0
+            completeness_sum = 0.0
+            parse_failed = 0
             for item in mof_items[:20]:
                 try:
                     d = await crawl_ccgp_detail(item["url"], fetcher)
                     if d:
                         d["province"] = "全国"
+                        parsed_count += 1
+                        item_completeness = _compute_completeness(d, "mof")
+                        completeness_sum += item_completeness
                         if _save_case(d):
                             saved += 1
+                    else:
+                        parse_failed += 1
                 except SafeFetchError as e:
                     stats["mof"]["errors"].append(f"{item['url']}: {e.error_type.value}={e.message}")
+                    parse_failed += 1
                 await asyncio.sleep(0.3)
             stats["mof"]["saved"] = saved
             stats["mof"]["fetched"] = len(mof_items)
-            stats["mof"]["status"] = "partial" if stats["mof"]["errors"] else "success"
+            stats["mof"]["parsed_count"] = parsed_count
+            stats["mof"]["completeness_sum"] = completeness_sum
+            stats["mof"]["completeness_rate"] = (
+                round(completeness_sum / parsed_count, 4) if parsed_count > 0 else None
+            )
+            stats["mof"]["parse_failed_count"] = parse_failed
+            stats["mof"]["status"] = _source_status(
+                stats["mof"]["fetched"], stats["mof"]["parsed_count"],
+                stats["mof"]["saved"], stats["mof"]["errors"])
+            if stats["mof"]["errors"]:
+                stats["mof"]["error_type"] = "item_errors"
+                stats["mof"]["error_message"] = _summarize_errors(stats["mof"]["errors"])
+            elif stats["mof"]["status"] == "failed" and stats["mof"]["fetched"] > 0:
+                stats["mof"]["error_type"] = "parse_all_failed"
+                stats["mof"]["error_message"] = f"全部 {stats['mof']['fetched']} 条详情解析失败"
     except SafeFetchError as e:
         logger.error("财政部 安全抓取错误: %s", e)
         stats["mof"]["errors"].append(f"{e.error_type.value}: {e.message}")
-        stats["mof"]["error"] = str(e)
         stats["mof"]["error_type"] = e.error_type.value
+        stats["mof"]["error_message"] = _safe_error_summary(str(e))
         stats["mof"]["status"] = "failed"
     except Exception as e:
-        logger.error("财政部 异常: %s", e)
-        stats["mof"]["errors"].append(f"exception: {e}")
-        stats["mof"]["error"] = str(e)
+        safe_e = _safe_error_summary(str(e))
+        logger.error("财政部 异常: %s", safe_e)
+        stats["mof"]["errors"].append(f"exception: {safe_e}")
         stats["mof"]["error_type"] = "exception"
+        stats["mof"]["error_message"] = safe_e
         stats["mof"]["status"] = "failed"
 
     # ── 汇总 ───────────────────────────────────────────
@@ -417,7 +416,7 @@ async def crawl_all() -> dict:
         stats["mof"]["saved"]
     )
     # 展平 errors 用于兼容旧 consumer
-    for src_key in ("ccgp", "ningxia", "shaanxi", "mof"):
+    for src_key in _ALL_SOURCES:
         for err in stats[src_key]["errors"]:
             stats["errors"].append(f"{src_key}: {err}")
 
@@ -433,8 +432,9 @@ async def crawl_all() -> dict:
         finally:
             db.close()
     except Exception as e:
-        logger.error("案例同步 KG 失败: %s", e)
-        stats["errors"].append(f"kg_sync: {e}")
+        safe_msg = _safe_error_summary(str(e))
+        logger.error("案例同步 KG 失败: %s", safe_msg)
+        stats["errors"].append(f"kg_sync: {safe_msg}")
 
     return stats
 
@@ -477,6 +477,72 @@ def _save_case(data: dict) -> bool:
         return False
     finally:
         db.close()
+
+
+# ── 错误摘要工具 ───────────────────────────────────────────────
+
+_MAX_ERROR_CHARS = 2000
+
+# 敏感的凭证/Token 模式 — 必须全部脱敏
+_CREDENTIAL_PATTERNS = [
+    # Authorization: Bearer TOKEN  /  Authorization=Bearer TOKEN
+    (r'(?:Authorization|Auth)\s*[=:]\s*Bearer\s+\S+', '[REDACTED]', True),
+    # Authorization: Basic BASE64
+    (r'(?:Authorization|Auth)\s*[=:]\s*Basic\s+\S+', '[REDACTED]', True),
+    # Bearer TOKEN (standalone — Authorization: Bearer cases already handled above)
+    (r'\bBearer\s+[\w\-\.\+/]+', 'Bearer [REDACTED]', True),
+    # Token: VALUE / Token=VALUE
+    (r'\b(?:Token|access_token|refresh_token)\s*[=:]\s*\S+', '[REDACTED]', True),
+    # api_key=VALUE / api-key: VALUE
+    (r'\bapi[_-]?key\s*[=:]\s*\S+', '[REDACTED]', True),
+    # client_secret=VALUE (OAuth)
+    (r'\bclient[_-]?secret\s*[=:]\s*\S+', '[REDACTED]', True),
+    # secret=VALUE (standalone)
+    (r'\bsecret\s*[=:]\s*\S+', '[REDACTED]', True),
+    # password=VALUE (常用于参数或 URL)
+    (r'\bpassword\s*[=:]\s*\S+', '[REDACTED]', True),
+    # Cookie: ... / Set-Cookie: ... (整行脱敏)
+    (r'(?:Cookie|Set-Cookie)\s*[=:]\s*.+?(?:\r?\n|$)', '[REDACTED]', True),
+    # URL query 中的 token/key/password/secret/signature/client_secret= VALUE
+    (r'(?:[?&])(token|key|password|secret|signature|sig|client_secret)=[^&\s]+', '?\\1=[REDACTED]', True),
+]
+_CREDENTIAL_REPLACEMENT = '[REDACTED]'
+
+
+def _safe_error_summary(message: str) -> str:
+    """截断错误字符串，移除可能的凭据/Token。
+
+    规则：
+    - 长度上限 _MAX_ERROR_CHARS
+    - 过滤所有 _CREDENTIAL_PATTERNS 中定义的敏感模式
+    - 整个敏感值替换为 [REDACTED]，不保留片段
+    - 忽略大小写
+    """
+    import re as _re
+    cleaned = str(message)
+    for pattern, replacement, ignore_case in _CREDENTIAL_PATTERNS:
+        flags = _re.IGNORECASE if ignore_case else 0
+        cleaned = _re.sub(pattern, replacement, cleaned, flags=flags)
+    if len(cleaned) > _MAX_ERROR_CHARS:
+        cleaned = cleaned[:_MAX_ERROR_CHARS] + "..."
+    return cleaned
+
+
+def _summarize_errors(errors: list[str], max_len: int = 3) -> str:
+    """从错误列表生成有限摘要。
+
+    仅包含前 max_len 条，每条截断长度。
+    """
+    selected = errors[:max_len]
+    summaries = []
+    for err in selected:
+        s = _safe_error_summary(str(err))
+        if len(s) > 300:
+            s = s[:300]
+        summaries.append(s)
+    if len(errors) > max_len:
+        summaries.append(f"...and {len(errors) - max_len} more errors")
+    return "; ".join(summaries)
 
 
 def query_cases(

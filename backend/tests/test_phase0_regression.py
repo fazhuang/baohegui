@@ -458,10 +458,10 @@ class TestScrapePartialStatus:
 
         async def _fake_crawl_all():
             return {
-                "ccgp": {"saved": 0, "errors": []},
-                "ningxia": {"saved": 0, "errors": []},
-                "shaanxi": {"saved": 0, "errors": []},
-                "mof": {"saved": 0, "errors": []},
+                "ccgp": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success", "error_type": None, "error_message": None},
+                "ningxia": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": ["连接超时"], "status": "partial", "error_type": "item_errors", "error_message": "连接超时"},
+                "shaanxi": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success", "error_type": None, "error_message": None},
+                "mof": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": ["403 Forbidden"], "status": "partial", "error_type": "item_errors", "error_message": "403 Forbidden"},
                 "kg_synced": 0,
                 "errors": ["ningxia: 连接超时", "mof: 403 Forbidden"],
                 "cases_saved": 0,
@@ -484,10 +484,10 @@ class TestScrapePartialStatus:
 
         async def _fake_crawl_all():
             return {
-                "ccgp": {"saved": 1, "errors": []},
-                "ningxia": {"saved": 2, "errors": []},
-                "shaanxi": {"saved": 0, "errors": []},
-                "mof": {"saved": 0, "errors": []},
+                "ccgp": {"saved": 1, "fetched": 5, "duplicates": 0, "errors": [], "status": "success", "error_type": None, "error_message": None},
+                "ningxia": {"saved": 2, "fetched": 5, "duplicates": 0, "errors": [], "status": "success", "error_type": None, "error_message": None},
+                "shaanxi": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success", "error_type": None, "error_message": None},
+                "mof": {"saved": 0, "fetched": 0, "duplicates": 0, "errors": [], "status": "success", "error_type": None, "error_message": None},
                 "kg_synced": 3,
                 "errors": [],
                 "cases_saved": 3,
