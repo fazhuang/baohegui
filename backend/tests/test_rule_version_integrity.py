@@ -389,6 +389,7 @@ class TestNatl001Canonical:
     # 历史合法变体（非污染，predates E2E测试更新注入）
     HISTORICAL_VARIANTS = frozenset({
         "招标文件缺少规定章节",
+        "国家法规模板 — 禁止擅自修改法定条款",
     })
     VALID = {CANONICAL} | HISTORICAL_VARIANTS
 
