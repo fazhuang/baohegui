@@ -57,13 +57,23 @@ def _http_get(host: str, port: int, path: str,
         return -1, {}
 
 
-def _wait_for_server(host: str, port: int, timeout: int = 60) -> None:
+def _wait_for_server(host: str, port: int, proc: subprocess.Popen | None = None,
+                    timeout: int = 30) -> None:
     """轮询等待服务器就绪。
 
-    Timeout 内每 0.5s 探测一次 /health。第一次探测前等待 2s 给 uvicorn 导入时间。
+    第一次探测前等待 2s 给 uvicorn 导入时间。
+    如果提供了 proc，在每次轮询时检查进程是否存活，
+    若进程已退出，立即抛出 RuntimeError 并附带 stderr。
     """
+    time.sleep(2)
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            _, stderr = _kill_server(proc)
+            raise RuntimeError(
+                f"Server process exited with code {proc.returncode} before port {port} became ready.\n"
+                f"stderr: {stderr[-2000:]}"
+            )
         try:
             status, _ = _http_get(host, port, "/health", timeout=3)
             if status == 200:
@@ -109,9 +119,28 @@ def _start_prod_server(port: int, extra_env: dict | None = None) -> subprocess.P
         ],
         cwd=str(BACKEND_DIR),
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
+
+
+def _kill_server(proc: subprocess.Popen) -> tuple[str, str]:
+    """优雅终止服务器子进程，返回捕获的 stdout/stderr 用于诊断。"""
+    try:
+        proc.terminate()
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+        return (
+            stdout.decode(errors="replace") if stdout else "",
+            stderr.decode(errors="replace") if stderr else "",
+        )
+    except ProcessLookupError:
+        return "", ""
+    except Exception:
+        return "", ""
 
 
 class TestFastAPISecurityBaseline:
@@ -185,7 +214,7 @@ class TestFastAPISecurityBaseline:
         proc = _start_prod_server(port)
         host = "127.0.0.1"
         try:
-            _wait_for_server(host, port)
+            _wait_for_server(host, port, proc=proc)
 
             # /docs
             status, _ = _http_get(host, port, "/docs")
@@ -214,8 +243,7 @@ class TestFastAPISecurityBaseline:
                 f"生产模式 /openapi.json 应返回 404 或 403, got {status}"
             )
         finally:
-            proc.terminate()
-            proc.wait(timeout=10)
+            _kill_server(proc)
 
     def test_production_illegal_host_rejected(self):
         """非法 Host 头在生产模式应被拒绝（不能返回 200），合法 Host 应通过"""
@@ -223,7 +251,7 @@ class TestFastAPISecurityBaseline:
         proc = _start_prod_server(port)
         host = "127.0.0.1"
         try:
-            _wait_for_server(host, port)
+            _wait_for_server(host, port, proc=proc)
 
             # 合法 Host: localhost → 200
             status, _ = _http_get(host, port, "/health", host_header="localhost")
@@ -242,8 +270,7 @@ class TestFastAPISecurityBaseline:
                 f"非法 Host 应返回 400/403/404/421, got {status}"
             )
         finally:
-            proc.terminate()
-            proc.wait(timeout=10)
+            _kill_server(proc)
 
     def test_production_security_headers(self):
         """生产模式 /health 响应必须包含完整安全响应头"""
@@ -251,7 +278,7 @@ class TestFastAPISecurityBaseline:
         proc = _start_prod_server(port)
         host = "127.0.0.1"
         try:
-            _wait_for_server(host, port)
+            _wait_for_server(host, port, proc=proc)
 
             status, headers = _http_get(host, port, "/health")
             assert status == 200
@@ -273,5 +300,4 @@ class TestFastAPISecurityBaseline:
             assert hsts, "生产模式缺少 Strict-Transport-Security (HSTS) 头"
             assert "max-age=" in hsts, f"HSTS 格式不正确: {hsts}"
         finally:
-            proc.terminate()
-            proc.wait(timeout=10)
+            _kill_server(proc)
