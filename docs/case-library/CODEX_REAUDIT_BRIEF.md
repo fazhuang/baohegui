@@ -1,9 +1,12 @@
 # Phase 2 Re-audit — Codex 复核审计简报
 
-> 审计时间：2026-06-22
-> 代码基线：`60cbfe9e`（`docs(phase-2): add Codex re-audit brief…`）
+> 审计时间：2026-06-22 19:24 CST
+> 代码基线：`0d9b842a`（`docs(phase-2): sync CURRENT_STATUS.md…`）
 > 上一轮结论：`PHASE_2_REJECTED`（4 个阻塞项）
 > 本轮请求：对 9 个阻塞项的修复逐一进行攻击式复现验证
+> 修复证据文件：`docs/case-library/CODEX_REAUDIT_BRIEF.md`（本文件）
+> 状态摘要文件：`docs/case-library/CURRENT_STATUS.md`
+> 审计上下文：`docs/case-library/PHASE_0_CODEX_AUDIT.md`、`docs/case-library/PHASE_1_AUDIT_REPORT.md`
 
 ## 0. 执行摘要
 
@@ -193,16 +196,23 @@ for m in data["mappings"]:
 
 Codex 审计员请逐项执行：
 
+- [ ] `git log -1 --format='%H %s'` — HEAD = `0d9b842a...` (docs/phase-2: sync CURRENT_STATUS.md with latest HEAD)
 - [ ] `uv run pytest tests/test_phase2_de.py -v` — 99 passed
 - [ ] `uv run pytest tests/test_rule_version_integrity.py -v` — 24 passed
 - [ ] `uv run pytest tests/test_source_fixtures.py -v` — 18 passed
 - [ ] `uv run pytest tests/security/test_fastapi_security_baseline.py tests/security/test_production_config.py tests/security/test_rules_admin_audit.py tests/security/test_phase1_safety.py -v` — 全部通过
-- [ ] `grep -rn 'logger\.\(error\|warning\).*%s.*, e)' backend/app/services/` — 空
-- [ ] `grep -rn '_safe_error_summary' backend/app/services/sync_scheduler.py | head -5` — 检查 `_run_loop` 内的 logger 调用使用 `_safe_error_log` 而非 `_safe_error_summary`
+- [ ] `grep -rn 'logger\.\(error\|warning\).*%s.*, e)' backend/app/services/crawler_service.py backend/app/services/browser_crawler.py backend/app/services/mof_crawler.py backend/app/services/sync_scheduler.py` — 空（4 个命中为 `safe_e` 变量名，不是 raw `e`）
+
+验证：`safe_e = _safe_error_summary(str(e))` 先脱敏再传 logger。
+- [ ] `grep -rn '_safe_error_log' backend/app/services/sync_scheduler.py` — 显示类定义前有模块级函数，类内 3 处调用
 - [ ] `python3 -c "import json; d=json.load(open('rules/platform_rules.json')); assert next(m for m in d['mappings'] if m['rule_id']=='NATL-001')['description']=='缺少规定章节'"` — 通过
+- [ ] `python3 -c "import json; from pathlib import Path; markers={'TEST-AUDIT','FILE-T1','UFB-3390EBC9','VR-T2','V-TEST-1','V-T3','E2E测试更新'}; raw=Path('rules/platform_rules.json').read_text(); [print(f'POLLUTED: {m}') for m in markers if m in raw]"` — 空
 - [ ] GH Actions 最近一次 CI：`conclusion: success`，0 failed
 - [ ] `git status --short` — clean
-- [ ] `grep -rn 'parse_all_failed' backend/app/services/crawler_service.py` — 显示 error_type 在 `_source_status` 返回 failed 后正确设置
+- [ ] `git diff --check` — clean
+- [ ] `grep -rn 'parse_all_failed' backend/app/services/crawler_service.py` — 显示 error_type 在 `_source_status` 返回 failed + fetched>0 后正确设置
+- [ ] Phase 1 regression: `test_partial_on_source_error`、`test_success_when_no_errors`、`test_kg_sync_error_causes_partial` — 全部通过
+- [ ] 审计简报一致性：本文件 SHA 与 git 中提交的版本一致
 
 ## 4. 变更文件清单
 
