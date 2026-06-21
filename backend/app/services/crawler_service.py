@@ -151,18 +151,23 @@ async def crawl_ningxia_list(fetcher) -> list[dict]:
 def _source_status(fetched: int, parsed_count: int, saved: int, errors: list) -> str:
     """根据抓取、解析、保存产出判定来源最终状态。
 
-    规则：
-    - errors 非空 → "failed"（明细错误视为该来源不可恢复）
-    - fetched > 0 且 parsed_count == 0 → "failed"（全部解析失败）
-    - fetched > 0 且 saved == 0 但 parsed_count > 0 → "partial"（解析成功但全部重复）
-    - errors 为空且 saved > 0 → "success"
+    规则（按优先级）：
     - fetched == 0 → "success"（暂无新内容，非失败）
+    - fetched > 0 且 parsed_count == 0 → "failed"（全部解析失败，含 errors）
+    - 有 errors 但仍有产出（saved > 0 或 parsed_count > 0）→ "partial"
+    - fetched > 0 且 saved == 0 但 parsed_count > 0 → "partial"（解析成功但全部重复）
+    - 否则 → "success"
     """
-    if errors:
-        return "failed"
+    if fetched == 0:
+        return "success"
     if fetched > 0 and parsed_count == 0:
+        # 全部解析失败 → 总是 failed，有无 errors 均同
         return "failed"
+    if errors:
+        # 部分条目失败但仍有有效产出 → partial
+        return "partial"
     if fetched > 0 and saved == 0 and parsed_count > 0:
+        # 解析成功但全部重复 → partial
         return "partial"
     return "success"
 

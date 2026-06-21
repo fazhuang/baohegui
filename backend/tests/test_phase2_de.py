@@ -1174,12 +1174,40 @@ class TestParseAllFailedIsNotSuccess:
         assert status == "success"
 
     def test_fetched_10_parsed_0_saved_0_item_errors_is_failed(self):
-        """有 item_errors + 零解析 → failed"""
+        """有 item_errors + 零解析 → failed（全部解析失败）
+
+        注：errors 非空但 parsed_count==0 先命中全部解析失败规则。
+        """
         from app.services.crawler_service import _source_status
 
         status = _source_status(fetched=10, parsed_count=0, saved=0,
                                 errors=["detail fetch 403"])
         assert status == "failed"
+
+    def test_fetched_10_parsed_9_saved_9_one_error_is_partial(self):
+        """fetched=10, parsed=9, saved=9, 1 条 detail 失败 → partial（非 failed）"""
+        from app.services.crawler_service import _source_status
+
+        status = _source_status(fetched=10, parsed_count=9, saved=9,
+                                errors=["https://xxx: detail fetch 403"])
+        assert status == "partial", (
+            f"1/10 failed with 9 successful should be partial, got {status}"
+        )
+
+    def test_fetched_10_parsed_9_saved_8_one_error_is_partial(self):
+        """fetched=10, parsed=9, saved=8, 1 条 detail 失败 → partial"""
+        from app.services.crawler_service import _source_status
+
+        status = _source_status(fetched=10, parsed_count=9, saved=8,
+                                errors=["https://yyy: timeout"])
+        assert status == "partial"
+
+    def test_fetched_10_parsed_10_saved_10_no_errors_is_success(self):
+        """无 errors 的全量成功 → success"""
+        from app.services.crawler_service import _source_status
+
+        status = _source_status(fetched=10, parsed_count=10, saved=10, errors=[])
+        assert status == "success"
 
     def test_parse_all_failed_aggregates_to_failed(self):
         """4 个来源全部 parse_all_failed → aggregate → failed"""
