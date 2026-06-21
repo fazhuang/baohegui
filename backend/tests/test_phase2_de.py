@@ -1318,3 +1318,59 @@ class TestCredentialRedactionBoundary:
         assert "xyz-token" not in cleaned
         assert "abc" not in cleaned
         assert "REDACTED" in cleaned
+
+
+# ═══════════════════════════════════════════════════════════════
+# 阻塞项 1-b：陕西全部解析失败仍报告 success
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestShaanxiParseAllFailed:
+    """陕西来源采用独立的 Playwright 路径 (browser_crawler.crawl_shaanxi)。
+    _source_status 判定与 CCGP/宁夏/财政部一致：
+    fetched > 0 且 parsed == 0 → failed。
+    """
+
+    def test_shaanxi_listed_10_parsed_0_saved_0_is_failed(self):
+        """listed=10, saved=0, parsed_count=0 → _source_status → failed"""
+        from app.services.crawler_service import _source_status
+
+        # 模拟: crawl_shaanxi 返回 10 条列表, 详情全失败
+        status = _source_status(fetched=10, parsed_count=0, saved=0, errors=[])
+        assert status == "failed", f"10 listed, all parse-failed should be failed, got {status}"
+
+    def test_shaanxi_listed_10_parsed_0_shaanxi_stats_use_source_status(self):
+        """crawl_all 陕西段的 fetcher 必须传递 real listed count（非 parsed_count）"""
+        from app.services.crawler_service import _source_status
+
+        # 攻击复现：listed=10, parse_detail_html 全返回 None
+        # 旧代码: fetched = parsed_count = 0，status = "success"
+        # 新代码: fetched = listed = 10, parsed_count = 0 → failed
+        fetched = 10   # listed
+        parsed = 0     # 全部解析失败
+        saved = 0
+        errors = []
+        status = _source_status(fetched, parsed, saved, errors)
+        assert status == "failed"
+
+    def test_shaanxi_listed_0_is_no_content_not_failed(self):
+        """listed=0 → 无新内容，非失败（与 CCGP fetched=0 一致）"""
+        from app.services.crawler_service import _source_status
+
+        status = _source_status(fetched=0, parsed_count=0, saved=0, errors=[])
+        assert status == "success", f"0 listed should be no-content success, got {status}"
+
+    def test_browser_crawler_returns_listed_and_parse_failed(self):
+        """browser_crawler.crawl_shaanxi 返回 listed / parse_failed 字段"""
+        from app.services.browser_crawler import crawl_shaanxi
+        import inspect
+
+        source = inspect.getsource(crawl_shaanxi)
+        assert '"listed"' in source, "crawl_shaanxi should return 'listed' field"
+        assert '"parse_failed"' in source, (
+            "crawl_shaanxi should return 'parse_failed' field"
+        )
+        assert 'parse_failed += 1' in source, (
+            "crawl_shaanxi should count parse_failed"
+        )
+

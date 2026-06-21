@@ -336,12 +336,22 @@ async def crawl_all() -> dict:
                 round(stats["shaanxi"]["completeness_sum"] / stats["shaanxi"]["parsed_count"], 4)
                 if stats["shaanxi"]["parsed_count"] > 0 else None
             )
-            stats["shaanxi"]["fetched"] = shaanxi_result.get("parsed_count", 0)
+            # fetched = 列表页条目数（非已解析数），用于 _source_status 判定
+            stats["shaanxi"]["fetched"] = shaanxi_result.get("listed", 0)
+            stats["shaanxi"]["parse_failed_count"] = shaanxi_result.get("parse_failed", 0)
+            # fetched>0 且 saved==parsed_count==0 → 全部解析失败，必须 failed
+            stats["shaanxi"]["status"] = _source_status(
+                stats["shaanxi"]["fetched"], stats["shaanxi"]["parsed_count"],
+                stats["shaanxi"]["saved"], stats["shaanxi"]["errors"])
+            if stats["shaanxi"]["status"] == "failed" and stats["shaanxi"]["fetched"] > 0:
+                stats["shaanxi"]["error_type"] = "parse_all_failed"
+                stats["shaanxi"]["error_message"] = f"全部 {stats['shaanxi']['fetched']} 条详情解析失败"
         else:
             # 向后兼容：旧 int 返回值
-            stats["shaanxi"]["saved"] = shaanxi_result
-            stats["shaanxi"]["fetched"] = shaanxi_result
-        stats["shaanxi"]["status"] = "success"
+            saved = shaanxi_result if isinstance(shaanxi_result, int) else 0
+            stats["shaanxi"]["saved"] = saved
+            stats["shaanxi"]["fetched"] = saved
+            stats["shaanxi"]["status"] = "success" if saved > 0 else "failed"
     except Exception as e:
         safe_e = _safe_error_summary(str(e))
         logger.error("陕西 异常: %s", safe_e)

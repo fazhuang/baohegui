@@ -61,15 +61,19 @@ async def crawl_shaanxi() -> dict:
     """陕西采集入口 — Phase 1：使用 SafeFetcher（HTTPS-only + TLS 校验 + 域名白名单）
 
     Returns:
-        dict with {"saved": int, "parsed_count": int, "completeness_sum": float}
+        dict with {"saved": int, "parsed_count": int, "completeness_sum": float,
+                   "listed": int, "parse_failed": int}
         兼容旧调用方（历史上只消费 saved 字段）。
     """
     items = await crawl_shaanxi_with_playwright()
+    listed = len(items)
     if not items:
-        return {"saved": 0, "parsed_count": 0, "completeness_sum": 0.0}
+        return {"saved": 0, "parsed_count": 0, "completeness_sum": 0.0,
+                "listed": 0, "parse_failed": 0}
     saved = 0
     parsed_count = 0
     completeness_sum = 0.0
+    parse_failed = 0
     from app.services.safe_fetcher import fetcher_for_source
 
     async with fetcher_for_source("shaanxi") as fetcher:
@@ -82,10 +86,15 @@ async def crawl_shaanxi() -> dict:
                     completeness_sum += pc(d, "shaanxi")
                     if _save_case(d):
                         saved += 1
+                else:
+                    parse_failed += 1
             except Exception as e:
                 logger.error("陕西详情采集失败 %s: %s", item["url"], e)
+                parse_failed += 1
             await asyncio.sleep(0.5)
-    return {"saved": saved, "parsed_count": parsed_count, "completeness_sum": completeness_sum}
+    return {"saved": saved, "parsed_count": parsed_count,
+            "completeness_sum": completeness_sum,
+            "listed": listed, "parse_failed": parse_failed}
 
 
 import httpx  # noqa: E402
