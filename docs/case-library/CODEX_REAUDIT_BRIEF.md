@@ -1,7 +1,7 @@
 # Phase 2 Re-audit — Codex 复核审计简报
 
 > 审计时间：2026-06-22 19:24 CST
-> 代码基线：`0d9b842a`（`docs(phase-2): sync CURRENT_STATUS.md…`）
+> 代码基线：`ea83c4b4`（`docs(phase-2): finalize Codex re-audit brief — precise checklist, all evidence links`）
 > 上一轮结论：`PHASE_2_REJECTED`（4 个阻塞项）
 > 本轮请求：对 9 个阻塞项的修复逐一进行攻击式复现验证
 > 修复证据文件：`docs/case-library/CODEX_REAUDIT_BRIEF.md`（本文件）
@@ -196,7 +196,7 @@ for m in data["mappings"]:
 
 Codex 审计员请逐项执行：
 
-- [ ] `git log -1 --format='%H %s'` — HEAD = `0d9b842a...` (docs/phase-2: sync CURRENT_STATUS.md with latest HEAD)
+- [ ] `git log -1 --format='%H %s'` — HEAD = `ea83c4b4...` (docs/phase-2: finalize Codex re-audit brief — precise checklist, all evidence links)
 - [ ] `uv run pytest tests/test_phase2_de.py -v` — 99 passed
 - [ ] `uv run pytest tests/test_rule_version_integrity.py -v` — 24 passed
 - [ ] `uv run pytest tests/test_source_fixtures.py -v` — 18 passed
