@@ -1,11 +1,11 @@
 # 知识库模块当前状态
 
 > 状态更新日期：2026-06-23
-> Git 基线：`ad40c183`
+> Git 基线：`b2623f9d`
 > 当前分支：`main`
-> 工作区状态：dirty（2 个第四轮 re-audit 阻塞项修复中）
+> 工作区状态：clean
 > Codex 上次门禁：`PHASE_2_REJECTED`
-> 当前门禁码：`BLOCKED_RELEASE` — 2 个阻塞项修复中
+> 当前门禁码：`READY_FOR_CODEX_PHASE_2_REAUDIT` — 17 个阻塞项全部修复，141 tests passed，规则资产零污染，SessionLocal 泄漏已封堵
 > Codex 审计简报：`docs/case-library/CODEX_REAUDIT_BRIEF.md`
 
 ## 1. 阶段结论
@@ -14,7 +14,7 @@
 |---|---|---|
 | Phase 0 | 已完成 | `PHASE_0_ACCEPTED_WITH_CORRECTIONS` |
 | Phase 1 | 已完成 | `PHASE_1_ACCEPTED` |
-| Phase 2 | 修复中 | `PHASE_2_REJECTED` — 2 个第四轮阻塞项修复中 |
+| Phase 2 | 修复完成 | 17 个阻塞项全部修复（9 个原始 + 8 个 re-audit），141 tests passed |
 
 ## 2. 测试结果（2026-06-23）
 
@@ -30,7 +30,8 @@
 | | manifest.json = `1627d35ece46b26fc655dacbf05d93099d9744b167248dbd62dc314e70c1bf47` |
 | 规则资产污染扫描 | 零污染 — NATL-001 可信基线已恢复，无测试产出物残留 |
 | 原始异常日志扫描 | 零路径 — 所有 `logger.error/warning` 经过 `_safe_error_summary` / `_safe_error_log` / `_sanitize_exc` |
-| git status | dirty — 2 个第四轮阻塞项修复中 |
+| SessionLocal 泄漏扫描 | 已封堵 — _save_case 复用外部 db；CCGP/宁夏/财政部 3 来源各 1 个 SessionLocal；KG 段补齐 rollback + close |
+| git status | clean |
 
 ## 3. 阻塞项修复汇总（15 个）
 
@@ -68,8 +69,8 @@
 
 | # | 阻塞项 | 提交 | 修复要点 |
 |---|---|---|---|
-| 16 | _save_case 每条案例创建 SessionLocal() + KG 段裸 SessionLocal() 回收路径不含 rollback | 待提交 | _save_case 改为接收外部 db；CCGP/宁夏/财政部各复用单个 SessionLocal；KG 段并入 rollback + finally-close |
-| 17 | CURRENT_STATUS.md HEAD SHA 失真（写 `dffba4e0`，实际 `ad40c183`）| 待提交 | 更新 HEAD、状态、基线
+| 16 | _save_case 每条案例创建 SessionLocal() + KG 段裸 SessionLocal() 回收路径不含 rollback | `b2623f9d` | _save_case 改为接收外部 db；CCGP/宁夏/财政部各复用单个 SessionLocal（ccdb/nxdb/mdb）；KG 段补齐 rollback + finally-close |
+| 17 | CURRENT_STATUS.md HEAD SHA 失真（写 `dffba4e0`，实际 `ad40c183`）| `b2623f9d` | HEAD 更新至 `b2623f9d`；工作区 clean；状态如实反映 17 个阻塞项
 
 ### 额外修复
 - CI flaky：uv path / UV_CACHE_DIR / stderr PIPE 诊断 (5 个提交)
@@ -93,5 +94,5 @@
 ## Codex 验收请求
 
 **复核审计简报**：`docs/case-library/CODEX_REAUDIT_BRIEF.md`  
-**基线提交**：`ad40c183`（修复后 HEAD）  
-**请求结论**：`READY_FOR_CODEX_PHASE_2_REAUDIT` — 待 2 个第四轮阻塞项提交后请求 re-audit
+**基线提交**：`b2623f9d`  
+**请求结论**：`READY_FOR_CODEX_PHASE_2_REAUDIT`
