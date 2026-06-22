@@ -1,7 +1,7 @@
 # 知识库模块当前状态
 
 > 状态更新日期：2026-06-23
-> Git 基线：`52917f2a`
+> Git 基线：`d7c6f1fe`
 > 当前分支：`main`
 > 工作区状态：clean
 > Codex 上次门禁：`PHASE_2_REJECTED`
@@ -26,8 +26,8 @@
 | 来源 Fixture 契约 (test_source_fixtures.py) | `18 passed` |
 | **总计** | **141 passed** |
 | Security 全部测试 | 通过 |
-| 规则资产 SHA-256 | platform_rules.json = `4b05cf3d6a9f927790bb33ad69c9a447` |
-| | manifest.json = `f3d6cc5cafd7d03ebffa35710ce19821d29114b1ce163a168434ba1955287719` |
+| 规则资产 SHA-256 | platform_rules.json = `4898677a5637ef900f48dac59af21106168504885ebe1bc1b90fa4af6157af58` |
+| | manifest.json = `1627d35ece46b26fc655dacbf05d93099d9744b167248dbd62dc314e70c1bf47` |
 | 规则资产污染扫描 | 零污染 — NATL-001 可信基线已恢复，无测试产出物残留 |
 | 原始异常日志扫描 | 零路径 — 所有 `logger.error/warning` 经过 `_safe_error_summary` / `_safe_error_log` / `_sanitize_exc` |
 | git status | clean |

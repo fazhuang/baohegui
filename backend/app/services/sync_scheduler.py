@@ -266,6 +266,17 @@ class SyncScheduler:
                                 "; ".join(str(e) for e in src_errors[:3])
                             )
 
+                        # partial 缺少降级原因 → 从 parse_failed_count 派生
+                        if src_status == "partial" and not src_error_type and not src_error_message:
+                            src_parse_failed = src_stat.get("parse_failed_count", 0)
+                            src_fetched = src_stat.get("fetched", 0)
+                            if src_parse_failed > 0:
+                                src_error_type = "partial_parse"
+                                src_error_message = f"部分条目解析失败: {src_parse_failed}/{src_fetched}"
+                            elif src_fetched > 0 and src_stat.get("saved", 0) == 0:
+                                src_error_type = "partial_no_save"
+                                src_error_message = "全部已重复，0 条新保存"
+
                         crawl_job_store.complete_item(
                             db_session, item,
                             status=src_status,

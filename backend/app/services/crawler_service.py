@@ -266,6 +266,9 @@ async def crawl_all() -> dict:
             elif stats["ccgp"]["status"] == "failed" and stats["ccgp"]["fetched"] > 0:
                 stats["ccgp"]["error_type"] = "parse_all_failed"
                 stats["ccgp"]["error_message"] = f"全部 {stats['ccgp']['fetched']} 条详情解析失败"
+            elif stats["ccgp"]["status"] == "partial" and stats["ccgp"]["parse_failed_count"] > 0:
+                stats["ccgp"]["error_type"] = "partial_parse"
+                stats["ccgp"]["error_message"] = f"部分条目解析失败: {stats['ccgp']['parse_failed_count']}/{stats['ccgp']['fetched']}"
     except SafeFetchError as e:
         logger.error("CCGP 安全抓取错误: %s", _safe_error_summary(str(e)))
         stats["ccgp"]["errors"].append(_safe_error_summary(f"{e.error_type.value}: {e.message}"))
@@ -323,6 +326,9 @@ async def crawl_all() -> dict:
             elif stats["ningxia"]["status"] == "failed" and stats["ningxia"]["fetched"] > 0:
                 stats["ningxia"]["error_type"] = "parse_all_failed"
                 stats["ningxia"]["error_message"] = f"全部 {stats['ningxia']['fetched']} 条详情解析失败"
+            elif stats["ningxia"]["status"] == "partial" and stats["ningxia"]["parse_failed_count"] > 0:
+                stats["ningxia"]["error_type"] = "partial_parse"
+                stats["ningxia"]["error_message"] = f"部分条目解析失败: {stats['ningxia']['parse_failed_count']}/{stats['ningxia']['fetched']}"
     except SafeFetchError as e:
         logger.error("宁夏 安全抓取错误: %s", _safe_error_summary(str(e)))
         stats["ningxia"]["errors"].append(_safe_error_summary(f"{e.error_type.value}: {e.message}"))
@@ -360,6 +366,9 @@ async def crawl_all() -> dict:
             if stats["shaanxi"]["status"] == "failed" and stats["shaanxi"]["fetched"] > 0:
                 stats["shaanxi"]["error_type"] = "parse_all_failed"
                 stats["shaanxi"]["error_message"] = f"全部 {stats['shaanxi']['fetched']} 条详情解析失败"
+            elif stats["shaanxi"]["status"] == "partial" and stats["shaanxi"]["parse_failed_count"] > 0:
+                stats["shaanxi"]["error_type"] = "partial_parse"
+                stats["shaanxi"]["error_message"] = f"部分条目解析失败: {stats['shaanxi']['parse_failed_count']}/{stats['shaanxi']['fetched']}"
         else:
             # 向后兼容：旧 int 返回值
             saved = shaanxi_result if isinstance(shaanxi_result, int) else 0
@@ -419,6 +428,9 @@ async def crawl_all() -> dict:
             elif stats["mof"]["status"] == "failed" and stats["mof"]["fetched"] > 0:
                 stats["mof"]["error_type"] = "parse_all_failed"
                 stats["mof"]["error_message"] = f"全部 {stats['mof']['fetched']} 条详情解析失败"
+            elif stats["mof"]["status"] == "partial" and stats["mof"]["parse_failed_count"] > 0:
+                stats["mof"]["error_type"] = "partial_parse"
+                stats["mof"]["error_message"] = f"部分条目解析失败: {stats['mof']['parse_failed_count']}/{stats['mof']['fetched']}"
     except SafeFetchError as e:
         logger.error("财政部 安全抓取错误: %s", _safe_error_summary(str(e)))
         stats["mof"]["errors"].append(_safe_error_summary(f"{e.error_type.value}: {e.message}"))
