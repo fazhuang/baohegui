@@ -1,7 +1,7 @@
 # 知识库模块当前状态
 
 > 状态更新日期：2026-06-23
-> Git 基线：`b2623f9d`
+> Git 基线：`5385f5e9`
 > 当前分支：`main`
 > 工作区状态：clean
 > Codex 上次门禁：`PHASE_2_REJECTED`
@@ -33,7 +33,7 @@
 | SessionLocal 泄漏扫描 | 已封堵 — _save_case 复用外部 db；CCGP/宁夏/财政部 3 来源各 1 个 SessionLocal；KG 段补齐 rollback + close |
 | git status | clean |
 
-## 3. 阻塞项修复汇总（15 个）
+## 3. 阻塞项修复汇总（17 个）
 
 ### 原始 9 个（第一轮 re-audit）
 
@@ -94,5 +94,5 @@
 ## Codex 验收请求
 
 **复核审计简报**：`docs/case-library/CODEX_REAUDIT_BRIEF.md`  
-**基线提交**：`b2623f9d`  
+**基线提交**：`5385f5e9`  
 **请求结论**：`READY_FOR_CODEX_PHASE_2_REAUDIT`
