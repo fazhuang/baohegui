@@ -1,11 +1,11 @@
 # 知识库模块当前状态
 
 > 状态更新日期：2026-06-23
-> Git 基线：`d7c6f1fe`
+> Git 基线：`dffba4e0`
 > 当前分支：`main`
 > 工作区状态：clean
 > Codex 上次门禁：`PHASE_2_REJECTED`
-> 当前门禁码：`READY_FOR_CODEX_PHASE_2_REAUDIT` — 13 个阻塞项全部修复，141 tests passed，规则资产零污染
+> 当前门禁码：`READY_FOR_CODEX_PHASE_2_REAUDIT` — 15 个阻塞项全部修复，141 tests passed，规则资产零污染，partial 降级原因完整
 > Codex 审计简报：`docs/case-library/CODEX_REAUDIT_BRIEF.md`
 
 ## 1. 阶段结论
@@ -14,7 +14,7 @@
 |---|---|---|
 | Phase 0 | 已完成 | `PHASE_0_ACCEPTED_WITH_CORRECTIONS` |
 | Phase 1 | 已完成 | `PHASE_1_ACCEPTED` |
-| Phase 2 | 修复完成 | 13 个阻塞项全部修复（9 个原始 + 4 个 re-audit），141 tests passed |
+| Phase 2 | 修复完成 | 15 个阻塞项全部修复（9 个原始 + 6 个 re-audit），141 tests passed |
 
 ## 2. 测试结果（2026-06-23）
 
@@ -32,7 +32,7 @@
 | 原始异常日志扫描 | 零路径 — 所有 `logger.error/warning` 经过 `_safe_error_summary` / `_safe_error_log` / `_sanitize_exc` |
 | git status | clean |
 
-## 3. 阻塞项修复汇总（13 个）
+## 3. 阻塞项修复汇总（15 个）
 
 ### 原始 9 个（第一轮 re-audit）
 
@@ -57,6 +57,13 @@
 | 12 | 陕西部分解析失败仍 success（parse_failed_count 未参与判定）| `52917f2a` | `_source_status` 新增 `parse_failed_count` 参数；fetched>0 且 parse_failed>0 → partial |
 | 13 | CURRENT_STATUS.md 基线 HEAD 不符 | `52917f2a` | 基线修正为 `52917f2a`；工作区 clean；测试结果 141 passed |
 
+### 第三轮 2 个（re-audit blocking items）
+
+| # | 阻塞项 | 提交 | 修复要点 |
+|---|---|---|---|
+| 14 | partial 缺少降级原因（None 传播至任务明细/健康表/快照）| `dffba4e0` | crawler_service 4 个来源加 `partial_parse` 分支；sync_scheduler 二次兜底派生 `error_type`/`error_message` |
+| 15 | CURRENT_STATUS.md 哈希失真（HEAD + 规则 SHA-256 与实际不符）| `dffba4e0` | HEAD 修正为 `dffba4e0`，规则哈希与 `shasum -a 256` 一致 |
+
 ### 额外修复
 - CI flaky：uv path / UV_CACHE_DIR / stderr PIPE 诊断 (5 个提交)
 - 规则资产清理：61 条测试污染移除、manifest 去重、monkeypatch 加固 (4 个提交)
@@ -79,5 +86,5 @@
 ## Codex 验收请求
 
 **复核审计简报**：`docs/case-library/CODEX_REAUDIT_BRIEF.md`  
-**基线提交**：`52917f2a`  
+**基线提交**：`dffba4e0`  
 **请求结论**：`READY_FOR_CODEX_PHASE_2_REAUDIT`
