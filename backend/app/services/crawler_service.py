@@ -148,7 +148,8 @@ async def crawl_ningxia_list(fetcher) -> list[dict]:
 
 # ── 来源状态判定 ──────────────────────────────────────────────
 
-def _source_status(fetched: int, parsed_count: int, saved: int, errors: list) -> str:
+def _source_status(fetched: int, parsed_count: int, saved: int, errors: list,
+                   parse_failed_count: int = 0) -> str:
     """根据抓取、解析、保存产出判定来源最终状态。
 
     规则（按优先级）：
@@ -156,6 +157,7 @@ def _source_status(fetched: int, parsed_count: int, saved: int, errors: list) ->
     - fetched > 0 且 parsed_count == 0 → "failed"（全部解析失败，含 errors）
     - 有 errors 但仍有产出（saved > 0 或 parsed_count > 0）→ "partial"
     - fetched > 0 且 saved == 0 但 parsed_count > 0 → "partial"（解析成功但全部重复）
+    - fetched > 0 且 parse_failed_count > 0 → "partial"（部分条目解析失败）
     - 否则 → "success"
     """
     if fetched == 0:
@@ -168,6 +170,9 @@ def _source_status(fetched: int, parsed_count: int, saved: int, errors: list) ->
         return "partial"
     if fetched > 0 and saved == 0 and parsed_count > 0:
         # 解析成功但全部重复 → partial
+        return "partial"
+    if fetched > 0 and parse_failed_count > 0:
+        # 部分条目解析失败但未被 errors 捕获（如详情页返回 None）
         return "partial"
     return "success"
 
@@ -240,7 +245,7 @@ async def crawl_all() -> dict:
                         # 详情页返回 None（HTML 为空或解析完全失败）
                         parse_failed += 1
                 except SafeFetchError as e:
-                    stats["ccgp"]["errors"].append(f"{item['url']}: {e.error_type.value}={e.message}")
+                    stats["ccgp"]["errors"].append(_safe_error_summary(f"{item['url']}: {e.error_type.value}={e.message}"))
                     parse_failed += 1
                 await asyncio.sleep(0.3)
             stats["ccgp"]["saved"] = saved
@@ -253,7 +258,8 @@ async def crawl_all() -> dict:
             stats["ccgp"]["parse_failed_count"] = parse_failed
             stats["ccgp"]["status"] = _source_status(
                 stats["ccgp"]["fetched"], stats["ccgp"]["parsed_count"],
-                stats["ccgp"]["saved"], stats["ccgp"]["errors"])
+                stats["ccgp"]["saved"], stats["ccgp"]["errors"],
+                stats["ccgp"]["parse_failed_count"])
             if stats["ccgp"]["errors"]:
                 stats["ccgp"]["error_type"] = "item_errors"
                 stats["ccgp"]["error_message"] = _summarize_errors(stats["ccgp"]["errors"])
@@ -262,7 +268,7 @@ async def crawl_all() -> dict:
                 stats["ccgp"]["error_message"] = f"全部 {stats['ccgp']['fetched']} 条详情解析失败"
     except SafeFetchError as e:
         logger.error("CCGP 安全抓取错误: %s", _safe_error_summary(str(e)))
-        stats["ccgp"]["errors"].append(f"{e.error_type.value}: {e.message}")
+        stats["ccgp"]["errors"].append(_safe_error_summary(f"{e.error_type.value}: {e.message}"))
         stats["ccgp"]["error_type"] = e.error_type.value
         stats["ccgp"]["error_message"] = _safe_error_summary(str(e))
         stats["ccgp"]["status"] = "failed"
@@ -309,7 +315,8 @@ async def crawl_all() -> dict:
             stats["ningxia"]["parse_failed_count"] = parse_failed
             stats["ningxia"]["status"] = _source_status(
                 stats["ningxia"]["fetched"], stats["ningxia"]["parsed_count"],
-                stats["ningxia"]["saved"], stats["ningxia"]["errors"])
+                stats["ningxia"]["saved"], stats["ningxia"]["errors"],
+                stats["ningxia"]["parse_failed_count"])
             if stats["ningxia"]["errors"]:
                 stats["ningxia"]["error_type"] = "item_errors"
                 stats["ningxia"]["error_message"] = _summarize_errors(stats["ningxia"]["errors"])
@@ -317,7 +324,8 @@ async def crawl_all() -> dict:
                 stats["ningxia"]["error_type"] = "parse_all_failed"
                 stats["ningxia"]["error_message"] = f"全部 {stats['ningxia']['fetched']} 条详情解析失败"
     except SafeFetchError as e:
-        stats["ningxia"]["errors"].append(f"{e.error_type.value}: {e.message}")
+        logger.error("宁夏 安全抓取错误: %s", _safe_error_summary(str(e)))
+        stats["ningxia"]["errors"].append(_safe_error_summary(f"{e.error_type.value}: {e.message}"))
         stats["ningxia"]["error_type"] = e.error_type.value
         stats["ningxia"]["error_message"] = _safe_error_summary(str(e))
         stats["ningxia"]["status"] = "failed"
@@ -347,7 +355,8 @@ async def crawl_all() -> dict:
             # fetched>0 且 saved==parsed_count==0 → 全部解析失败，必须 failed
             stats["shaanxi"]["status"] = _source_status(
                 stats["shaanxi"]["fetched"], stats["shaanxi"]["parsed_count"],
-                stats["shaanxi"]["saved"], stats["shaanxi"]["errors"])
+                stats["shaanxi"]["saved"], stats["shaanxi"]["errors"],
+                stats["shaanxi"]["parse_failed_count"])
             if stats["shaanxi"]["status"] == "failed" and stats["shaanxi"]["fetched"] > 0:
                 stats["shaanxi"]["error_type"] = "parse_all_failed"
                 stats["shaanxi"]["error_message"] = f"全部 {stats['shaanxi']['fetched']} 条详情解析失败"
@@ -402,7 +411,8 @@ async def crawl_all() -> dict:
             stats["mof"]["parse_failed_count"] = parse_failed
             stats["mof"]["status"] = _source_status(
                 stats["mof"]["fetched"], stats["mof"]["parsed_count"],
-                stats["mof"]["saved"], stats["mof"]["errors"])
+                stats["mof"]["saved"], stats["mof"]["errors"],
+                stats["mof"]["parse_failed_count"])
             if stats["mof"]["errors"]:
                 stats["mof"]["error_type"] = "item_errors"
                 stats["mof"]["error_message"] = _summarize_errors(stats["mof"]["errors"])
@@ -411,7 +421,7 @@ async def crawl_all() -> dict:
                 stats["mof"]["error_message"] = f"全部 {stats['mof']['fetched']} 条详情解析失败"
     except SafeFetchError as e:
         logger.error("财政部 安全抓取错误: %s", _safe_error_summary(str(e)))
-        stats["mof"]["errors"].append(f"{e.error_type.value}: {e.message}")
+        stats["mof"]["errors"].append(_safe_error_summary(f"{e.error_type.value}: {e.message}"))
         stats["mof"]["error_type"] = e.error_type.value
         stats["mof"]["error_message"] = _safe_error_summary(str(e))
         stats["mof"]["status"] = "failed"

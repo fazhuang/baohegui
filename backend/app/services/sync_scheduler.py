@@ -60,22 +60,37 @@ _ALL_SOURCES = ("ccgp", "ningxia", "shaanxi", "mof")
 # ── 本地脱敏函数（避免循环导入依赖 crawler_service）──────────
 
 def _safe_error_log(message: str) -> str:
-    """截断 + 脱敏，用于日志安全输出。"""
+    """截断 + 脱敏，用于日志安全输出。
+
+    与 crawler_service._safe_error_summary 保持相同的脱敏覆盖，
+    但独立定义以避免模块级循环导入。
+    """
     import re
     cleaned = str(message)
-    # Remove auth tokens / keys / passwords
     patterns = [
-        r'(?:Authorization|Auth)\s*[=:]\s*Bearer\s+\S+',
-        r'(?:Authorization|Auth)\s*[=:]\s*Basic\s+\S+',
-        r'\bBearer\s+[\w\-\.\+/]+',
-        r'\b(?:Token|access_token|refresh_token)\s*[=:]\s*\S+',
-        r'\bapi[_-]?key\s*[=:]\s*\S+',
-        r'\bclient[_-]?secret\s*[=:]\s*\S+',
-        r'\bsecret\s*[=:]\s*\S+',
-        r'\bpassword\s*[=:]\s*\S+',
+        # Authorization: Bearer TOKEN / Authorization=Bearer TOKEN
+        (r'(?:Authorization|Auth)\s*[=:]\s*Bearer\s+\S+', '[REDACTED]'),
+        # Authorization: Basic BASE64
+        (r'(?:Authorization|Auth)\s*[=:]\s*Basic\s+\S+', '[REDACTED]'),
+        # Bearer TOKEN (standalone)
+        (r'\bBearer\s+[\w\-\.\+/]+', 'Bearer [REDACTED]'),
+        # Token: VALUE / Token=VALUE
+        (r'\b(?:Token|access_token|refresh_token)\s*[=:]\s*\S+', '[REDACTED]'),
+        # api_key=VALUE / api-key: VALUE
+        (r'\bapi[_-]?key\s*[=:]\s*\S+', '[REDACTED]'),
+        # client_secret=VALUE (OAuth)
+        (r'\bclient[_-]?secret\s*[=:]\s*\S+', '[REDACTED]'),
+        # secret=VALUE (standalone)
+        (r'\bsecret\s*[=:]\s*\S+', '[REDACTED]'),
+        # password=VALUE
+        (r'\bpassword\s*[=:]\s*\S+', '[REDACTED]'),
+        # Cookie: ... / Set-Cookie: ... (整行脱敏)
+        (r'(?:Cookie|Set-Cookie)\s*[=:]\s*.+?(?:\r?\n|$)', '[REDACTED]'),
+        # URL query 中的 token/key/password/secret/signature/client_secret=VALUE
+        (r'(?:[?&])(token|key|password|secret|signature|sig|client_secret)=[^&\s]+', r'?\1=[REDACTED]'),
     ]
-    for pat in patterns:
-        cleaned = re.sub(pat, '[REDACTED]', cleaned, flags=re.IGNORECASE)
+    for pat, replacement in patterns:
+        cleaned = re.sub(pat, replacement, cleaned, flags=re.IGNORECASE)
     if len(cleaned) > 2000:
         cleaned = cleaned[:2000] + "..."
     return cleaned
@@ -416,17 +431,18 @@ class SyncScheduler:
                 break
 
             elif attempt < self.max_retries:
+                safe_errors = _safe_error_log("; ".join(result.errors))
                 logger.warning(
                     "同步 %s 失败 (attempt %d/%d): %s",
                     platform, attempt, self.max_retries,
-                    "; ".join(result.errors),
+                    safe_errors,
                 )
                 await asyncio.sleep(2 ** attempt)
 
             else:
                 record.status = SyncStatus.FAILED
                 record.result = result
-                record.error_message = "; ".join(result.errors)
+                record.error_message = _safe_error_log("; ".join(result.errors))
                 record.retry_count = attempt - 1
 
         record.finished_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")

@@ -119,6 +119,33 @@ def _is_private_ip(host: str) -> bool:
     return not addr.is_global
 
 
+# ── 敏感凭据脱敏（防止 SafeFetchError.message 带机密进入日志/DB）──
+
+_CREDENTIAL_PATTERNS = [
+    (r'(?:Authorization|Auth)\s*[=:]\s*Bearer\s+\S+', '[REDACTED]'),
+    (r'(?:Authorization|Auth)\s*[=:]\s*Basic\s+\S+', '[REDACTED]'),
+    (r'\bBearer\s+[\w\-\.\+/]+', 'Bearer [REDACTED]'),
+    (r'\b(?:Token|access_token|refresh_token)\s*[=:]\s*\S+', '[REDACTED]'),
+    (r'\bapi[_-]?key\s*[=:]\s*\S+', '[REDACTED]'),
+    (r'\bclient[_-]?secret\s*[=:]\s*\S+', '[REDACTED]'),
+    (r'\bsecret\s*[=:]\s*\S+', '[REDACTED]'),
+    (r'\bpassword\s*[=:]\s*\S+', '[REDACTED]'),
+    (r'(?:Cookie|Set-Cookie)\s*[=:]\s*.+?(?:\r?\n|$)', '[REDACTED]'),
+    (r'(?:[?&])(token|key|password|secret|signature|sig|client_secret)=[^&\s]+', r'?\1=[REDACTED]'),
+]
+
+
+def _sanitize_exc(message: str) -> str:
+    """脱敏异常消息，移除可能的凭据/Token，截断至 2000 字符。"""
+    import re as _re
+    cleaned = str(message)
+    for pattern, replacement in _CREDENTIAL_PATTERNS:
+        cleaned = _re.sub(pattern, replacement, cleaned, flags=_re.IGNORECASE)
+    if len(cleaned) > 2000:
+        cleaned = cleaned[:2000] + "..."
+    return cleaned
+
+
 async def _resolve_and_validate(host: str, source: str, url: str) -> str:
     """DNS 解析主机名并校验结果。
 
@@ -131,7 +158,7 @@ async def _resolve_and_validate(host: str, source: str, url: str) -> str:
     except Exception as e:
         raise SafeFetchError(
             error_type=FetchErrorType.DNS_FAILED,
-            message=f"DNS 解析失败 {host}: {e}",
+            message=f"DNS 解析失败 {host}: {_sanitize_exc(str(e))}",
             url=url, source=source,
         )
 
@@ -361,7 +388,7 @@ class SafeFetcher:
         except httpx.ConnectError as e:
             raise SafeFetchError(
                 error_type=FetchErrorType.NETWORK,
-                message=f"连接失败 {host}: {e}",
+                message=f"连接失败 {host}: {_sanitize_exc(str(e))}",
                 url=url, source=source,
             )
         except httpx.ReadTimeout:
@@ -379,12 +406,12 @@ class SafeFetcher:
             if "ssl" in msg.lower() or "certificate" in msg.lower() or "tls" in msg.lower():
                 raise SafeFetchError(
                     error_type=FetchErrorType.TLS_ERROR,
-                    message=f"TLS 错误 {host}: {e}",
+                    message=f"TLS 错误 {host}: {_sanitize_exc(str(e))}",
                     url=url, source=source,
                 )
             raise SafeFetchError(
                 error_type=FetchErrorType.NETWORK,
-                message=f"网络错误 {host}: {e}",
+                message=f"网络错误 {host}: {_sanitize_exc(str(e))}",
                 url=url, source=source,
             )
 
