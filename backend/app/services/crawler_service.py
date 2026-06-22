@@ -231,23 +231,27 @@ async def crawl_all() -> dict:
             parsed_count = 0
             completeness_sum = 0.0
             parse_failed = 0
-            for item in ccgp_items:
-                try:
-                    d = await crawl_ccgp_detail(item["url"], fetcher)
-                    if d:
-                        parsed_count += 1
-                        # 计算每条案例的字段完整度
-                        item_completeness = _compute_completeness(d, "ccgp")
-                        completeness_sum += item_completeness
-                        if _save_case(d):
-                            saved += 1
-                    else:
-                        # 详情页返回 None（HTML 为空或解析完全失败）
+            # 复用单一 DB 会话，避免每条案例创建/销毁 SessionLocal
+            ccdb = SessionLocal()
+            try:
+                for item in ccgp_items:
+                    try:
+                        d = await crawl_ccgp_detail(item["url"], fetcher)
+                        if d:
+                            parsed_count += 1
+                            item_completeness = _compute_completeness(d, "ccgp")
+                            completeness_sum += item_completeness
+                            if _save_case(d, db=ccdb):
+                                saved += 1
+                        else:
+                            parse_failed += 1
+                    except SafeFetchError as e:
+                        stats["ccgp"]["errors"].append(
+                            _safe_error_summary(f"{item['url']}: {e.error_type.value}={e.message}"))
                         parse_failed += 1
-                except SafeFetchError as e:
-                    stats["ccgp"]["errors"].append(_safe_error_summary(f"{item['url']}: {e.error_type.value}={e.message}"))
-                    parse_failed += 1
-                await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.3)
+            finally:
+                ccdb.close()
             stats["ccgp"]["saved"] = saved
             stats["ccgp"]["fetched"] = len(ccgp_items)
             stats["ccgp"]["parsed_count"] = parsed_count
@@ -292,22 +296,28 @@ async def crawl_all() -> dict:
             parsed_count = 0
             completeness_sum = 0.0
             parse_failed = 0
-            for item in nx_items:
-                try:
-                    d = await crawl_ccgp_detail(item["url"], fetcher)
-                    if d:
-                        d["province"] = "宁夏"
-                        parsed_count += 1
-                        item_completeness = _compute_completeness(d, "ningxia")
-                        completeness_sum += item_completeness
-                        if _save_case(d):
-                            saved += 1
-                    else:
+            # 复用单一 DB 会话
+            nxdb = SessionLocal()
+            try:
+                for item in nx_items:
+                    try:
+                        d = await crawl_ccgp_detail(item["url"], fetcher)
+                        if d:
+                            d["province"] = "宁夏"
+                            parsed_count += 1
+                            item_completeness = _compute_completeness(d, "ningxia")
+                            completeness_sum += item_completeness
+                            if _save_case(d, db=nxdb):
+                                saved += 1
+                        else:
+                            parse_failed += 1
+                    except SafeFetchError as e:
+                        stats["ningxia"]["errors"].append(
+                            _safe_error_summary(f"{item['url']}: {e.error_type.value}={e.message}"))
                         parse_failed += 1
-                except SafeFetchError as e:
-                    stats["ningxia"]["errors"].append(f"{item['url']}: {e.error_type.value}={e.message}")
-                    parse_failed += 1
-                await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.3)
+            finally:
+                nxdb.close()
             stats["ningxia"]["saved"] = saved
             stats["ningxia"]["fetched"] = len(nx_items)
             stats["ningxia"]["parsed_count"] = parsed_count
@@ -394,22 +404,28 @@ async def crawl_all() -> dict:
             parsed_count = 0
             completeness_sum = 0.0
             parse_failed = 0
-            for item in mof_items[:20]:
-                try:
-                    d = await crawl_ccgp_detail(item["url"], fetcher)
-                    if d:
-                        d["province"] = "全国"
-                        parsed_count += 1
-                        item_completeness = _compute_completeness(d, "mof")
-                        completeness_sum += item_completeness
-                        if _save_case(d):
-                            saved += 1
-                    else:
+            # 复用单一 DB 会话
+            mdb = SessionLocal()
+            try:
+                for item in mof_items[:20]:
+                    try:
+                        d = await crawl_ccgp_detail(item["url"], fetcher)
+                        if d:
+                            d["province"] = "全国"
+                            parsed_count += 1
+                            item_completeness = _compute_completeness(d, "mof")
+                            completeness_sum += item_completeness
+                            if _save_case(d, db=mdb):
+                                saved += 1
+                        else:
+                            parse_failed += 1
+                    except SafeFetchError as e:
+                        stats["mof"]["errors"].append(
+                            _safe_error_summary(f"{item['url']}: {e.error_type.value}={e.message}"))
                         parse_failed += 1
-                except SafeFetchError as e:
-                    stats["mof"]["errors"].append(f"{item['url']}: {e.error_type.value}={e.message}")
-                    parse_failed += 1
-                await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.3)
+            finally:
+                mdb.close()
             stats["mof"]["saved"] = saved
             stats["mof"]["fetched"] = len(mof_items)
             stats["mof"]["parsed_count"] = parsed_count
@@ -458,20 +474,29 @@ async def crawl_all() -> dict:
             stats["errors"].append(f"{src_key}: {err}")
 
     # ── 同步到 KG（仅 published 案例） ──────────────────
+    cdb = None
     try:
         from app.services.kg_projection import kg_projection
 
-        db = SessionLocal()
-        try:
-            kg_result = kg_projection.project_all_published(db, limit=500)
-            stats["kg_synced"] = kg_result["created"] + kg_result["updated"]
-            db.commit()
-        finally:
-            db.close()
+        cdb = SessionLocal()
+        kg_result = kg_projection.project_all_published(cdb, limit=500)
+        stats["kg_synced"] = kg_result["created"] + kg_result["updated"]
+        cdb.commit()
     except Exception as e:
+        if cdb:
+            try:
+                cdb.rollback()
+            except Exception:
+                pass
         safe_msg = _safe_error_summary(str(e))
         logger.error("案例同步 KG 失败: %s", safe_msg)
         stats["errors"].append(f"kg_sync: {safe_msg}")
+    finally:
+        if cdb:
+            try:
+                cdb.close()
+            except Exception:
+                pass
 
     return stats
 
@@ -479,12 +504,18 @@ async def crawl_all() -> dict:
 # ── 持久化 ─────────────────────────────────────────────────────
 
 
-def _save_case(data: dict) -> bool:
+def _save_case(data: dict, db: Session | None = None) -> bool:
     """将一条案例写入数据库（去重）
 
     自动转换 decision_date 字符串为 date 对象。
+
+    Phase 2 fix: 接收外部 db session 复用连接，避免每条案例创建新 SessionLocal。
+    未传入时自建 session（向后兼容）。
     """
-    db: Session = SessionLocal()
+    own_db = None
+    if db is None:
+        own_db = SessionLocal()
+        db = own_db
     try:
         existing = db.query(ComplaintCase).filter(
             ComplaintCase.source_url == data["source_url"]
@@ -513,7 +544,8 @@ def _save_case(data: dict) -> bool:
         logger.warning("保存案例失败: %s", _safe_error_summary(str(e)))
         return False
     finally:
-        db.close()
+        if own_db:
+            own_db.close()
 
 
 # ── 错误摘要工具 ───────────────────────────────────────────────
