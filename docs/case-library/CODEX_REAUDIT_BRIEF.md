@@ -1,21 +1,24 @@
 # Phase 2 Re-audit — Codex 复核审计简报
 
-> 审计时间：2026-06-22 19:24 CST
-> 代码基线：`ea83c4b4`（`docs(phase-2): finalize Codex re-audit brief — precise checklist, all evidence links`）
-> 上一轮结论：`PHASE_2_REJECTED`（4 个阻塞项）
-> 本轮请求：对 9 个阻塞项的修复逐一进行攻击式复现验证
+> 审计时间：2026-06-23 12:00 CST
+> 代码基线：`a32032d0`（`docs(phase-2): update CURRENT_STATUS.md — 15 blockers fixed, HEAD=dffba4e0`）
+> 上一轮结论：`PHASE_2_REJECTED`（2 个阻塞项）
+> 本轮请求：对 15 个阻塞项的修复逐一进行攻击式复现验证
 > 修复证据文件：`docs/case-library/CODEX_REAUDIT_BRIEF.md`（本文件）
 > 状态摘要文件：`docs/case-library/CURRENT_STATUS.md`
 > 审计上下文：`docs/case-library/PHASE_0_CODEX_AUDIT.md`、`docs/case-library/PHASE_1_AUDIT_REPORT.md`
 
 ## 0. 执行摘要
 
-上一轮 Codex 审计识别出 4 个阻塞项（`BLOCK_RELEASE`）。本简报覆盖全部 4 个原始阻塞项 + 后续发现的 5 个子阻塞项，共计 9 个修复点。每个修复点均附有：
+Phase 2 共经历三轮 Codex re-audit，累计修复 15 个阻塞项：
 
-- 原始问题描述
-- 修复文件与行号
-- 攻击复现方法（使 Codex 能在当前代码库上直接运行）
-- 新增回归测试（共 29 个）
+| 轮次 | 阻塞项数 | 提交序列 | 结论 |
+|---|---|---|---|
+| 第一轮 | 9 | `8d39f3e5` … `375648c9` | `PHASE_2_REJECTED`（4 个新阻塞项） |
+| 第二轮 | 4 | `52917f2a` | `PHASE_2_REJECTED`（2 个新阻塞项） |
+| 第三轮 | 2 | `dffba4e0` | **待审** |
+
+每轮修复均附有攻击复现方法和新建回归测试。
 
 ## 1. 阻塞项矩阵
 
@@ -176,7 +179,69 @@ for m in data["mappings"]:
 **原始问题**：多个数据点不准确 — Git HEAD、测试计数、规则 manifest 哈希。
 **修复**：根据实际命令输出重写，所有数字由 `git log`、`pytest`、`shasum`、`gh run view` 即时生成。
 
-## 2. 非功能性修复
+## 2. 第二轮修复（4 个阻塞项，`52917f2a`）
+
+### 阻塞项 10：sync_scheduler._safe_error_log 脱敏正则不完整 + sync() raw errors 未脱敏
+**文件**：`backend/app/services/sync_scheduler.py:62-80,434-445`
+**原始问题**：`_safe_error_log` 仅覆盖 8 种模式（缺 Cookie/Set-Cookie 行脱敏和 URL query 参数脱敏），且 `sync()` 方法直接将 `result.errors` 传入 `logger.warning` 和 `record.error_message`。
+**修复**：`_safe_error_log` 正则集与 `crawler_service._CREDENTIAL_PATTERNS` 对齐（13 种模式）；`sync()` 中 2 处 raw `result.errors` 经 `_safe_error_log` 脱敏。
+
+**攻击复现**：
+```bash
+grep -c "Set-Cookie\|\\\?.*=" backend/app/services/sync_scheduler.py::_safe_error_log
+# _safe_error_log 应覆盖 Cookie 和 URL 参数模式
+```
+
+### 阻塞项 11：SafeFetchError.message 嵌入原始异常绕过脱敏
+**文件**：`backend/app/services/safe_fetcher.py:134,364,382,387`、`backend/app/services/crawler_service.py:243,265,299,320,392,414`
+**原始问题**：`safe_fetcher.py` 4 处将 raw `{e}` 嵌入 `SafeFetchError.message`，之后 `crawler_service.py` 6 处将 `e.message` 直接存入 `stats["errors"]`，全程无脱敏。
+**修复**：`safe_fetcher.py` 新增 `_sanitize_exc()` 函数（13 种模式），4 处 raw `{e}` 替换为 `_sanitize_exc(str(e))`；`crawler_service.py` 6 处 `stats["errors"].append` 对 `e.message` 追加 `_safe_error_summary` 双重脱敏。
+
+**攻击复现**：
+```python
+from app.services.safe_fetcher import _sanitize_exc
+cleaned = _sanitize_exc("Connection failed 10.0.0.1: password=abc123")
+assert "abc123" not in cleaned
+assert "REDACTED" in cleaned
+```
+
+### 阻塞项 12：陕西部分解析失败仍 success（parse_failed_count 未参与判定）
+**文件**：`backend/app/services/crawler_service.py:151-177`
+**原始问题**：`_source_status` 签名缺少 `parse_failed_count`。`listed=10, parsed=9, parse_failed=1, errors=[]` → `"success"`。
+**修复**：新增 `parse_failed_count` 参数，`fetched>0 AND parse_failed_count>0` → `"partial"`。4 个调用点全部传入。
+
+**攻击复现**：
+```python
+from app.services.crawler_service import _source_status
+assert _source_status(10, 9, 9, [], parse_failed_count=1) == "partial"
+```
+
+### 阻塞项 13：CURRENT_STATUS.md 基线 HEAD 不符
+**文件**：`docs/case-library/CURRENT_STATUS.md`
+**修复**：HEAD 修正为 `52917f2a`，规则哈希与 `shasum -a 256` 一致。
+
+## 3. 第三轮修复（2 个阻塞项，`dffba4e0`）
+
+### 阻塞项 14：partial 缺少降级原因（None 传播至任务明细/健康表/快照）
+**文件**：`backend/app/services/crawler_service.py:266-269,330-332,369-372,431-434`、`backend/app/services/sync_scheduler.py:268-277`
+**原始问题**：`parse_failed_count>0` 触发 `"partial"` 但 `errors` 为空时，`error_type`/`error_message` 保持 `None`。该 `None` 直接写入 `crawl_job_items`、`source_health` 和每日快照。
+**修复**：
+- `crawler_service.py`：4 个来源（CCGP/宁夏/陕西/财政部）在 `_source_status` 之后新增 `elif status=="partial" and parse_failed>0` 分支，设置 `error_type="partial_parse"` 和 `error_message="部分条目解析失败: {n}/{total}"`
+- `sync_scheduler.py`：`scrape_cases()` 持久化明细时二次兜底 — 若 `status=="partial"` 且 `error_type`/`error_message` 均为空，从 `parse_failed_count` 或 `saved==0` 派生
+
+**攻击复现**：
+```python
+# 模拟 crawler_service 陕西段：listed=10, parsed=9, parse_failed=1, errors=[]
+# 修复前：error_type=None, error_message=None → 写入 DB
+# 修复后：error_type="partial_parse", error_message="部分条目解析失败: 1/10"
+```
+
+### 阻塞项 15：CURRENT_STATUS.md 哈希失真
+**文件**：`docs/case-library/CURRENT_STATUS.md`
+**原始问题**：HEAD SHA 和规则资产哈希与实际值不符（写为 `4b05cf3d...` 等 git blob hash 而非 SHA-256）。
+**修复**：HEAD 修正为 `dffba4e0`，规则哈希与 `shasum -a 256 rules/platform_rules.json rules/versions/manifest.json` 输出一致。
+
+## 4. 非功能性修复
 
 ### CI Flaky 测试修复（5 个提交）
 `test_production_docs_disabled` 在 GitHub Actions 中长期失败。根因诊断链：
@@ -192,35 +257,37 @@ for m in data["mappings"]:
 - Monkeypatch 加固：`RuleSyncService._save` 类级补丁
 - Conftest 迁移警告抑制
 
-## 3. 验证检查清单
+## 5. 验证检查清单
 
 Codex 审计员请逐项执行：
 
-- [ ] `git log -1 --format='%H %s'` — HEAD = `ea83c4b4...` (docs/phase-2: finalize Codex re-audit brief — precise checklist, all evidence links)
+- [ ] `git log -1 --format='%H %s'` — HEAD = `a32032d0...` (docs/phase-2: update CURRENT_STATUS.md — 15 blockers fixed)
 - [ ] `uv run pytest tests/test_phase2_de.py -v` — 99 passed
 - [ ] `uv run pytest tests/test_rule_version_integrity.py -v` — 24 passed
 - [ ] `uv run pytest tests/test_source_fixtures.py -v` — 18 passed
+- [ ] **总计：141 passed, 0 failed**
 - [ ] `uv run pytest tests/security/test_fastapi_security_baseline.py tests/security/test_production_config.py tests/security/test_rules_admin_audit.py tests/security/test_phase1_safety.py -v` — 全部通过
-- [ ] `grep -rn 'logger\.\(error\|warning\).*%s.*, e)' backend/app/services/crawler_service.py backend/app/services/browser_crawler.py backend/app/services/mof_crawler.py backend/app/services/sync_scheduler.py` — 空（4 个命中为 `safe_e` 变量名，不是 raw `e`）
-
-验证：`safe_e = _safe_error_summary(str(e))` 先脱敏再传 logger。
-- [ ] `grep -rn '_safe_error_log' backend/app/services/sync_scheduler.py` — 显示类定义前有模块级函数，类内 3 处调用
+- [ ] `grep -rn 'logger\.\(error\|warning\).*%s.*, e)$' backend/app/services/crawler_service.py backend/app/services/browser_crawler.py backend/app/services/mof_crawler.py backend/app/services/sync_scheduler.py` — 空（无 raw `e` 传入 logger）
+- [ ] `grep -rn '{e}' backend/app/services/safe_fetcher.py` — 空（4 处已替换为 `_sanitize_exc(str(e))`）
+- [ ] `grep -rn '_safe_error_log' backend/app/services/sync_scheduler.py` — 显示模块级函数定义 + 4 处调用
 - [ ] `python3 -c "import json; d=json.load(open('rules/platform_rules.json')); assert next(m for m in d['mappings'] if m['rule_id']=='NATL-001')['description']=='缺少规定章节'"` — 通过
 - [ ] `python3 -c "import json; from pathlib import Path; markers={'TEST-AUDIT','FILE-T1','UFB-3390EBC9','VR-T2','V-TEST-1','V-T3','E2E测试更新'}; raw=Path('rules/platform_rules.json').read_text(); [print(f'POLLUTED: {m}') for m in markers if m in raw]"` — 空
+- [ ] `grep -rn 'partial_parse' backend/app/services/crawler_service.py` — 4 个来源均有 `elif status=="partial" and parse_failed_count>0` 分支
+- [ ] `grep -rn 'partial.*error_type.*error_message' backend/app/services/sync_scheduler.py` — 二次兜底派生逻辑
 - [ ] GH Actions 最近一次 CI：`conclusion: success`，0 failed
 - [ ] `git status --short` — clean
-- [ ] `git diff --check` — clean
-- [ ] `grep -rn 'parse_all_failed' backend/app/services/crawler_service.py` — 显示 error_type 在 `_source_status` 返回 failed + fetched>0 后正确设置
 - [ ] Phase 1 regression: `test_partial_on_source_error`、`test_success_when_no_errors`、`test_kg_sync_error_causes_partial` — 全部通过
+- [ ] `shasum -a 256 rules/platform_rules.json rules/versions/manifest.json` — 与 CURRENT_STATUS.md 中哈希一致
 - [ ] 审计简报一致性：本文件 SHA 与 git 中提交的版本一致
 
-## 4. 变更文件清单
+## 6. 变更文件清单
 
 ```
-backend/app/services/crawler_service.py        # _source_status + 日志脱敏
+backend/app/services/crawler_service.py        # _source_status + parse_failed_count + partial_parse 分支 + 日志脱敏
+backend/app/services/safe_fetcher.py            # _sanitize_exc() 新增 + 4 处 raw {e} 替换
+backend/app/services/sync_scheduler.py          # _safe_error_log 正则补齐 + sync() 脱敏 + partial 兜底派生
 backend/app/services/task_status_aggregator.py  # total_saved 参数
 backend/app/services/source_health_service.py   # 写入前脱敏
-backend/app/services/sync_scheduler.py          # _safe_error_log + 日志
 backend/app/services/browser_crawler.py         # listed/parse_failed
 backend/app/services/mof_crawler.py             # 日志脱敏
 backend/tests/test_phase2_de.py                 # 29 个新增回归测试
@@ -232,7 +299,8 @@ backend/tests/conftest.py                       # 迁移警告抑制
 rules/platform_rules.json                       # 测试污染清理 + NATL-001
 rules/versions/manifest.json                    # 去重 + 污染清理 + NATL-001
 rules/versions/rules_*.json (28 files)          # 污染清理 + NATL-001
-docs/case-library/CURRENT_STATUS.md             # 状态文档重写
+docs/case-library/CURRENT_STATUS.md             # 状态文档（15 个阻塞项，141 tests）
+docs/case-library/CODEX_REAUDIT_BRIEF.md        # 本文件
 ```
 
 ## Codex 验收请求
