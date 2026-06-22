@@ -1,7 +1,7 @@
 # 知识库模块当前状态
 
 > 状态更新日期：2026-06-23
-> Git 基线：`5385f5e9`
+> Git 基线：`c0db7e5e`
 > 当前分支：`main`
 > 工作区状态：clean
 > Codex 上次门禁：`PHASE_2_REJECTED`
@@ -94,5 +94,5 @@
 ## Codex 验收请求
 
 **复核审计简报**：`docs/case-library/CODEX_REAUDIT_BRIEF.md`  
-**基线提交**：`5385f5e9`  
+**基线提交**：`c0db7e5e`  
 **请求结论**：`READY_FOR_CODEX_PHASE_2_REAUDIT`
