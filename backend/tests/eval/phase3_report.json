@@ -1,0 +1,45 @@
+{
+  "timestamp": ".",
+  "baseline": {
+    "name": "Baseline (multi-keyword ILIKE)",
+    "total_queries": 110,
+    "recall_at_5": 0.8623924268502582,
+    "recall_at_10": 0.9086345381526104,
+    "mrr_at_10": 0.8273092369477911,
+    "ndcg_at_10": 0.8345330815333027,
+    "empty_recall_rate": 0.00909090909090909,
+    "mis_citation_rate": 0.0,
+    "p95_latency_ms": 51.5833620011108,
+    "p50_latency_ms": 34.95114849647507,
+    "rag_regulation_recall": 1.0,
+    "rag_case_recall": 1.0
+  },
+  "rag_off": {
+    "name": "RAG Off (keyword only)",
+    "total_queries": 110,
+    "recall_at_5": 0.8623924268502582,
+    "recall_at_10": 0.9086345381526104,
+    "mrr_at_10": 0.8273092369477911,
+    "ndcg_at_10": 0.8345330815333027,
+    "empty_recall_rate": 0.00909090909090909,
+    "mis_citation_rate": 0.0,
+    "p95_latency_ms": 48.329336001188494,
+    "p50_latency_ms": 34.644965489860624,
+    "rag_regulation_recall": 1.0,
+    "rag_case_recall": 1.0
+  },
+  "rag_on": {
+    "name": "RAG On (keyword + graph)",
+    "total_queries": 110,
+    "recall_at_5": 0.9298623063683304,
+    "recall_at_10": 0.9795850066934404,
+    "mrr_at_10": 0.8443775100401606,
+    "ndcg_at_10": 0.872246401544287,
+    "empty_recall_rate": 0.0,
+    "mis_citation_rate": 0.0,
+    "p95_latency_ms": 618.5539749858435,
+    "p50_latency_ms": 248.9769584935857,
+    "rag_regulation_recall": 1.0,
+    "rag_case_recall": 1.0
+  }
+}

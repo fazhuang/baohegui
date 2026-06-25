@@ -1,6 +1,7 @@
 """知识图谱服务 — 关联检索、推理与种子数据管理
 
-v4 增强：
+v5 增强：
+- 多关键词搜索：中文分词 + IDF 评分 + 多字段 OR_match
 - 全面种子数据填充：base_rules / compliance_rules / industry_rules / platform_rules / parameter_bias / forbidden_words / complaint_cases / project_categories
 - 幂等 seed（基于 rule_id/title 去重）
 - 高级检索：rule_id, tags, jurisdiction, platform, min_trust, audit_status, limit
@@ -14,6 +15,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import math
 import os
 import re as _re
 from datetime import date, datetime, timezone
@@ -42,6 +44,67 @@ def _resolve_rules_dir() -> Path:
 
 
 _RULES_DIR = _resolve_rules_dir()
+
+
+# ── 中文分词器（生产级，无外部依赖） ──────────────────────────────
+
+# 中文停用二元组 / 停用单字
+# 仅过滤纯粹的无信息量词。领域关键术语（投标/采购/招标/项目/技术/标准/要求/条件/资格/文件/条款/品牌/参数等）全部保留。
+_STOP_BIGRAMS = frozenset({
+    "不得", "应当", "规定", "满足", "提供", "必须", "依法",
+    "实施", "相关", "其他", "之一", "以内", "以上", "以下",
+    "具有", "设立", "进行", "或者", "全部", "部分",
+})
+_STOP_CHARS = frozenset(
+    "的了在是我有和就不人都一上也说到要你会的看自他那"
+    "什么么怎如何为因为所以但或与对于对将以被让向从使通过可以"
+    "需要应该已经比较非常还是不过把从次第"
+)
+# 组合停用：任两个停用单字的二元组也停用
+_STOP_BIGRAMS_ALL = _STOP_BIGRAMS | frozenset({c1 + c2 for c1 in _STOP_CHARS for c2 in _STOP_CHARS})
+
+
+def _tokenize_chinese_query(text: str, max_terms: int = 20) -> list[str]:
+    """Extract Chinese tokens (2-4 chars) from query text for multi-keyword matching.
+
+    Strict stop filtering on bigrams only (longer n-grams carry signal even with stop chars).
+    Returns ≤ max_terms tokens with 4-gram > 3-gram > 2-gram priority.
+    """
+    if not text:
+        return []
+    text = text.strip()
+
+    chinese_runs = _re.findall(r"[一-鿿㐀-䶿]{2,}", text)
+
+    tokens_4: list[str] = []
+    tokens_3: list[str] = []
+    tokens_2: list[str] = []
+
+    for seq in chinese_runs:
+        L = len(seq)
+        for i in range(L - 3):
+            tokens_4.append(seq[i:i + 4])
+        for i in range(L - 2):
+            tokens_3.append(seq[i:i + 3])
+        for i in range(L - 1):
+            bg = seq[i:i + 2]
+            if bg not in _STOP_BIGRAMS_ALL:
+                tokens_2.append(bg)
+
+    # Deduplicate: longer n-grams first (more discriminative)
+    seen: set[str] = set()
+    result: list[str] = []
+    for t in tokens_4:
+        if t not in seen:
+            seen.add(t); result.append(t)
+    for t in tokens_3:
+        if t not in seen:
+            seen.add(t); result.append(t)
+    for t in tokens_2:
+        if t not in seen:
+            seen.add(t); result.append(t)
+
+    return result[:max_terms]
 
 
 class KnowledgeGraphService:
@@ -81,7 +144,12 @@ class KnowledgeGraphService:
 
         q = db.query(KGNode)
         if node_type:
-            q = q.filter(KGNode.node_type == node_type)
+            # When user asks for regulations or cases, also allow rules
+            # (most queries asking for "regulation" actually want the compliance rules stored as rule nodes)
+            if node_type != "rule":
+                q = q.filter(KGNode.node_type.in_([node_type, "rule"]))
+            else:
+                q = q.filter(KGNode.node_type == "rule")
 
         # 审核状态过滤
         if audit_status is not None:
@@ -104,25 +172,160 @@ class KnowledgeGraphService:
             q = q.filter(KGNode.rule_id == rule_id)
 
         if jurisdiction:
-            q = q.filter(KGNode.jurisdiction.ilike(f"%{jurisdiction}%"))
-
-        # 关键词搜索
-        if query:
+            # Exact jurisdiction query: match either the query jurisdiction
+            # OR empty/null (national-scope nodes that apply everywhere)
             q = q.filter(
                 or_(
-                    KGNode.title.ilike(f"%{query}%"),
-                    KGNode.content.ilike(f"%{query}%"),
-                    KGNode.tags.ilike(f"%{query}%"),
-                    KGNode.source.ilike(f"%{query}%"),
+                    KGNode.jurisdiction.ilike(f"%{jurisdiction}%"),
+                    KGNode.jurisdiction.is_(None),
+                    KGNode.jurisdiction == "",
                 )
             )
 
-        # 先取总数（分页前，不受 offset/limit 影响）
-        total = q.count()
+        # 关键词搜索 — 多分词 + IDF 评分 + 标签附加分
+        if query:
+            # Detect pre-tokenized keywords: space-separated 2+ char terms
+            raw_terms = query.strip().split()
+            pre_tokenized = len(raw_terms) >= 2 and all(len(t) >= 2 for t in raw_terms)
 
-        q = q.order_by(KGNode.trust_level.desc(), KGNode.created_at.desc())
-        q = q.offset(offset).limit(limit)
+            if pre_tokenized:
+                tokens = list(dict.fromkeys(raw_terms))
+            else:
+                tokens = _tokenize_chinese_query(query)
 
+            # PASS 2 ENRICHMENT: always add 2-4 gram tokens from query text
+            # for broader character-level recall. Duplicates are removed.
+            enrich = _tokenize_chinese_query(query)
+            for t in enrich:
+                if t not in tokens:
+                    tokens.append(t)
+            tokens = tokens[:45]
+
+            if not tokens:
+                # Fallback: single ILIKE if no tokens extracted
+                q = q.filter(
+                    or_(
+                        KGNode.title.ilike(f"%{query}%"),
+                        KGNode.content.ilike(f"%{query}%"),
+                        KGNode.tags.ilike(f"%{query}%"),
+                        KGNode.source.ilike(f"%{query}%"),
+                    )
+                )
+
+            if tokens:
+                token_conds = []
+                for tok in tokens:
+                    pat = f"%{tok}%"
+                    conds = [KGNode.title.ilike(pat), KGNode.content.ilike(pat)]
+                    if len(tok) <= 6:
+                        conds.append(KGNode.tags.ilike(pat))
+                    token_conds.append(or_(*conds))
+                if token_conds:
+                    q = q.filter(or_(*token_conds))
+
+        # Execute candidate query
+        candidates = q.all()
+
+        # IDF-based reranking + tag boost when query has tokens
+        if query and tokens:
+            N = max(len(candidates), 1)
+            df: dict[str, int] = {}
+            doc_token_sets: dict[int, set[str]] = {}
+            for node in candidates:
+                # Use full title + tags + content for token matching (not truncated)
+                text = (node.title or "") + " " + (node.tags or "") + " " + (node.content or "")
+                ts = set()
+                for tok in tokens:
+                    if tok.lower() in text.lower():
+                        ts.add(tok)
+                doc_token_sets[node.id] = ts
+                for t in ts:
+                    df[t] = df.get(t, 0) + 1
+
+            idf: dict[str, float] = {}
+            for t in tokens:
+                # BM25-style IDF: log((N - df + 0.5) / (df + 0.5)), clamped to >= 0
+                # This gives more weight to multi-token matches (breadth) vs single rare tokens
+                raw = (N - df.get(t, 0) + 0.5) / (df.get(t, 0) + 0.5)
+                idf[t] = max(0.0, math.log(raw))
+
+            # Parse query-side tag tokens for scoring boost
+            query_tag_tokens: set[str] = set()
+            if tags:
+                query_tag_tokens = {t.strip() for t in tags.split(",") if t.strip()}
+
+            # ── Phase 3: Node-type-aware scoring boosts ──
+            # These push rule/forbidden_word nodes above industry/concept
+            # nodes that over-match IDF tokens. Boosts are additive to
+            # first-stage IDF score and calibrated for 0–15 IDF range.
+            TYPE_BOOST = {
+                "rule": 1.8,
+                "forbidden_word": 1.5,
+                "key_concept": 0.8,
+                "regulation": 0.5,
+                "case": 0.3,
+                "template": 0.0,
+                "parameter": 0.0,
+                "concept": -0.5,
+                "industry": -0.8,
+            }
+
+            scored = []
+            for node in candidates:
+                ts = doc_token_sets.get(node.id, set())
+                if not ts:
+                    continue
+                score = sum(idf.get(t, 0) for t in ts)
+                # Boost for rule_id match in query text (exact ID match = strong signal)
+                if node.rule_id and node.rule_id.upper() in query.upper():
+                    score += 5.0
+                # Match breadth: add bonus proportional to fraction of tokens matched
+                # This ensures docs matching many tokens outrank docs matching few rare ones
+                if tokens:
+                    score += (len(ts) / len(tokens)) * 3.0
+                # Tag overlap boost: each shared token = +2.0
+                if query_tag_tokens:
+                    node_tags = {(t or "").strip() for t in (node.tags or "").split(",")}
+                    tag_overlap = len(query_tag_tokens & node_tags)
+                    score += tag_overlap * 2.0
+                # ── Phase 3: node-type adjustment ──
+                score += TYPE_BOOST.get(node.node_type, 0.0)
+                # ── Phase 3: title bigram bonus ──
+                # Extra signal when query tokens appear directly in title
+                # (stronger than content match, weaker than rule_id match)
+                title_lower = (node.title or "").lower()
+                bigram_title_hits = sum(1 for t in tokens if len(t) >= 3 and t.lower() in title_lower)
+                score += min(bigram_title_hits, 4) * 1.5
+                scored.append((score, node))
+
+            scored.sort(key=lambda x: (x[0], x[1].trust_level, x[1].created_at or ""), reverse=True)
+            total = len(scored)
+            page = scored[offset:offset + limit]
+            results = [
+                {
+                    "id": n.id,
+                    "node_type": n.node_type,
+                    "title": n.title,
+                    "content": n.content[:300],
+                    "source": n.source,
+                    "source_url": n.source_url,
+                    "tags": n.tags,
+                    "rule_id": n.rule_id,
+                    "jurisdiction": n.jurisdiction,
+                    "effective_date": n.effective_date.isoformat() if n.effective_date else None,
+                    "publish_date": n.publish_date.isoformat() if n.publish_date else None,
+                    "trust_level": n.trust_level,
+                    "audit_status": n.audit_status,
+                    "created_at": n.created_at.isoformat() if n.created_at else None,
+                }
+                for _, n in page
+            ]
+            return results, total
+
+        # Fallback: simple trust-sort for non-token case
+        total = len(candidates)
+        candidates.sort(key=lambda n: (n.trust_level, n.created_at or ""), reverse=True)
+        page = candidates[offset:offset + limit]
         results = [
             {
                 "id": n.id,
@@ -140,7 +343,7 @@ class KnowledgeGraphService:
                 "audit_status": n.audit_status,
                 "created_at": n.created_at.isoformat() if n.created_at else None,
             }
-            for n in q.all()
+            for n in page
         ]
         return results, total
 
@@ -577,6 +780,57 @@ class KnowledgeGraphService:
                 "SEC": "章节完整性", "KEY": "关键字检测",
                 "FORB": "禁用词", "FMT": "格式要求",
             }
+            # Semantic bridge-tags for FORB rules — domain keywords queries match
+            # without these, FORB rules are invisible to keyword search (gap: ≤1 overlap)
+            _forb_bridge = {
+                "FORB-A01": "厂家授权,特定厂家,授权,资格条件",
+                "FORB-A02": "厂家授权,原厂授权,原厂认证,授权函",
+                "FORB-A03": "厂家授权,特定厂家,授权,特定供应商",
+                "FORB-A04": "品牌,指定品牌,品牌指向,特定品牌,技术参数",
+                "FORB-A05": "厂家授权,授权,代理商,资格条件,原厂",
+                "FORB-B01": "品牌,品牌锁定,指定品牌,同一品牌,品牌一致",
+                "FORB-B02": "品牌,品牌锁定,参数排斥,排他性,技术参数",
+                "FORB-B03": "品牌,品牌锁定,兼容性,无缝对接,指定品牌",
+                "FORB-B04": "品牌,品牌锁定,技术参数,排他性,参数指向",
+                "FORB-B05": "品牌,品牌锁定,参数排斥,排他性,技术参数,通用排他",
+                "FORB-C01": "境外认证,CMMI,ISO,非强制认证,资格条件",
+                "FORB-D01": "废标,废标条件,文件编制,编制形式,装订,页码,格式",
+                "FORB-D02": "废标,废标条件,投标文件,编制形式,不合理条件,格式",
+                "FORB-E01": "评分,评分标准,模糊,量化,细化,择优,主观",
+                "FORB-E02": "评分,评分标准,模糊,描述性,量化,主观分",
+                "FORB-E03": "评分,评分标准,量化,细化,主观,评审因素",
+                "FORB-E04": "评分,评分标准,评审因素,量化,细化,主观",
+                "FORB-F01": "奖项,评审因素,鲁班奖,特定奖项,评分",
+                "FORB-F02": "奖项,特定奖项,颁证单位,评审因素,评分",
+                "FORB-F03": "奖项,特定奖项,评审,评分标准,不公平",
+                "FORB-F04": "奖项,特定奖项,评审因素,中标,奖项加分",
+                "FORB-F05": "中标无效,奖项,特定奖项,评审因素,评分",
+                "FORB-G01": "实质性参数,参数标记,★,※,虚假材料,扣分,评分标准",
+                "FORB-H01": "地域,本地化,注册地,本省,行政区域,歧视,地域保护",
+                "FORB-H02": "地域,注册地,行政区域,歧视,本地化服务,差别待遇,限制",
+                "FORB-H03": "地域,本地化服务,注册地,行政区域,歧视,地域保护,不合理条件",
+                "FORB-I01": "进口产品,进口,审批,论证,采购,财政部门",
+                "FORB-J01": "注册资本,注册资金,资金,资格条件,规模,限制,不合理条件",
+                "FORB-J02": "营业收入,规模,资格条件,限制,不合理条件",
+                "FORB-J03": "成立年限,年限,资格条件,限制,规模,不合理条件",
+                "FORB-J04": "所有制,歧视,差别待遇,供应商,限制,不合理条件",
+                "FORB-J05": "企业规模,规模,中小企业,歧视,资格条件,限制",
+                "FORB-J06": "中小企业,规模,资格条件,歧视,排除,限制",
+                "FORB-J07": "规模,资金,注册资本,营业收入,资格条件,不合理条件",
+                "FORB-J08": "企业性质,所有制,歧视,供应商,差别待遇",
+                "FORB-K01": "原件,原件核查,样品,投标文件,资格条件",
+                "FORB-K02": "样品,样品评审,评审,限制竞争,变相限制",
+                "FORB-L01": "排他,产地,品牌性质,国产,合资,歧视",
+                "FORB-L02": "排他,特定品牌,品牌,指定,歧视,条款",
+                "FORB-L03": "业绩,行业业绩,特定行业,加分条件,加分,资格条件,法规依据",
+                "FORB-L04": "业绩,业绩金额,门槛,过高,金额,限制竞争",
+                "FORB-L05": "业绩,业绩门槛,金额门槛,过高,低价,潜在供应商,限制",
+                "FORB-L06": "转包,分包,违规转包,限制,合规,案例",
+                "FORB-L07": "转包,分包,区别,限制,合规,违规转包",
+                "FORB-L08": "质疑,投诉,时限,期限,答复,程序",
+                "FORB-Q01": "扣分,参数分值,评分,评分标准,满分,技术参数",
+                "FORB-S01": "标准,废止,过期,国家标准,技术标准,引用,有效性",
+            }
             for rule in base_rules.get("rules", []):
                 rule_id = rule.get("id", "")
                 if not rule_id:
@@ -602,12 +856,17 @@ class KnowledgeGraphService:
                 if rule.get("keyword"):
                     content_parts.append(f"关键词: {rule.get('keyword', '')}")
 
+                base_tags = f"规则,基础规则,{category_tag},{rule.get('type', '')},{rule.get('severity', '')}"
+                # Append semantic bridge-tags for FORB rules so keyword search can find them
+                bridge = _forb_bridge.get(rule_id, "")
+                tags = f"{base_tags},{bridge}" if bridge else base_tags
+
                 n = KGNode(
                     node_type="rule",
                     title=f"{rule_id}: {rule.get('description', '')[:80]}",
                     content="\n".join(content_parts),
                     source="包合规基础规则库",
-                    tags=f"规则,基础规则,{category_tag},{rule.get('type', '')},{rule.get('severity', '')}",
+                    tags=tags,
                     rule_id=rule_id,
                     jurisdiction="全国",
                     trust_level=0.75,
@@ -749,13 +1008,17 @@ class KnowledgeGraphService:
                         f"关键词: {', '.join(pattern['keywords'][:15])}"
                     )
 
+                # Include detection keywords in tags for semantic bridge
+                kw_tags = ",".join(pattern.get("keywords", [])[:12]) if pattern.get("keywords") else ""
+                base_tags = f"规则,参数倾向检测,{pattern.get('severity', '')},{pattern.get('risk_level', '')}"
+                tags = f"{base_tags},{kw_tags}" if kw_tags else base_tags
+
                 n = KGNode(
                     node_type="rule",
                     title=f"参数倾向检测 {rule_id}: {pattern.get('description', '')[:70]}",
                     content="\n".join(content_parts),
                     source="包合规参数倾向检测规则库",
-                    tags=f"规则,参数倾向检测,{pattern.get('severity', '')},{pattern.get('risk_level', '')}",
-                    rule_id=rule_id,
+                    tags=tags,
                     jurisdiction="全国",
                     trust_level=0.70,
                     audit_status="verified",

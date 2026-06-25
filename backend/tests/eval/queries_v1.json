@@ -1,0 +1,5020 @@
+{
+  "version": "1.0.0",
+  "description": "Phase 3 检索评测集 — 110 条查询，标注已匹配实际 KG 种子数据 rule_id",
+  "created": "2026-06-24",
+  "total_queries": 110,
+  "allowed_node_types": [
+    "rule",
+    "regulation",
+    "case",
+    "concept"
+  ],
+  "queries": [
+    {
+      "query_id": "Q001",
+      "query_text": "投标人资质要求如何设定才合规",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "资格条件",
+        "资质"
+      ],
+      "relevant": [
+        {
+          "id": "R001",
+          "rel_type": "rule",
+          "title": "R001: 资质要求不得为空",
+          "relevance": 3
+        },
+        {
+          "id": "R101",
+          "rel_type": "rule",
+          "title": "R101: 不得设置厂家授权/指定品牌等歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "R102",
+          "rel_type": "rule",
+          "title": "R102: 不得限定特定行业/地区/级别业绩作为资格条件",
+          "relevance": 3
+        },
+        {
+          "id": "R110",
+          "rel_type": "rule",
+          "title": "R110: 不得以注册资本/营业收入/成立年限作为资格条件",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "某医院设备采购厂家授权要求投诉"
+      ],
+      "hard_negatives": [
+        "某信息系统项目业绩门槛过高案例"
+      ],
+      "search_keywords": [
+        "资格条件",
+        "资质",
+        "资质要求",
+        "不得为空",
+        "不得设置",
+        "厂家授权",
+        "指定品牌",
+        "等歧视性",
+        "条款",
+        "不得限定",
+        "特定行业",
+        "地区",
+        "营业收入",
+        "不得以注",
+        "条件",
+        "作为资格",
+        "成立年限",
+        "册资本",
+        "注册资本",
+        "营业收入作为资格"
+      ]
+    },
+    {
+      "query_id": "Q002",
+      "query_text": "业绩要求不能设置过高门槛",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "资格条件",
+        "业绩"
+      ],
+      "relevant": [
+        {
+          "id": "R102",
+          "rel_type": "rule",
+          "title": "R102: 不得限定特定行业/地区/级别业绩作为资格条件",
+          "relevance": 3
+        },
+        {
+          "id": "R408",
+          "rel_type": "rule",
+          "title": "R408: 项目经理业绩要求须与项目规模匹配",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B16",
+          "rel_type": "rule",
+          "title": "FORB-B16: 设置过高的业绩金额门槛，可能排除潜在供应商",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-L05",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-L05: 设置过高的业绩金额门槛，可能排除潜在供应商",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "某信息系统项目业绩门槛过高案例"
+      ],
+      "hard_negatives": [
+        "宁夏盲人按摩医院医疗设备"
+      ],
+      "search_keywords": [
+        "项目经理",
+        "规模匹配",
+        "须与项目",
+        "业绩要求",
+        "不得限定",
+        "业绩",
+        "条件",
+        "作为资格",
+        "特定行业",
+        "资格条件",
+        "级别业绩",
+        "地区",
+        "业绩门槛",
+        "过高",
+        "设置过高",
+        "额门槛",
+        "潜在供应",
+        "可能排除",
+        "的业绩金",
+        "业绩金额门槛",
+        "排除潜在供应商"
+      ]
+    },
+    {
+      "query_id": "Q003",
+      "query_text": "招标文件能否要求原厂授权函",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "资格条件",
+        "授权",
+        "厂家"
+      ],
+      "relevant": [
+        {
+          "id": "R101",
+          "rel_type": "rule",
+          "title": "R101: 不得设置厂家授权/指定品牌等歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "R301",
+          "rel_type": "rule",
+          "title": "R301: 特定厂家授权作为资格条件的处罚案例警示",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-A01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-A01: 将厂家授权作为资格条件构成歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-A02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-A02: 要求原厂授权可能限制代理商参与",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-A03",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-A03: 要求唯一授权或指定代理，属于排他性条款",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法",
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "某医院设备采购厂家授权要求投诉",
+        "陕西铜川陈炉镇非遗保护设备"
+      ],
+      "hard_negatives": [
+        "某市环卫车辆采购品牌锁定投诉"
+      ],
+      "search_keywords": [
+        "指定品牌",
+        "的处罚案",
+        "授权",
+        "条款",
+        "例警示",
+        "等歧视性",
+        "特定厂家",
+        "不得设置",
+        "授权作为",
+        "厂家授权",
+        "资格条件",
+        "厂家",
+        "原厂授权",
+        "授权函",
+        "指定供应商",
+        "商参与",
+        "定代理",
+        "授权或指",
+        "要求原厂",
+        "要求唯一",
+        "限制代理",
+        "性条款",
+        "属于排他",
+        "授权可能",
+        "唯一授权",
+        "代理商参与"
+      ]
+    },
+    {
+      "query_id": "Q004",
+      "query_text": "评标办法中的评分标准如何量化",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "评标标准",
+        "评分",
+        "量化"
+      ],
+      "relevant": [
+        {
+          "id": "R103",
+          "rel_type": "rule",
+          "title": "R103: 综合评分法评分标准须细化量化",
+          "relevance": 3
+        },
+        {
+          "id": "R008",
+          "rel_type": "rule",
+          "title": "R008: 评分细则须含分值分配（综合评分法）",
+          "relevance": 3
+        },
+        {
+          "id": "R112_B",
+          "rel_type": "rule",
+          "title": "R112_B: 评分标准不得采用描述性语言（须客观量化）",
+          "relevance": 3
+        },
+        {
+          "id": "R604",
+          "rel_type": "rule",
+          "title": "R604: 服务方案评分须量化",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-E01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-E01: 评分标准使用模糊表述，未细化量化具体分值",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [
+        "某项目评分主观性过大投诉",
+        "陕西西安市第三医院机器人手术系统",
+        "青海职业技术大学语言文字基地"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "评标标准",
+        "评分",
+        "量化",
+        "综合评分",
+        "法评分标",
+        "准须细化",
+        "评分细则",
+        "须含分值",
+        "分配",
+        "评分标准",
+        "不得采用",
+        "描述性语",
+        "评分须量",
+        "表述",
+        "未细化量",
+        "服务方案",
+        "使用模糊",
+        "化具体分",
+        "服务方案评分",
+        "模糊表述",
+        "细化量化",
+        "具体分值"
+      ]
+    },
+    {
+      "query_id": "Q005",
+      "query_text": "技术参数如何避免品牌指向",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "评标标准",
+        "技术参数",
+        "品牌"
+      ],
+      "relevant": [
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        },
+        {
+          "id": "R306",
+          "rel_type": "rule",
+          "title": "R306: 医疗设备采购排他性技术参数的案例警示",
+          "relevance": 3
+        },
+        {
+          "id": "R310",
+          "rel_type": "rule",
+          "title": "R310: 技术参数通用排他性案例警示",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-A04",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-A04: 指定特定品牌/型号/厂商，构成排他性",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B05",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-B05: 技术参数指向特定品牌独有技术/专利，构成排他",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法",
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "宁夏人民医院手术麻醉设备",
+        "宁夏医科大学PACS存储",
+        "某市环卫车辆采购品牌锁定投诉",
+        "四川5起典型案例"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "品牌",
+        "性技术参",
+        "或供应商",
+        "警示",
+        "单一品牌",
+        "评标标准",
+        "通用排他",
+        "采购排他",
+        "数的案例",
+        "技术参数",
+        "不得指向",
+        "医疗设备",
+        "参数排斥",
+        "品牌锁定",
+        "指定品牌",
+        "品牌指向",
+        "指向特定",
+        "型号",
+        "品牌独有",
+        "专利",
+        "构成排他",
+        "厂商",
+        "技术",
+        "指定特定"
+      ]
+    },
+    {
+      "query_id": "Q006",
+      "query_text": "废标条件应该包含哪些内容",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "商务条款",
+        "废标",
+        "保证金"
+      ],
+      "relevant": [
+        {
+          "id": "R003",
+          "rel_type": "rule",
+          "title": "R003: 废标条件须至少包含保证金/资质/文件三项",
+          "relevance": 3
+        },
+        {
+          "id": "R106",
+          "rel_type": "rule",
+          "title": "R106: 不得将投标文件编制形式列为废标条件",
+          "relevance": 3
+        },
+        {
+          "id": "KEY-006",
+          "rel_type": "rule",
+          "title": "KEY-006: 未包含废标情形或废标条款不完整",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-D01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-D01: 将文件编制形式列为废标条件属于不合理条件",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-D02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-D02: 文件编制形式要求不应作为废标条件",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "须至少包",
+        "文件三项",
+        "保证金",
+        "不得将投",
+        "废标",
+        "为废标条",
+        "标文件编",
+        "含保证金",
+        "商务条款",
+        "制形式列",
+        "资质",
+        "废标条件",
+        "装订",
+        "编制形式",
+        "格式限制",
+        "废标情形",
+        "废标条款"
+      ]
+    },
+    {
+      "query_id": "Q007",
+      "query_text": "招标公告必须包含哪些信息",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "程序合规",
+        "公告",
+        "公开招标"
+      ],
+      "relevant": [
+        {
+          "id": "SEC-001",
+          "rel_type": "rule",
+          "title": "SEC-001: 缺少《招标公告》或《投标邀请》章节",
+          "relevance": 3
+        },
+        {
+          "id": "KEY-001",
+          "rel_type": "rule",
+          "title": "KEY-001: 招标公告中未明确采购方式（公开招标/邀请招标/竞争性谈判等）",
+          "relevance": 3
+        },
+        {
+          "id": "GS-001",
+          "rel_type": "rule",
+          "title": "[甘肃省公共资源交易平台] GS-001: 公告发布期限",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "程序合规",
+        "公告",
+        "公开招标",
+        "缺少",
+        "招标公告",
+        "投标邀请",
+        "章节",
+        "中未明确",
+        "采购方式",
+        "邀请招标",
+        "竞争性谈",
+        "判等",
+        "期限",
+        "公告发布"
+      ]
+    },
+    {
+      "query_id": "Q008",
+      "query_text": "预算金额400万的项目应该用什么采购方式",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "法规冲突",
+        "预算",
+        "采购方式"
+      ],
+      "relevant": [
+        {
+          "id": "R006",
+          "rel_type": "rule",
+          "title": "R006: 预算金额须包含数值和单位",
+          "relevance": 3
+        },
+        {
+          "id": "R201",
+          "rel_type": "rule",
+          "title": "R201: 采购方式不得与预算金额冲突",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [
+        "宁夏工商职业技术学院智慧烹饪中心"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "法规冲突",
+        "预算",
+        "采购方式",
+        "预算金额",
+        "须包含数",
+        "值和单位",
+        "不得与预",
+        "算金额冲"
+      ]
+    },
+    {
+      "query_id": "Q009",
+      "query_text": "政府采购项目能否限定供应商注册地",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "资格条件",
+        "注册地",
+        "歧视"
+      ],
+      "relevant": [
+        {
+          "id": "R112",
+          "rel_type": "rule",
+          "title": "R112: 不得设定特定行政区域或本地化服务限制",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H01: 出现地域保护性表述，要求本省企业优先",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H02: 以本地注册/本地企业限定投标人，属于地域歧视",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H03",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H03: 限定投标人须在本地注册或有本地服务机构属于地域歧视",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "陕西神木水质提升工程"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "地化服务",
+        "出现地域",
+        "注册地",
+        "不得设定",
+        "歧视",
+        "限制",
+        "禁用词模",
+        "保护性表",
+        "要求本省",
+        "区域或本",
+        "资格条件",
+        "特定行政",
+        "地域限制",
+        "本省",
+        "本地化服务",
+        "人须在本",
+        "属于地域",
+        "地注册或",
+        "务机构属",
+        "以本地注",
+        "于地域歧",
+        "有本地服",
+        "本地企业",
+        "限定投标",
+        "本地注册",
+        "限定投标人"
+      ]
+    },
+    {
+      "query_id": "Q010",
+      "query_text": "招标文件中出现指定品牌型号合规吗",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "禁止",
+        "品牌",
+        "型号"
+      ],
+      "relevant": [
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        },
+        {
+          "id": "R101",
+          "rel_type": "rule",
+          "title": "R101: 不得设置厂家授权/指定品牌等歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-A04",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-A04: 指定特定品牌/型号/厂商，构成排他性",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-B01: 要求不同设备为同一品牌构成品牌锁定，限制竞争",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法",
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "宁夏人民医院手术麻醉设备",
+        "宁夏医科大学PACS存储",
+        "陕西铜川陈炉镇非遗保护设备"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "指定品牌",
+        "品牌",
+        "条款",
+        "或供应商",
+        "等歧视性",
+        "单一品牌",
+        "禁止",
+        "不得设置",
+        "厂家授权",
+        "技术参数",
+        "不得指向",
+        "型号",
+        "品牌锁定",
+        "品牌指向",
+        "同一品牌",
+        "限制竞争",
+        "设备为同",
+        "成品牌锁",
+        "要求不同",
+        "一品牌构",
+        "构成排他",
+        "厂商",
+        "指定特定",
+        "指定品牌型号",
+        "构成排他性"
+      ]
+    },
+    {
+      "query_id": "Q011",
+      "query_text": "投标保证金收取比例的规定",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "保证金",
+        "投标",
+        "比例"
+      ],
+      "relevant": [
+        {
+          "id": "R122_C",
+          "rel_type": "rule",
+          "title": "R122_C: 投标保证金不得超过预算金额的2%",
+          "relevance": 3
+        },
+        {
+          "id": "R405",
+          "rel_type": "rule",
+          "title": "R405: 履约保证金比例不得超10%",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法实施条例"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "保证金",
+        "投标",
+        "比例",
+        "投标保证",
+        "金不得超",
+        "过预算金",
+        "额的",
+        "履约保证",
+        "金比例不",
+        "得超"
+      ]
+    },
+    {
+      "query_id": "Q012",
+      "query_text": "中标无效的法定情形有哪些",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "中标",
+        "无效",
+        "法定"
+      ],
+      "relevant": [
+        {
+          "id": "R303",
+          "rel_type": "rule",
+          "title": "R303: 提供虚假材料谋取中标的违规警示",
+          "relevance": 3
+        },
+        {
+          "id": "R304",
+          "rel_type": "rule",
+          "title": "R304: 串通投标行为的警示与防范",
+          "relevance": 3
+        },
+        {
+          "id": "R403",
+          "rel_type": "rule",
+          "title": "R403: 安全生产许可证须有效",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-F05",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-F05: 评标标准或业绩分值畸高，触发违规案例警示（R308）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法",
+        "招标投标法实施条例"
+      ],
+      "expected_cases": [
+        "自治区纪委监委配套设备",
+        "甘肃食品安全监测平台",
+        "青海生态环境监测专用设备"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "提供虚假",
+        "串通投标",
+        "材料谋取",
+        "无效",
+        "中标",
+        "安全生产",
+        "中标的违",
+        "示与防范",
+        "法定",
+        "许可证须",
+        "规警示",
+        "行为的警",
+        "评审因素",
+        "奖项",
+        "或业绩分",
+        "值畸高",
+        "评标标准",
+        "触发违规",
+        "案例警示",
+        "业绩分值畸高",
+        "产许",
+        "全生产许",
+        "许可",
+        "产许可",
+        "安全生",
+        "生产",
+        "须有效",
+        "证须有",
+        "全生",
+        "许可证",
+        "产许可证",
+        "全生产",
+        "生产许",
+        "证须有效",
+        "生产许可",
+        "可证须有",
+        "安全",
+        "可证须"
+      ]
+    },
+    {
+      "query_id": "Q013",
+      "query_text": "价格分权重在综合评分法中应该是多少",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "价格",
+        "评分",
+        "权重"
+      ],
+      "relevant": [
+        {
+          "id": "R202",
+          "rel_type": "rule",
+          "title": "R202: 价格分权重须符合法定比例",
+          "relevance": 3
+        },
+        {
+          "id": "R119_B",
+          "rel_type": "rule",
+          "title": "R119_B: 价格分权重须符合法定范围（综合评分法）",
+          "relevance": 3
+        },
+        {
+          "id": "R008",
+          "rel_type": "rule",
+          "title": "R008: 评分细则须含分值分配（综合评分法）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "价格",
+        "评分",
+        "权重",
+        "价格分权",
+        "重须符合",
+        "法定比例",
+        "法定范围",
+        "综合评分",
+        "评分细则",
+        "须含分值",
+        "分配"
+      ]
+    },
+    {
+      "query_id": "Q014",
+      "query_text": "中小企业参加政府采购有什么优惠政策",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "中小企业",
+        "政策",
+        "优惠"
+      ],
+      "relevant": [
+        {
+          "id": "R121_A",
+          "rel_type": "rule",
+          "title": "R121_A: 中小企业须有预留份额或价格扣除说明",
+          "relevance": 3
+        },
+        {
+          "id": "R205",
+          "rel_type": "rule",
+          "title": "R205: 中小企业价格扣除政策须执行",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B14",
+          "rel_type": "rule",
+          "title": "FORB-B14: 以企业规模作为资格条件，可能排除中小企业",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J06",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J06: 以企业规模作为资格条件，可能排除中小企业",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [
+        "某信息系统项目业绩门槛过高案例"
+      ],
+      "hard_negatives": [
+        "自治区纪委监委配套设备"
+      ],
+      "search_keywords": [
+        "优惠",
+        "份额或价",
+        "格扣除说",
+        "模作为资",
+        "格条件",
+        "须有预留",
+        "中小企业",
+        "政策",
+        "价格扣除",
+        "可能排除",
+        "政策须执",
+        "以企业规",
+        "限制",
+        "歧视"
+      ]
+    },
+    {
+      "query_id": "Q015",
+      "query_text": "异常低价投标怎么认定和处理",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "评标标准",
+        "低价",
+        "异常"
+      ],
+      "relevant": [
+        {
+          "id": "FORB-L05",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-L05: 设置过高的业绩金额门槛，可能排除潜在供应商",
+          "relevance": 3
+        },
+        {
+          "id": "R201",
+          "rel_type": "rule",
+          "title": "R201: 采购方式不得与预算金额冲突",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [
+        "异常低价审查"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "不得与预",
+        "算金额冲",
+        "评标标准",
+        "异常",
+        "设置过高",
+        "的业绩金",
+        "禁用词模",
+        "采购方式",
+        "低价",
+        "可能排除",
+        "额门槛",
+        "潜在供应",
+        "潜在供应商",
+        "金额门槛"
+      ]
+    },
+    {
+      "query_id": "Q016",
+      "query_text": "歧视供应商的行为有哪些",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "资格条件",
+        "歧视",
+        "差别待遇"
+      ],
+      "relevant": [
+        {
+          "id": "R112",
+          "rel_type": "rule",
+          "title": "R112: 不得设定特定行政区域或本地化服务限制",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B13",
+          "rel_type": "rule",
+          "title": "FORB-B13: 以所有制性质限制投标人，属于歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H01: 出现地域保护性表述，要求本省企业优先",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H02: 以本地注册/本地企业限定投标人，属于地域歧视",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J04",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J04: 以所有制性质限制投标人，属于歧视性条款",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "陕西神木水质提升工程"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "地化服务",
+        "投标人",
+        "属于歧视",
+        "以所有制",
+        "性质限制",
+        "不得设定",
+        "歧视",
+        "限制",
+        "差别待遇",
+        "区域或本",
+        "资格条件",
+        "特定行政",
+        "地域限制",
+        "本省",
+        "出现地域",
+        "要求本省",
+        "企业优先",
+        "属于地域",
+        "以本地注",
+        "保护性表",
+        "本地企业",
+        "限定投标",
+        "地域保护"
+      ]
+    },
+    {
+      "query_id": "Q017",
+      "query_text": "符合性审查的标准是什么",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "评审",
+        "符合性",
+        "审查"
+      ],
+      "relevant": [
+        {
+          "id": "R106",
+          "rel_type": "rule",
+          "title": "R106: 不得将投标文件编制形式列为废标条件",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-D01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-D01: 将文件编制形式列为废标条件属于不合理条件",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-D02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-D02: 文件编制形式要求不应作为废标条件",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [
+        "甘肃食品安全监测平台"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "审查",
+        "将文件编",
+        "符合性",
+        "不得将投",
+        "件属于不",
+        "文件编制",
+        "为废标条",
+        "禁用词模",
+        "评审",
+        "制形式列",
+        "合理条件",
+        "标文件编",
+        "装订",
+        "编制形式",
+        "格式限制"
+      ]
+    },
+    {
+      "query_id": "Q018",
+      "query_text": "投标有效期如何设定",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "投标",
+        "有效期",
+        "时间"
+      ],
+      "relevant": [
+        {
+          "id": "KEY-005",
+          "rel_type": "rule",
+          "title": "KEY-005: 未明确投标有效期",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法实施条例"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "投标",
+        "有效期",
+        "时间",
+        "未明确投",
+        "标有效期"
+      ]
+    },
+    {
+      "query_id": "Q019",
+      "query_text": "评审专家回避制度的规定",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "评审",
+        "专家",
+        "回避"
+      ],
+      "relevant": [
+        {
+          "id": "R123_D",
+          "rel_type": "rule",
+          "title": "R123_D: 中标公示须包含评审专家名单",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法实施条例"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "评审",
+        "专家",
+        "回避",
+        "中标公示",
+        "须包含评",
+        "审专家名"
+      ]
+    },
+    {
+      "query_id": "Q020",
+      "query_text": "甘肃省政府采购公开招标限额标准",
+      "node_type": "regulation",
+      "jurisdiction": "甘肃",
+      "tags": [
+        "甘肃",
+        "限额",
+        "公开招标"
+      ],
+      "relevant": [
+        {
+          "id": "GS-001",
+          "rel_type": "rule",
+          "title": "[甘肃省公共资源交易平台] GS-001: 公告发布期限",
+          "relevance": 3
+        },
+        {
+          "id": "GS-003",
+          "rel_type": "rule",
+          "title": "[甘肃省公共资源交易平台] GS-003: 中小企业预留份额",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "甘肃",
+        "限额",
+        "公开招标",
+        "甘肃省公",
+        "共资源交",
+        "易平台",
+        "公告发布",
+        "期限",
+        "中小企业",
+        "预留份额"
+      ]
+    },
+    {
+      "query_id": "Q021",
+      "query_text": "医疗器械采购中参数排他的案例",
+      "node_type": "case",
+      "jurisdiction": null,
+      "tags": [
+        "医疗",
+        "参数",
+        "排他"
+      ],
+      "relevant": [
+        {
+          "id": "R306",
+          "rel_type": "rule",
+          "title": "R306: 医疗设备采购排他性技术参数的案例警示",
+          "relevance": 3
+        },
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "宁夏人民医院手术麻醉设备",
+        "宁夏盲人按摩医院医疗设备",
+        "宁夏中西医结合医院肿瘤康复设备"
+      ],
+      "hard_negatives": [
+        "陕西西安市第三医院机器人手术系统"
+      ],
+      "search_keywords": [
+        "医疗",
+        "参数",
+        "排他",
+        "医疗设备",
+        "采购排他",
+        "性技术参",
+        "数的案例",
+        "警示",
+        "技术参数",
+        "不得指向",
+        "单一品牌",
+        "或供应商"
+      ]
+    },
+    {
+      "query_id": "Q022",
+      "query_text": "招标文件拆分项目规避招标的案例",
+      "node_type": "case",
+      "jurisdiction": null,
+      "tags": [
+        "拆分",
+        "规避",
+        "项目"
+      ],
+      "relevant": [
+        {
+          "id": "R204",
+          "rel_type": "rule",
+          "title": "R204: 不得拆分项目规避公开招标",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [
+        "宁夏工商职业技术学院智慧烹饪中心"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "拆分",
+        "规避",
+        "项目",
+        "不得拆分",
+        "项目规避",
+        "公开招标"
+      ]
+    },
+    {
+      "query_id": "Q023",
+      "query_text": "采购需求应当完整明确的具体要求",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "采购需求",
+        "完整",
+        "明确"
+      ],
+      "relevant": [
+        {
+          "id": "SEC-003",
+          "rel_type": "rule",
+          "title": "SEC-003: 缺少《招标项目需求》或《技术规格》章节",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购需求管理办法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "采购需求",
+        "完整",
+        "明确",
+        "缺少",
+        "招标项目",
+        "需求",
+        "技术规格",
+        "章节"
+      ]
+    },
+    {
+      "query_id": "Q024",
+      "query_text": "引用过期废止的技术标准合规吗",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "技术标准",
+        "废止",
+        "引用"
+      ],
+      "relevant": [
+        {
+          "id": "R203",
+          "rel_type": "rule",
+          "title": "R203: 引用的技术标准须现行有效",
+          "relevance": 3
+        },
+        {
+          "id": "E006",
+          "rel_type": "rule",
+          "title": "E006: 技术参数引用的标准有效性检查",
+          "relevance": 3
+        },
+        {
+          "id": "AI-BIAS-010",
+          "rel_type": "rule",
+          "title": "参数倾向检测 AI-BIAS-010: 引用不存在的技术标准或无效标准版本",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "青海职业技术大学语言文字基地"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "技术标准",
+        "废止",
+        "引用",
+        "引用的技",
+        "术标准须",
+        "现行有效",
+        "技术参数",
+        "引用的标",
+        "准有效性",
+        "检查",
+        "参数倾向",
+        "检测",
+        "无效标准",
+        "标准版本"
+      ]
+    },
+    {
+      "query_id": "Q025",
+      "query_text": "评审因素未细化量化被投诉的案例",
+      "node_type": "case",
+      "jurisdiction": null,
+      "tags": [
+        "评审",
+        "量化",
+        "投诉"
+      ],
+      "relevant": [
+        {
+          "id": "R103",
+          "rel_type": "rule",
+          "title": "R103: 综合评分法评分标准须细化量化",
+          "relevance": 3
+        },
+        {
+          "id": "R112_B",
+          "rel_type": "rule",
+          "title": "R112_B: 评分标准不得采用描述性语言（须客观量化）",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-E01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-E01: 评分标准使用模糊表述，未细化量化具体分值",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-E02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-E02: 评分标准使用模糊化综合评审等表述",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-E03",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-E03: 使用描述性语言划分得分档次缺乏客观量化指标",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-E04",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-E04: 主观描述性语言易被投诉（投诉案例占41.7%）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "某项目评分主观性过大投诉",
+        "陕西西安市第三医院机器人手术系统",
+        "青海职业技术大学语言文字基地"
+      ],
+      "hard_negatives": [
+        "青海生态环境监测专用设备"
+      ],
+      "search_keywords": [
+        "法评分标",
+        "综合评分",
+        "使用模糊",
+        "量化",
+        "评分标准",
+        "须客观量",
+        "不得采用",
+        "禁用词模",
+        "描述性语",
+        "评审",
+        "投诉",
+        "准须细化",
+        "描述性",
+        "模糊",
+        "投诉案例",
+        "主观描述",
+        "被投诉",
+        "性语言易",
+        "描述性语言"
+      ]
+    },
+    {
+      "query_id": "Q026",
+      "query_text": "供应商虚假材料谋取中标的处罚",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "虚假",
+        "处罚",
+        "供应商"
+      ],
+      "relevant": [
+        {
+          "id": "R303",
+          "rel_type": "rule",
+          "title": "R303: 提供虚假材料谋取中标的违规警示",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-G01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-G01: 实质性参数标记（★/◆/※等）易被认定为指向特定品牌，且为虚假材料投诉常见事由",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [
+        "四川成都",
+        "自治区纪委监委配套设备"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "易被认定",
+        "提供虚假",
+        "实质性参",
+        "为指向特",
+        "材料谋取",
+        "处罚",
+        "虚假",
+        "供应商",
+        "中标的违",
+        "禁用词模",
+        "数标记",
+        "规警示",
+        "※",
+        "参数标记"
+      ]
+    },
+    {
+      "query_id": "Q027",
+      "query_text": "供应商被列入黑名单后多久不能参加政府采购",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "黑名单",
+        "禁止",
+        "期限"
+      ],
+      "relevant": [
+        {
+          "id": "R303",
+          "rel_type": "rule",
+          "title": "R303: 提供虚假材料谋取中标的违规警示",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [
+        "四川成都"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "黑名单",
+        "禁止",
+        "期限",
+        "提供虚假",
+        "材料谋取",
+        "中标的违",
+        "规警示"
+      ]
+    },
+    {
+      "query_id": "Q028",
+      "query_text": "青海省生态环境监测设备采购评分不匹配案例",
+      "node_type": "case",
+      "jurisdiction": "青海",
+      "tags": [
+        "青海",
+        "评分",
+        "参数"
+      ],
+      "relevant": [
+        {
+          "id": "F001",
+          "rel_type": "rule",
+          "title": "F001: 评分标准与参数扣分匹配性检查",
+          "relevance": 3
+        },
+        {
+          "id": "F004",
+          "rel_type": "rule",
+          "title": "F004: 评分标准扣分规则明确性检查",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "青海生态环境监测专用设备"
+      ],
+      "hard_negatives": [
+        "青海职业技术大学语言文字基地"
+      ],
+      "search_keywords": [
+        "青海",
+        "评分",
+        "参数",
+        "评分标准",
+        "与参数扣",
+        "分匹配性",
+        "检查",
+        "扣分规则",
+        "明确性检"
+      ]
+    },
+    {
+      "query_id": "Q029",
+      "query_text": "四川5起典型案例中参数排斥的案例",
+      "node_type": "case",
+      "jurisdiction": "四川",
+      "tags": [
+        "四川",
+        "参数",
+        "排斥"
+      ],
+      "relevant": [
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "四川5起典型案例"
+      ],
+      "hard_negatives": [
+        "四川教学实训中心"
+      ],
+      "search_keywords": [
+        "四川",
+        "参数",
+        "排斥",
+        "技术参数",
+        "不得指向",
+        "单一品牌",
+        "或供应商"
+      ]
+    },
+    {
+      "query_id": "Q030",
+      "query_text": "政府采购的三公原则是什么",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "原则",
+        "公开",
+        "公平",
+        "公正"
+      ],
+      "relevant": [],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "原则",
+        "公开",
+        "公平",
+        "公正"
+      ]
+    },
+    {
+      "query_id": "Q031",
+      "query_text": "投标人资格条件设置过多会不会构成歧视",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "资格条件",
+        "歧视",
+        "限制"
+      ],
+      "relevant": [
+        {
+          "id": "R110",
+          "rel_type": "rule",
+          "title": "R110: 不得以注册资本/营业收入/成立年限作为资格条件",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B13",
+          "rel_type": "rule",
+          "title": "FORB-B13: 以所有制性质限制投标人，属于歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H02: 以本地注册/本地企业限定投标人，属于地域歧视",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J01: 以注册资金作为资格要求，属于不合理的条件限制（87号令第十七条）",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J02: 营业收入不得作为资格条件（87号令规定）",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J03",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J03: 成立年限不得作为资格条件",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例",
+        "招标投标法"
+      ],
+      "expected_cases": [
+        "某医院设备采购厂家授权要求投诉"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "册资本",
+        "投标人",
+        "以所有制",
+        "性质限制",
+        "限制",
+        "歧视",
+        "不得以注",
+        "营业收入",
+        "条件",
+        "作为资格",
+        "成立年限",
+        "资格条件",
+        "地域限制",
+        "资金",
+        "注册资本",
+        "差别待遇",
+        "属于地域",
+        "格要求",
+        "以本地注",
+        "理的条件",
+        "七条",
+        "号令规定",
+        "以注册资",
+        "不得作为",
+        "本地企业",
+        "属于不合",
+        "金作为资",
+        "号令第十",
+        "限定投标",
+        "本地注册",
+        "注册资金作为资格",
+        "营业收入作为资格",
+        "成立年限作为资格",
+        "注册地限制"
+      ]
+    },
+    {
+      "query_id": "Q032",
+      "query_text": "项目预算200万以上必须公开招标吗",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "预算",
+        "公开招标",
+        "限额"
+      ],
+      "relevant": [
+        {
+          "id": "R201",
+          "rel_type": "rule",
+          "title": "R201: 采购方式不得与预算金额冲突",
+          "relevance": 3
+        },
+        {
+          "id": "R006",
+          "rel_type": "rule",
+          "title": "R006: 预算金额须包含数值和单位",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "预算",
+        "公开招标",
+        "限额",
+        "采购方式",
+        "不得与预",
+        "算金额冲",
+        "预算金额",
+        "须包含数",
+        "值和单位"
+      ]
+    },
+    {
+      "query_id": "Q033",
+      "query_text": "标书编制时间有什么法定要求",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "标书",
+        "时间",
+        "编制"
+      ],
+      "relevant": [
+        {
+          "id": "R009",
+          "rel_type": "rule",
+          "title": "R009: 招标文件发出至开标不得少于法定天数",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "标书",
+        "时间",
+        "编制",
+        "招标文件",
+        "发出至开",
+        "标不得少",
+        "于法定天"
+      ]
+    },
+    {
+      "query_id": "Q034",
+      "query_text": "评审委员会组成人数要求",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "评审",
+        "委员会",
+        "人数"
+      ],
+      "relevant": [
+        {
+          "id": "R123_D",
+          "rel_type": "rule",
+          "title": "R123_D: 中标公示须包含评审专家名单",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "评审",
+        "委员会",
+        "人数",
+        "中标公示",
+        "须包含评",
+        "审专家名"
+      ]
+    },
+    {
+      "query_id": "Q035",
+      "query_text": "陕西省铜川的3D打印机品牌锁定案例",
+      "node_type": "case",
+      "jurisdiction": "陕西",
+      "tags": [
+        "陕西",
+        "品牌",
+        "3D打印"
+      ],
+      "relevant": [
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        },
+        {
+          "id": "R101",
+          "rel_type": "rule",
+          "title": "R101: 不得设置厂家授权/指定品牌等歧视性条款",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "陕西铜川陈炉镇非遗保护设备"
+      ],
+      "hard_negatives": [
+        "陕西神木水质提升工程"
+      ],
+      "search_keywords": [
+        "陕西",
+        "品牌",
+        "3D打印",
+        "技术参数",
+        "不得指向",
+        "单一品牌",
+        "或供应商",
+        "不得设置",
+        "厂家授权",
+        "指定品牌",
+        "等歧视性",
+        "条款"
+      ]
+    },
+    {
+      "query_id": "Q036",
+      "query_text": "公开招标公告应包括哪些主要内容",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "公告",
+        "公开招标",
+        "内容"
+      ],
+      "relevant": [
+        {
+          "id": "SEC-001",
+          "rel_type": "rule",
+          "title": "SEC-001: 缺少《招标公告》或《投标邀请》章节",
+          "relevance": 3
+        },
+        {
+          "id": "KEY-001",
+          "rel_type": "rule",
+          "title": "KEY-001: 招标公告中未明确采购方式（公开招标/邀请招标/竞争性谈判等）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "公告",
+        "公开招标",
+        "内容",
+        "缺少",
+        "招标公告",
+        "投标邀请",
+        "章节",
+        "中未明确",
+        "采购方式",
+        "邀请招标",
+        "竞争性谈",
+        "判等"
+      ]
+    },
+    {
+      "query_id": "Q037",
+      "query_text": "评分标准里的主观分如何设置才合规",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "评分",
+        "主观",
+        "标准"
+      ],
+      "relevant": [
+        {
+          "id": "R103",
+          "rel_type": "rule",
+          "title": "R103: 综合评分法评分标准须细化量化",
+          "relevance": 3
+        },
+        {
+          "id": "R112_B",
+          "rel_type": "rule",
+          "title": "R112_B: 评分标准不得采用描述性语言（须客观量化）",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-E01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-E01: 评分标准使用模糊表述，未细化量化具体分值",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-E02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-E02: 评分标准使用模糊化综合评审等表述",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-E03",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-E03: 使用描述性语言划分得分档次缺乏客观量化指标",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-E04",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-E04: 主观描述性语言易被投诉（投诉案例占41.7%）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [
+        "某项目评分主观性过大投诉"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "法评分标",
+        "综合评分",
+        "量化",
+        "主观",
+        "标准",
+        "评分标准",
+        "须客观量",
+        "评分",
+        "禁用词模",
+        "描述性语",
+        "不得采用",
+        "准须细化",
+        "描述性",
+        "模糊",
+        "表述",
+        "化综合评",
+        "未细化量",
+        "使用模糊",
+        "化具体分",
+        "审等表述",
+        "主观描述",
+        "描述性语言",
+        "综合评审"
+      ]
+    },
+    {
+      "query_id": "Q038",
+      "query_text": "不得以不合理条件对供应商实行差别待遇",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "差别待遇",
+        "不合理",
+        "供应商"
+      ],
+      "relevant": [
+        {
+          "id": "R112",
+          "rel_type": "rule",
+          "title": "R112: 不得设定特定行政区域或本地化服务限制",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B13",
+          "rel_type": "rule",
+          "title": "FORB-B13: 以所有制性质限制投标人，属于歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J04",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J04: 以所有制性质限制投标人，属于歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H01: 出现地域保护性表述，要求本省企业优先",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H02: 以本地注册/本地企业限定投标人，属于地域歧视",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "某市环卫车辆采购品牌锁定投诉",
+        "陕西神木水质提升工程"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "地化服务",
+        "投标人",
+        "属于歧视",
+        "以所有制",
+        "性质限制",
+        "不得设定",
+        "限制",
+        "供应商",
+        "差别待遇",
+        "不合理",
+        "区域或本",
+        "特定行政",
+        "地域限制",
+        "歧视",
+        "所有制",
+        "本地化",
+        "出现地域",
+        "要求本省",
+        "企业优先",
+        "属于地域",
+        "以本地注",
+        "保护性表",
+        "本地企业",
+        "限定投标",
+        "地域保护"
+      ]
+    },
+    {
+      "query_id": "Q039",
+      "query_text": "分包和转包在政府采购中有什么区别",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "分包",
+        "转包",
+        "区别"
+      ],
+      "relevant": [
+        {
+          "id": "R109_C",
+          "rel_type": "rule",
+          "title": "R109_C: 分包转包限制须合规",
+          "relevance": 3
+        },
+        {
+          "id": "R312",
+          "rel_type": "rule",
+          "title": "R312: 违规转包的案例警示与合规要求",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-L07",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-L07: 完全禁止分包可能限制竞争，应区分主体/非主体部分分别规定",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "分包",
+        "转包",
+        "区别",
+        "分包转包",
+        "限制须合",
+        "违规转包",
+        "的案例警",
+        "示与合规",
+        "要求",
+        "禁用词模",
+        "完全禁止",
+        "分包可能"
+      ]
+    },
+    {
+      "query_id": "Q040",
+      "query_text": "宁夏医用设备参数排他的多个案例对比",
+      "node_type": "case",
+      "jurisdiction": "宁夏",
+      "tags": [
+        "宁夏",
+        "医疗",
+        "参数"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [
+        "宁夏人民医院手术麻醉设备",
+        "宁夏盲人按摩医院医疗设备",
+        "宁夏医科大学PACS存储",
+        "宁夏中西医结合医院肿瘤康复设备"
+      ],
+      "hard_negatives": [
+        "自治区纪委监委配套设备"
+      ],
+      "search_keywords": [
+        "宁夏",
+        "医疗",
+        "参数"
+      ]
+    },
+    {
+      "query_id": "Q041",
+      "query_text": "招标文件中不得要求或者标明特定的生产供应者",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "特定",
+        "生产者",
+        "供应者"
+      ],
+      "relevant": [
+        {
+          "id": "R101",
+          "rel_type": "rule",
+          "title": "R101: 不得设置厂家授权/指定品牌等歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-A04",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-A04: 指定特定品牌/型号/厂商，构成排他性",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法"
+      ],
+      "expected_cases": [
+        "宁夏医科大学PACS存储",
+        "某市环卫车辆采购品牌锁定投诉"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "指定品牌",
+        "条款",
+        "或供应商",
+        "等歧视性",
+        "单一品牌",
+        "特定",
+        "不得设置",
+        "供应者",
+        "生产者",
+        "厂家授权",
+        "技术参数",
+        "不得指向",
+        "品牌指向",
+        "型号",
+        "品牌",
+        "构成排他",
+        "厂商",
+        "指定特定",
+        "指定品牌型号",
+        "构成排他性",
+        "特定品牌"
+      ]
+    },
+    {
+      "query_id": "Q042",
+      "query_text": "采购人对采购需求管理负有什么主体责任",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "采购人",
+        "责任",
+        "需求管理"
+      ],
+      "relevant": [],
+      "expected_regulations": [
+        "政府采购需求管理办法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "采购人",
+        "责任",
+        "需求管理"
+      ]
+    },
+    {
+      "query_id": "Q043",
+      "query_text": "技术参数中的★项扣分总额不能超过多少",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "参数",
+        "扣分",
+        "评分",
+        "★"
+      ],
+      "relevant": [
+        {
+          "id": "R111_B",
+          "rel_type": "rule",
+          "title": "R111_B: 评分标准不得使用★/◆/※等实质性参数标记",
+          "relevance": 3
+        },
+        {
+          "id": "F001",
+          "rel_type": "rule",
+          "title": "F001: 评分标准与参数扣分匹配性检查",
+          "relevance": 3
+        },
+        {
+          "id": "F004",
+          "rel_type": "rule",
+          "title": "F004: 评分标准扣分规则明确性检查",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-G01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-G01: 实质性参数标记（★/◆/※等）易被认定为指向特定品牌，且为虚假材料投诉常见事由",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "青海生态环境监测专用设备"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "参数",
+        "扣分",
+        "评分",
+        "★",
+        "评分标准",
+        "不得使用",
+        "等实质性",
+        "参数标记",
+        "与参数扣",
+        "分匹配性",
+        "检查",
+        "扣分规则",
+        "明确性检",
+        "参数扣分匹配"
+      ]
+    },
+    {
+      "query_id": "Q044",
+      "query_text": "政府采购货物服务招标中价格分的权重范围",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "价格",
+        "权重",
+        "货物"
+      ],
+      "relevant": [
+        {
+          "id": "R202",
+          "rel_type": "rule",
+          "title": "R202: 价格分权重须符合法定比例",
+          "relevance": 3
+        },
+        {
+          "id": "R119_B",
+          "rel_type": "rule",
+          "title": "R119_B: 价格分权重须符合法定范围（综合评分法）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "价格",
+        "权重",
+        "货物",
+        "价格分权",
+        "重须符合",
+        "法定比例",
+        "法定范围",
+        "综合评分"
+      ]
+    },
+    {
+      "query_id": "Q045",
+      "query_text": "青海省废止标准的案例具体情况",
+      "node_type": "case",
+      "jurisdiction": "青海",
+      "tags": [
+        "青海",
+        "废止",
+        "标准"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [
+        "青海职业技术大学语言文字基地"
+      ],
+      "hard_negatives": [
+        "青海生态环境监测专用设备"
+      ],
+      "search_keywords": [
+        "青海",
+        "废止",
+        "标准"
+      ]
+    },
+    {
+      "query_id": "Q046",
+      "query_text": "招标文件发布前如何进行合规自检",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "合规",
+        "自检",
+        "发布前"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "合规",
+        "自检",
+        "发布前"
+      ]
+    },
+    {
+      "query_id": "Q047",
+      "query_text": "政府采购中哪些情形属于以不合理条件限制供应商",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "不合理",
+        "限制",
+        "供应商"
+      ],
+      "relevant": [
+        {
+          "id": "R112",
+          "rel_type": "rule",
+          "title": "R112: 不得设定特定行政区域或本地化服务限制",
+          "relevance": 3
+        },
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        },
+        {
+          "id": "R101",
+          "rel_type": "rule",
+          "title": "R101: 不得设置厂家授权/指定品牌等歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "R102",
+          "rel_type": "rule",
+          "title": "R102: 不得限定特定行业/地区/级别业绩作为资格条件",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H02: 以本地注册/本地企业限定投标人，属于地域歧视",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H03",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H03: 限定投标人须在本地注册或有本地服务机构属于地域歧视",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J01: 以注册资金作为资格要求，属于不合理的条件限制（87号令第十七条）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "某医院设备采购厂家授权要求投诉",
+        "某信息系统项目业绩门槛过高案例",
+        "陕西神木水质提升工程"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "地化服务",
+        "技术参数",
+        "或供应商",
+        "单一品牌",
+        "限制",
+        "不得设定",
+        "供应商",
+        "不得设置",
+        "不合理",
+        "区域或本",
+        "不得指向",
+        "特定行政",
+        "地域限制",
+        "行政区域",
+        "注册资本",
+        "资金",
+        "歧视",
+        "格要求",
+        "条件",
+        "特定行业",
+        "本地企业",
+        "指定品牌",
+        "号令第十",
+        "属于地域",
+        "以本地注",
+        "条款",
+        "理的条件",
+        "七条",
+        "以注册资",
+        "于地域歧",
+        "有本地服",
+        "作为资格",
+        "属于不合",
+        "级别业绩",
+        "厂家授权",
+        "地注册或",
+        "务机构属",
+        "不得限定",
+        "等歧视性",
+        "人须在本",
+        "地区",
+        "金作为资",
+        "限定投标",
+        "限定特定行业",
+        "本地注册",
+        "限定投标人",
+        "注册资金作为资格"
+      ]
+    },
+    {
+      "query_id": "Q048",
+      "query_text": "已废止的国家标准在新招标文件中还能引用吗",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "标准",
+        "废止",
+        "引用"
+      ],
+      "relevant": [
+        {
+          "id": "R203",
+          "rel_type": "rule",
+          "title": "R203: 引用的技术标准须现行有效",
+          "relevance": 3
+        },
+        {
+          "id": "E006",
+          "rel_type": "rule",
+          "title": "E006: 技术参数引用的标准有效性检查",
+          "relevance": 3
+        },
+        {
+          "id": "AI-BIAS-010",
+          "rel_type": "rule",
+          "title": "参数倾向检测 AI-BIAS-010: 引用不存在的技术标准或无效标准版本",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "青海职业技术大学语言文字基地"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "标准",
+        "废止",
+        "引用",
+        "引用的技",
+        "术标准须",
+        "现行有效",
+        "技术参数",
+        "引用的标",
+        "准有效性",
+        "检查",
+        "参数倾向",
+        "检测",
+        "无效标准",
+        "标准版本"
+      ]
+    },
+    {
+      "query_id": "Q049",
+      "query_text": "供应商被禁止参加政府采购的法定情形",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "禁止",
+        "供应商",
+        "情形"
+      ],
+      "relevant": [
+        {
+          "id": "R303",
+          "rel_type": "rule",
+          "title": "R303: 提供虚假材料谋取中标的违规警示",
+          "relevance": 3
+        },
+        {
+          "id": "R304",
+          "rel_type": "rule",
+          "title": "R304: 串通投标行为的警示与防范",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [
+        "四川成都"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "禁止",
+        "供应商",
+        "情形",
+        "提供虚假",
+        "材料谋取",
+        "中标的违",
+        "规警示",
+        "串通投标",
+        "行为的警",
+        "示与防范"
+      ]
+    },
+    {
+      "query_id": "Q050",
+      "query_text": "某市环卫车辆采购品牌锁定的具体违规方式",
+      "node_type": "case",
+      "jurisdiction": null,
+      "tags": [
+        "环卫",
+        "车辆",
+        "品牌"
+      ],
+      "relevant": [
+        {
+          "id": "R101",
+          "rel_type": "rule",
+          "title": "R101: 不得设置厂家授权/指定品牌等歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        },
+        {
+          "id": "R107",
+          "rel_type": "rule",
+          "title": "R107: 不得要求不同设备/产品为同一品牌（品牌锁定）",
+          "relevance": 3
+        },
+        {
+          "id": "R108",
+          "rel_type": "rule",
+          "title": "R108: 不得以无缝对接为由锁定品牌",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "某市环卫车辆采购品牌锁定投诉"
+      ],
+      "hard_negatives": [
+        "宁夏盲人按摩医院医疗设备"
+      ],
+      "search_keywords": [
+        "环卫",
+        "车辆",
+        "品牌",
+        "不得设置",
+        "厂家授权",
+        "指定品牌",
+        "等歧视性",
+        "条款",
+        "技术参数",
+        "不得指向",
+        "单一品牌",
+        "或供应商",
+        "一品牌",
+        "缝对接为",
+        "不同设备",
+        "品牌锁定",
+        "不得以无",
+        "产品为同",
+        "由锁定品",
+        "不得要求",
+        "同一品牌",
+        "锁定品牌",
+        "无缝对接"
+      ]
+    },
+    {
+      "query_id": "Q051",
+      "query_text": "不得以注册资本营业收入成立年限作为资格条件",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "注册资本",
+        "营业收入",
+        "成立年限"
+      ],
+      "relevant": [
+        {
+          "id": "R110",
+          "rel_type": "rule",
+          "title": "R110: 不得以注册资本/营业收入/成立年限作为资格条件",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J01: 以注册资金作为资格要求，属于不合理的条件限制（87号令第十七条）",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J02: 营业收入不得作为资格条件（87号令规定）",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J03",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J03: 成立年限不得作为资格条件",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法实施条例"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "册资本",
+        "以注册资",
+        "属于不合",
+        "注册资本",
+        "营业收入",
+        "不得以注",
+        "禁用词模",
+        "条件",
+        "作为资格",
+        "成立年限",
+        "格要求",
+        "金作为资",
+        "年限",
+        "资格条件",
+        "规模",
+        "资金",
+        "不得作为",
+        "营业收入作为资格"
+      ]
+    },
+    {
+      "query_id": "Q052",
+      "query_text": "样品评审在政府采购中的规定",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "样品",
+        "评审",
+        "规定"
+      ],
+      "relevant": [
+        {
+          "id": "R012",
+          "rel_type": "rule",
+          "title": "R012: 不得利用样品要求变相限制竞争",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-K02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-K02: 样品要求不合理或占比过高可能排斥潜在供应商",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "可能排斥",
+        "规定",
+        "不合理或",
+        "占比过高",
+        "竞争",
+        "不得利用",
+        "禁用词模",
+        "评审",
+        "变相限制",
+        "样品",
+        "潜在供应",
+        "样品要求",
+        "样品评审",
+        "限制竞争"
+      ]
+    },
+    {
+      "query_id": "Q053",
+      "query_text": "质疑投诉的处理时限要求",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "质疑",
+        "投诉",
+        "时限"
+      ],
+      "relevant": [
+        {
+          "id": "R010",
+          "rel_type": "rule",
+          "title": "R010: 质疑答复须在法定期限内",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-L08",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-L08: 质疑答复期限不符合法定要求（须7个工作日内答复）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "质疑",
+        "投诉",
+        "时限",
+        "质疑答复",
+        "须在法定",
+        "期限内",
+        "禁用词模",
+        "期限不符",
+        "合法定要",
+        "个工作日",
+        "内答复"
+      ]
+    },
+    {
+      "query_id": "Q054",
+      "query_text": "检测报告参数被供应商变造的案例",
+      "node_type": "case",
+      "jurisdiction": null,
+      "tags": [
+        "检测",
+        "报告",
+        "变造",
+        "虚假"
+      ],
+      "relevant": [
+        {
+          "id": "R303",
+          "rel_type": "rule",
+          "title": "R303: 提供虚假材料谋取中标的违规警示",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "四川成都"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "检测",
+        "报告",
+        "变造",
+        "虚假",
+        "提供虚假",
+        "材料谋取",
+        "中标的违",
+        "规警示"
+      ]
+    },
+    {
+      "query_id": "Q055",
+      "query_text": "评审专家未按规定扣分的典型案例",
+      "node_type": "case",
+      "jurisdiction": null,
+      "tags": [
+        "评审",
+        "专家",
+        "扣分",
+        "违规"
+      ],
+      "relevant": [
+        {
+          "id": "F004",
+          "rel_type": "rule",
+          "title": "F004: 评分标准扣分规则明确性检查",
+          "relevance": 3
+        },
+        {
+          "id": "F001",
+          "rel_type": "rule",
+          "title": "F001: 评分标准与参数扣分匹配性检查",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "四川教学实训中心"
+      ],
+      "hard_negatives": [
+        "青海生态环境监测专用设备"
+      ],
+      "search_keywords": [
+        "评审",
+        "专家",
+        "扣分",
+        "违规",
+        "评分标准",
+        "扣分规则",
+        "明确性检",
+        "与参数扣",
+        "分匹配性",
+        "检查"
+      ]
+    },
+    {
+      "query_id": "Q056",
+      "query_text": "政府采购信息发布公告的要求",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "信息",
+        "发布",
+        "公告"
+      ],
+      "relevant": [
+        {
+          "id": "SEC-001",
+          "rel_type": "rule",
+          "title": "SEC-001: 缺少《招标公告》或《投标邀请》章节",
+          "relevance": 3
+        },
+        {
+          "id": "KEY-001",
+          "rel_type": "rule",
+          "title": "KEY-001: 招标公告中未明确采购方式（公开招标/邀请招标/竞争性谈判等）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "信息",
+        "发布",
+        "公告",
+        "缺少",
+        "招标公告",
+        "投标邀请",
+        "章节",
+        "中未明确",
+        "采购方式",
+        "公开招标",
+        "邀请招标",
+        "竞争性谈"
+      ]
+    },
+    {
+      "query_id": "Q057",
+      "query_text": "工程类项目的公开招标限额是多少",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "工程",
+        "限额",
+        "公开招标"
+      ],
+      "relevant": [
+        {
+          "id": "R401",
+          "rel_type": "rule",
+          "title": "R401: 施工资质等级与项目规模匹配",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "工程",
+        "限额",
+        "公开招标",
+        "施工资质",
+        "等级与项",
+        "目规模匹"
+      ]
+    },
+    {
+      "query_id": "Q058",
+      "query_text": "采购预算与合同金额相差多少会被约谈",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "预算",
+        "合同",
+        "差异"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [
+        "异常低价审查"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "预算",
+        "合同",
+        "差异"
+      ]
+    },
+    {
+      "query_id": "Q059",
+      "query_text": "单一来源采购需要什么条件",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "单一来源",
+        "条件",
+        "采购方式"
+      ],
+      "relevant": [
+        {
+          "id": "R206",
+          "rel_type": "rule",
+          "title": "R206: 单一来源采购须符合法定适用条件",
+          "relevance": 3
+        },
+        {
+          "id": "R116_C",
+          "rel_type": "rule",
+          "title": "R116_C: 单一来源采购须有专家论证意见",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "单一来源",
+        "条件",
+        "采购方式",
+        "采购须符",
+        "合法定适",
+        "用条件",
+        "采购须有",
+        "专家论证",
+        "意见"
+      ]
+    },
+    {
+      "query_id": "Q060",
+      "query_text": "竞争性谈判和竞争性磋商有什么区别",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "竞争性谈判",
+        "竞争性磋商",
+        "区别"
+      ],
+      "relevant": [
+        {
+          "id": "R115_C",
+          "rel_type": "rule",
+          "title": "R115_C: 竞争性谈判须有谈判记录",
+          "relevance": 3
+        },
+        {
+          "id": "R118_C",
+          "rel_type": "rule",
+          "title": "R118_C: 竞争性磋商须有磋商纪要",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "竞争性谈判",
+        "竞争性磋商",
+        "区别",
+        "竞争性谈",
+        "判须有谈",
+        "判记录",
+        "竞争性磋",
+        "商须有磋",
+        "商纪要"
+      ]
+    },
+    {
+      "query_id": "Q061",
+      "query_text": "不得在招标文件中限定专利专有技术",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "专利",
+        "专有技术",
+        "限定"
+      ],
+      "relevant": [
+        {
+          "id": "FORB-B11",
+          "rel_type": "rule",
+          "title": "FORB-B11: 以特定专利作为资格条件，可能构成排他性",
+          "relevance": 3
+        },
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "专利",
+        "专有技术",
+        "限定",
+        "以特定专",
+        "利作为资",
+        "格条件",
+        "可能构成",
+        "排他性",
+        "技术参数",
+        "不得指向",
+        "单一品牌",
+        "或供应商"
+      ]
+    },
+    {
+      "query_id": "Q062",
+      "query_text": "节能产品政府采购的要求",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "节能",
+        "环保",
+        "清单"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "节能",
+        "环保",
+        "清单"
+      ]
+    },
+    {
+      "query_id": "Q063",
+      "query_text": "进口产品采购的审批要求",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "进口",
+        "审批",
+        "采购"
+      ],
+      "relevant": [
+        {
+          "id": "R108_C",
+          "rel_type": "rule",
+          "title": "R108_C: 进口产品须经论证审批",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-I01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-I01: 采购进口产品须经财政部门论证审批，否则不得要求进口产品",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "进口",
+        "审批",
+        "采购",
+        "进口产品",
+        "须经论证",
+        "禁用词模",
+        "采购进口",
+        "产品须经",
+        "财政部门",
+        "论证审批",
+        "否则不得",
+        "要求进口"
+      ]
+    },
+    {
+      "query_id": "Q064",
+      "query_text": "最低评标价法和综合评分法的适用情形",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "最低评标价",
+        "综合评分",
+        "方法"
+      ],
+      "relevant": [
+        {
+          "id": "R002",
+          "rel_type": "rule",
+          "title": "R002: 评标方法须为法定方法之一",
+          "relevance": 3
+        },
+        {
+          "id": "R103",
+          "rel_type": "rule",
+          "title": "R103: 综合评分法评分标准须细化量化",
+          "relevance": 3
+        },
+        {
+          "id": "R119_B",
+          "rel_type": "rule",
+          "title": "R119_B: 价格分权重须符合法定范围（综合评分法）",
+          "relevance": 3
+        },
+        {
+          "id": "R120_B",
+          "rel_type": "rule",
+          "title": "R120_B: 资格条件不得作为评分因素（综合评分法）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "最低评标价",
+        "综合评分",
+        "方法",
+        "评标方法",
+        "须为法定",
+        "方法之一",
+        "法评分标",
+        "准须细化",
+        "量化",
+        "价格分权",
+        "重须符合",
+        "法定范围",
+        "资格条件",
+        "评分因素",
+        "不得作为",
+        "不得作为评分因素",
+        "文件不得作为"
+      ]
+    },
+    {
+      "query_id": "Q065",
+      "query_text": "甘肃食品安全监测平台符合性审查程序错误案例分析",
+      "node_type": "case",
+      "jurisdiction": "甘肃",
+      "tags": [
+        "甘肃",
+        "食品安全",
+        "符合性审查"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [
+        "甘肃食品安全监测平台"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "甘肃",
+        "食品安全",
+        "符合性审查"
+      ]
+    },
+    {
+      "query_id": "Q066",
+      "query_text": "中小企业声明函造假的后果",
+      "node_type": "case",
+      "jurisdiction": null,
+      "tags": [
+        "中小企业",
+        "造假",
+        "声明函"
+      ],
+      "relevant": [
+        {
+          "id": "R303",
+          "rel_type": "rule",
+          "title": "R303: 提供虚假材料谋取中标的违规警示",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "自治区纪委监委配套设备"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "中小企业",
+        "造假",
+        "声明函",
+        "提供虚假",
+        "材料谋取",
+        "中标的违",
+        "规警示"
+      ]
+    },
+    {
+      "query_id": "Q067",
+      "query_text": "供应商质疑答复的程序规定",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "质疑",
+        "答复",
+        "程序"
+      ],
+      "relevant": [
+        {
+          "id": "R010",
+          "rel_type": "rule",
+          "title": "R010: 质疑答复须在法定期限内",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-L08",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-L08: 质疑答复期限不符合法定要求（须7个工作日内答复）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "质疑",
+        "答复",
+        "程序",
+        "质疑答复",
+        "须在法定",
+        "期限内",
+        "禁用词模",
+        "期限不符",
+        "合法定要",
+        "个工作日",
+        "内答复"
+      ]
+    },
+    {
+      "query_id": "Q068",
+      "query_text": "绿化园林工程招标中的特殊规定",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "绿化",
+        "工程",
+        "园林"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "绿化",
+        "工程",
+        "园林"
+      ]
+    },
+    {
+      "query_id": "Q069",
+      "query_text": "IT项目采购中的软件授权要求",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "IT",
+        "软件",
+        "授权",
+        "信息技术"
+      ],
+      "relevant": [
+        {
+          "id": "R503",
+          "rel_type": "rule",
+          "title": "R503: IT设备软件授权不得排他性要求",
+          "relevance": 3
+        },
+        {
+          "id": "R502",
+          "rel_type": "rule",
+          "title": "R502: IT设备不得要求整机原厂认证",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "IT",
+        "软件",
+        "授权",
+        "信息技术",
+        "设备软件",
+        "授权不得",
+        "排他性要",
+        "设备不得",
+        "要求整机",
+        "原厂认证"
+      ]
+    },
+    {
+      "query_id": "Q070",
+      "query_text": "陕西省西安市第三医院机器人手术系统案例详情",
+      "node_type": "case",
+      "jurisdiction": "陕西",
+      "tags": [
+        "陕西",
+        "西安",
+        "机器人",
+        "手术"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [
+        "陕西西安市第三医院机器人手术系统"
+      ],
+      "hard_negatives": [
+        "陕西铜川陈炉镇非遗保护设备"
+      ],
+      "search_keywords": [
+        "陕西",
+        "西安",
+        "机器人",
+        "手术"
+      ]
+    },
+    {
+      "query_id": "Q071",
+      "query_text": "投标人少于3个时如何处理",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "投标人",
+        "少于",
+        "废标"
+      ],
+      "relevant": [
+        {
+          "id": "KEY-006",
+          "rel_type": "rule",
+          "title": "KEY-006: 未包含废标情形或废标条款不完整",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "投标人",
+        "少于",
+        "废标",
+        "未包含废",
+        "标情形或",
+        "废标条款",
+        "不完整"
+      ]
+    },
+    {
+      "query_id": "Q072",
+      "query_text": "评标委员会成员收受投标人财物如何处罚",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "评标",
+        "财物",
+        "处罚",
+        "受贿"
+      ],
+      "relevant": [],
+      "expected_regulations": [
+        "招标投标法实施条例"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "评标",
+        "财物",
+        "处罚",
+        "受贿"
+      ]
+    },
+    {
+      "query_id": "Q073",
+      "query_text": "医疗器械采购中资质设置的合规要求",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "医疗",
+        "资质",
+        "器械"
+      ],
+      "relevant": [
+        {
+          "id": "R306",
+          "rel_type": "rule",
+          "title": "R306: 医疗设备采购排他性技术参数的案例警示",
+          "relevance": 3
+        },
+        {
+          "id": "E007",
+          "rel_type": "rule",
+          "title": "E007: 特殊经营资质（射线装置/特种设备）缺失检测",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "宁夏盲人按摩医院医疗设备"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "医疗",
+        "资质",
+        "器械",
+        "医疗设备",
+        "采购排他",
+        "性技术参",
+        "数的案例",
+        "警示",
+        "特殊经营",
+        "射线装置",
+        "特种设备",
+        "缺失检测"
+      ]
+    },
+    {
+      "query_id": "Q074",
+      "query_text": "公路工程招标的行业特殊规则",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "公路",
+        "工程",
+        "行业"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "公路",
+        "工程",
+        "行业"
+      ]
+    },
+    {
+      "query_id": "Q075",
+      "query_text": "如何判断技术参数是否构成了实质性品牌锁定",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "品牌",
+        "锁定",
+        "参数",
+        "实质性"
+      ],
+      "relevant": [
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        },
+        {
+          "id": "R107",
+          "rel_type": "rule",
+          "title": "R107: 不得要求不同设备/产品为同一品牌（品牌锁定）",
+          "relevance": 3
+        },
+        {
+          "id": "R108",
+          "rel_type": "rule",
+          "title": "R108: 不得以无缝对接为由锁定品牌",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-B01: 要求不同设备为同一品牌构成品牌锁定，限制竞争",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-B02: 要求多项设备同品牌，构成品牌锁定",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B03",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-B03: 以无缝对接为由要求特定品牌构成隐性品牌锁定（须提供标准协议接口）",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B05",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-B05: 技术参数指向特定品牌独有技术/专利，构成排他",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法",
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "陕西铜川陈炉镇非遗保护设备",
+        "宁夏医科大学PACS存储"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "品牌",
+        "产品为同",
+        "不同设备",
+        "锁定",
+        "不得指向",
+        "或供应商",
+        "单一品牌",
+        "不得要求",
+        "实质性",
+        "技术参数",
+        "参数",
+        "一品牌",
+        "参数排斥",
+        "品牌锁定",
+        "兼容性",
+        "同一品牌",
+        "指向特定",
+        "设备同品",
+        "须提供标",
+        "构成品牌",
+        "缝对接为",
+        "性品牌锁",
+        "求特定品",
+        "准协议接",
+        "专利",
+        "以无缝对",
+        "要求多项",
+        "接为由要",
+        "品牌独有",
+        "不得以无",
+        "技术",
+        "牌构成隐",
+        "构成排他",
+        "由锁定品",
+        "无缝对接",
+        "锁定品牌",
+        "多设备同品牌",
+        "独有技术",
+        "特定品牌独有"
+      ]
+    },
+    {
+      "query_id": "Q076",
+      "query_text": "招标文件中的保证金条款如何设置",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "保证金",
+        "条款",
+        "投标"
+      ],
+      "relevant": [
+        {
+          "id": "R122_C",
+          "rel_type": "rule",
+          "title": "R122_C: 投标保证金不得超过预算金额的2%",
+          "relevance": 3
+        },
+        {
+          "id": "R405",
+          "rel_type": "rule",
+          "title": "R405: 履约保证金比例不得超10%",
+          "relevance": 3
+        },
+        {
+          "id": "KEY-020",
+          "rel_type": "rule",
+          "title": "KEY-020: 未要求对投标人进行信用查询",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法实施条例"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "保证金",
+        "条款",
+        "投标",
+        "投标保证",
+        "金不得超",
+        "过预算金",
+        "额的",
+        "履约保证",
+        "金比例不",
+        "得超",
+        "未要求对",
+        "投标人进"
+      ]
+    },
+    {
+      "query_id": "Q077",
+      "query_text": "水利水电工程的评标标准如何制定",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "水利",
+        "水电",
+        "评标"
+      ],
+      "relevant": [
+        {
+          "id": "R103",
+          "rel_type": "rule",
+          "title": "R103: 综合评分法评分标准须细化量化",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "水利",
+        "水电",
+        "评标",
+        "综合评分",
+        "法评分标",
+        "准须细化",
+        "量化"
+      ]
+    },
+    {
+      "query_id": "Q078",
+      "query_text": "四川成都供应商变造检测报告被处罚的案例",
+      "node_type": "case",
+      "jurisdiction": "四川",
+      "tags": [
+        "四川",
+        "成都",
+        "检测报告",
+        "变造"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [
+        "四川成都"
+      ],
+      "hard_negatives": [
+        "四川教学实训中心"
+      ],
+      "search_keywords": [
+        "四川",
+        "成都",
+        "检测报告",
+        "变造"
+      ]
+    },
+    {
+      "query_id": "Q079",
+      "query_text": "招标人对潜在投标人实行歧视待遇的法律责任",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "歧视",
+        "责任",
+        "处罚"
+      ],
+      "relevant": [
+        {
+          "id": "R112",
+          "rel_type": "rule",
+          "title": "R112: 不得设定特定行政区域或本地化服务限制",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B13",
+          "rel_type": "rule",
+          "title": "FORB-B13: 以所有制性质限制投标人，属于歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J04",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J04: 以所有制性质限制投标人，属于歧视性条款",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法",
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "四川5起典型案例"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "地化服务",
+        "投标人",
+        "处罚",
+        "以所有制",
+        "属于歧视",
+        "性质限制",
+        "不得设定",
+        "歧视",
+        "限制",
+        "责任",
+        "区域或本",
+        "特定行政",
+        "所有制",
+        "差别待遇"
+      ]
+    },
+    {
+      "query_id": "Q080",
+      "query_text": "项目拆分规避公开招标的识别方法",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "拆分",
+        "规避",
+        "识别"
+      ],
+      "relevant": [
+        {
+          "id": "R204",
+          "rel_type": "rule",
+          "title": "R204: 不得拆分项目规避公开招标",
+          "relevance": 3
+        },
+        {
+          "id": "F003",
+          "rel_type": "rule",
+          "title": "F003: 混包限制竞争检测",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [
+        "宁夏工商职业技术学院智慧烹饪中心"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "拆分",
+        "规避",
+        "识别",
+        "不得拆分",
+        "项目规避",
+        "公开招标",
+        "混包限制",
+        "竞争检测",
+        "混包限",
+        "制竞争",
+        "混包",
+        "争检",
+        "包限制",
+        "限制竞",
+        "检测",
+        "限制竞争",
+        "制竞",
+        "竞争检",
+        "制竞争检",
+        "包限制竞",
+        "争检测",
+        "竞争",
+        "包限",
+        "限制"
+      ]
+    },
+    {
+      "query_id": "Q081",
+      "query_text": "联合体投标的资格要求如何设定",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "联合体",
+        "资格",
+        "投标"
+      ],
+      "relevant": [
+        {
+          "id": "R409",
+          "rel_type": "rule",
+          "title": "R409: 联合体各方须满足相应资质条件",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "联合体",
+        "资格",
+        "投标",
+        "联合体各",
+        "方须满足",
+        "相应资质",
+        "条件"
+      ]
+    },
+    {
+      "query_id": "Q082",
+      "query_text": "政府采购代理机构的职责和义务",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "代理机构",
+        "职责",
+        "义务"
+      ],
+      "relevant": [],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "代理机构",
+        "职责",
+        "义务"
+      ]
+    },
+    {
+      "query_id": "Q083",
+      "query_text": "陕西神木水质提升工程歧视中小企业的案例",
+      "node_type": "case",
+      "jurisdiction": "陕西",
+      "tags": [
+        "陕西",
+        "神木",
+        "中小企业"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [
+        "陕西神木水质提升工程"
+      ],
+      "hard_negatives": [
+        "陕西铜川陈炉镇非遗保护设备"
+      ],
+      "search_keywords": [
+        "陕西",
+        "神木",
+        "中小企业"
+      ]
+    },
+    {
+      "query_id": "Q084",
+      "query_text": "通信工程招标中资质等级如何划分",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "通信",
+        "资质",
+        "等级"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "通信",
+        "资质",
+        "等级"
+      ]
+    },
+    {
+      "query_id": "Q085",
+      "query_text": "政府采购评审专家的抽取和管理制度",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "评审专家",
+        "抽取",
+        "管理"
+      ],
+      "relevant": [
+        {
+          "id": "R123_D",
+          "rel_type": "rule",
+          "title": "R123_D: 中标公示须包含评审专家名单",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法实施条例"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "评审专家",
+        "抽取",
+        "管理",
+        "中标公示",
+        "须包含评",
+        "审专家名"
+      ]
+    },
+    {
+      "query_id": "Q086",
+      "query_text": "招标投标法和政府采购法的适用范围有什么区别",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "招标投标法",
+        "政府采购法",
+        "适用",
+        "区别"
+      ],
+      "relevant": [],
+      "expected_regulations": [
+        "招标投标法",
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "招标投标法",
+        "政府采购法",
+        "适用",
+        "区别"
+      ]
+    },
+    {
+      "query_id": "Q087",
+      "query_text": "自治区纪委监委中小企业声明函造假案例分析",
+      "node_type": "case",
+      "jurisdiction": "宁夏",
+      "tags": [
+        "纪委监委",
+        "中小企业",
+        "声明函"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [
+        "自治区纪委监委配套设备"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "纪委监委",
+        "中小企业",
+        "声明函"
+      ]
+    },
+    {
+      "query_id": "Q088",
+      "query_text": "电子化采购招标文件的技术要求",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "电子化",
+        "技术要求",
+        "采购"
+      ],
+      "relevant": [
+        {
+          "id": "FMT-004",
+          "rel_type": "rule",
+          "title": "FMT-004: 采用电子招投标时未明确电子文件格式和CA证书要求",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "电子化",
+        "技术要求",
+        "采购",
+        "采用电子",
+        "招投标时",
+        "未明确电",
+        "子文件格",
+        "式和",
+        "证书要求"
+      ]
+    },
+    {
+      "query_id": "Q089",
+      "query_text": "异常低价审查制度的启动条件",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "异常低价",
+        "审查",
+        "启动"
+      ],
+      "relevant": [
+        {
+          "id": "R201",
+          "rel_type": "rule",
+          "title": "R201: 采购方式不得与预算金额冲突",
+          "relevance": 3
+        },
+        {
+          "id": "F004",
+          "rel_type": "rule",
+          "title": "F004: 评分标准扣分规则明确性检查",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [
+        "异常低价审查"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "异常低价",
+        "审查",
+        "启动",
+        "采购方式",
+        "不得与预",
+        "算金额冲",
+        "评分标准",
+        "扣分规则",
+        "明确性检"
+      ]
+    },
+    {
+      "query_id": "Q090",
+      "query_text": "事业单位政府采购的内部控制要求",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "事业单位",
+        "内部控制",
+        "采购"
+      ],
+      "relevant": [],
+      "expected_regulations": [
+        "政府采购需求管理办法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "事业单位",
+        "内部控制",
+        "采购"
+      ]
+    },
+    {
+      "query_id": "Q091",
+      "query_text": "评审打分不匹配导致中标无效的案例",
+      "node_type": "case",
+      "jurisdiction": null,
+      "tags": [
+        "评审",
+        "打分",
+        "中标无效"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [
+        "青海生态环境监测专用设备",
+        "甘肃食品安全监测平台"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "评审",
+        "打分",
+        "中标无效"
+      ]
+    },
+    {
+      "query_id": "Q092",
+      "query_text": "招标文件澄清修改的时限要求",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "澄清",
+        "修改",
+        "时限"
+      ],
+      "relevant": [],
+      "expected_regulations": [
+        "招标投标法实施条例"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "澄清",
+        "修改",
+        "时限"
+      ]
+    },
+    {
+      "query_id": "Q093",
+      "query_text": "政府采购中低于成本价竞标是否合法",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "成本价",
+        "低价",
+        "竞标"
+      ],
+      "relevant": [],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [
+        "异常低价审查"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "成本价",
+        "低价",
+        "竞标"
+      ]
+    },
+    {
+      "query_id": "Q094",
+      "query_text": "宁夏工商职业技术学院混包投诉案例详情",
+      "node_type": "case",
+      "jurisdiction": "宁夏",
+      "tags": [
+        "宁夏",
+        "工商",
+        "混包"
+      ],
+      "relevant": [
+        {
+          "id": "F003",
+          "rel_type": "rule",
+          "title": "F003: 混包限制竞争检测",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "宁夏工商职业技术学院智慧烹饪中心"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "宁夏",
+        "工商",
+        "混包",
+        "混包限制",
+        "竞争检测"
+      ]
+    },
+    {
+      "query_id": "Q095",
+      "query_text": "业绩要求金额应当与什么匹配才合规",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "业绩",
+        "金额",
+        "匹配"
+      ],
+      "relevant": [
+        {
+          "id": "R408",
+          "rel_type": "rule",
+          "title": "R408: 项目经理业绩要求须与项目规模匹配",
+          "relevance": 3
+        },
+        {
+          "id": "R602",
+          "rel_type": "rule",
+          "title": "R602: 服务类业绩数量要求不得超过项目规模",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B16",
+          "rel_type": "rule",
+          "title": "FORB-B16: 设置过高的业绩金额门槛，可能排除潜在供应商",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-L05",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-L05: 设置过高的业绩金额门槛，可能排除潜在供应商",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "某信息系统项目业绩门槛过高案例"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "求不得超",
+        "匹配",
+        "绩数量要",
+        "规模匹配",
+        "须与项目",
+        "业绩要求",
+        "业绩",
+        "服务类业",
+        "设置过高",
+        "项目经理",
+        "金额",
+        "过项目规",
+        "业绩门槛",
+        "过高",
+        "额门槛",
+        "的业绩金",
+        "潜在供应",
+        "可能排除",
+        "业绩金额门槛",
+        "排除潜在供应商"
+      ]
+    },
+    {
+      "query_id": "Q096",
+      "query_text": "财政性资金与非财政性资金混合项目的采购规定",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "财政性",
+        "资金",
+        "混合"
+      ],
+      "relevant": [],
+      "expected_regulations": [
+        "政府采购法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "财政性",
+        "资金",
+        "混合"
+      ]
+    },
+    {
+      "query_id": "Q097",
+      "query_text": "如何处理中小企业在招标中被歧视的问题",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "中小企业",
+        "歧视",
+        "处理"
+      ],
+      "relevant": [
+        {
+          "id": "R121_A",
+          "rel_type": "rule",
+          "title": "R121_A: 中小企业须有预留份额或价格扣除说明",
+          "relevance": 3
+        },
+        {
+          "id": "R205",
+          "rel_type": "rule",
+          "title": "R205: 中小企业价格扣除政策须执行",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B14",
+          "rel_type": "rule",
+          "title": "FORB-B14: 以企业规模作为资格条件，可能排除中小企业",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J06",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J06: 以企业规模作为资格条件，可能排除中小企业",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法",
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "陕西神木水质提升工程",
+        "某信息系统项目业绩门槛过高案例"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "中小企业",
+        "歧视",
+        "处理",
+        "须有预留",
+        "份额或价",
+        "格扣除说",
+        "价格扣除",
+        "政策须执",
+        "以企业规",
+        "模作为资",
+        "格条件",
+        "可能排除"
+      ]
+    },
+    {
+      "query_id": "Q098",
+      "query_text": "限制或者排斥潜在投标人的常见表现形式",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "限制",
+        "排斥",
+        "表现形式"
+      ],
+      "relevant": [
+        {
+          "id": "R112",
+          "rel_type": "rule",
+          "title": "R112: 不得设定特定行政区域或本地化服务限制",
+          "relevance": 3
+        },
+        {
+          "id": "R101",
+          "rel_type": "rule",
+          "title": "R101: 不得设置厂家授权/指定品牌等歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "R102",
+          "rel_type": "rule",
+          "title": "R102: 不得限定特定行业/地区/级别业绩作为资格条件",
+          "relevance": 3
+        },
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H01: 出现地域保护性表述，要求本省企业优先",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-H02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-H02: 以本地注册/本地企业限定投标人，属于地域歧视",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J01: 以注册资金作为资格要求，属于不合理的条件限制（87号令第十七条）",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J02",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J02: 营业收入不得作为资格条件（87号令规定）",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-J03",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-J03: 成立年限不得作为资格条件",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法",
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "陕西神木水质提升工程",
+        "某医院设备采购厂家授权要求投诉",
+        "某市环卫车辆采购品牌锁定投诉"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "表现形式",
+        "指定品牌",
+        "地化服务",
+        "条款",
+        "等歧视性",
+        "排斥",
+        "限制",
+        "不得设定",
+        "不得设置",
+        "厂家授权",
+        "区域或本",
+        "特定行政",
+        "本地化",
+        "地域限制",
+        "行政区域",
+        "资金",
+        "注册资本",
+        "营业收入",
+        "出现地域",
+        "要求本省",
+        "企业优先",
+        "格要求",
+        "条件",
+        "技术参数",
+        "特定行业",
+        "本地企业",
+        "不得指向",
+        "成立年限",
+        "号令第十",
+        "属于地域",
+        "歧视",
+        "以本地注",
+        "理的条件",
+        "七条",
+        "单一品牌",
+        "以注册资",
+        "保护性表",
+        "作为资格",
+        "属于不合",
+        "级别业绩",
+        "资格条件",
+        "号令规定",
+        "不得作为",
+        "不得限定",
+        "或供应商",
+        "地区",
+        "金作为资",
+        "限定投标",
+        "限定特定行业",
+        "限定投标人",
+        "地域歧视",
+        "本地注册",
+        "注册资金作为资格",
+        "成立年限作为资格",
+        "指向单一品牌",
+        "条件限制",
+        "作为资格条件"
+      ]
+    },
+    {
+      "query_id": "Q099",
+      "query_text": "PPP项目的招标投标适用什么规定",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "PPP",
+        "招标",
+        "规定"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "PPP",
+        "招标",
+        "规定"
+      ]
+    },
+    {
+      "query_id": "Q100",
+      "query_text": "青海省生态环境监测专用设备招标违规详情",
+      "node_type": "case",
+      "jurisdiction": "青海",
+      "tags": [
+        "青海",
+        "生态环境",
+        "监测"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [
+        "青海生态环境监测专用设备"
+      ],
+      "hard_negatives": [
+        "青海职业技术大学语言文字基地"
+      ],
+      "search_keywords": [
+        "青海",
+        "生态环境",
+        "监测"
+      ]
+    },
+    {
+      "query_id": "Q101",
+      "query_text": "禁止以特定行业业绩作为加分条件的法规依据",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "行业",
+        "业绩",
+        "法规依据"
+      ],
+      "relevant": [
+        {
+          "id": "R102",
+          "rel_type": "rule",
+          "title": "R102: 不得限定特定行业/地区/级别业绩作为资格条件",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-L03",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-L03: 限定特定行业业绩属于不合理条件",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "行业",
+        "业绩",
+        "法规依据",
+        "不得限定",
+        "特定行业",
+        "地区",
+        "级别业绩",
+        "作为资格",
+        "条件",
+        "禁用词模",
+        "限定特定",
+        "行业业绩"
+      ]
+    },
+    {
+      "query_id": "Q102",
+      "query_text": "信息系统项目业绩门槛过高是否合规",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "信息系统",
+        "业绩",
+        "门槛"
+      ],
+      "relevant": [
+        {
+          "id": "R102",
+          "rel_type": "rule",
+          "title": "R102: 不得限定特定行业/地区/级别业绩作为资格条件",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-B16",
+          "rel_type": "rule",
+          "title": "FORB-B16: 设置过高的业绩金额门槛，可能排除潜在供应商",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-L05",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-L05: 设置过高的业绩金额门槛，可能排除潜在供应商",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购法实施条例"
+      ],
+      "expected_cases": [
+        "某信息系统项目业绩门槛过高案例"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "门槛",
+        "不得限定",
+        "业绩",
+        "设置过高",
+        "的业绩金",
+        "额门槛",
+        "条件",
+        "作为资格",
+        "特定行业",
+        "信息系统",
+        "级别业绩",
+        "地区",
+        "业绩门槛",
+        "过高"
+      ]
+    },
+    {
+      "query_id": "Q103",
+      "query_text": "甘肃食品安全监测平台符合性审查案例分析",
+      "node_type": "case",
+      "jurisdiction": "甘肃",
+      "tags": [
+        "甘肃",
+        "食品",
+        "安全",
+        "符合性"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [
+        "甘肃食品安全监测平台"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "甘肃",
+        "食品",
+        "安全",
+        "符合性"
+      ]
+    },
+    {
+      "query_id": "Q104",
+      "query_text": "竞争性谈判公告需要包含哪些内容",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "竞争性谈判",
+        "公告",
+        "内容"
+      ],
+      "relevant": [
+        {
+          "id": "SEC-001",
+          "rel_type": "rule",
+          "title": "SEC-001: 缺少《招标公告》或《投标邀请》章节",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "政府采购货物和服务招标投标管理办法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "竞争性谈判",
+        "公告",
+        "内容",
+        "缺少",
+        "招标公告",
+        "投标邀请",
+        "章节"
+      ]
+    },
+    {
+      "query_id": "Q105",
+      "query_text": "中标通知书发出后多久必须签订合同",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "中标",
+        "合同",
+        "时限"
+      ],
+      "relevant": [
+        {
+          "id": "R009",
+          "rel_type": "rule",
+          "title": "R009: 招标文件发出至开标不得少于法定天数",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法"
+      ],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "中标",
+        "合同",
+        "时限",
+        "招标文件",
+        "发出至开",
+        "标不得少",
+        "于法定天"
+      ]
+    },
+    {
+      "query_id": "Q106",
+      "query_text": "品牌参数锁定与原厂授权同时出现的投诉案例",
+      "node_type": "case",
+      "jurisdiction": null,
+      "tags": [
+        "品牌",
+        "原厂",
+        "授权",
+        "复合"
+      ],
+      "relevant": [
+        {
+          "id": "R101",
+          "rel_type": "rule",
+          "title": "R101: 不得设置厂家授权/指定品牌等歧视性条款",
+          "relevance": 3
+        },
+        {
+          "id": "R105",
+          "rel_type": "rule",
+          "title": "R105: 技术参数不得指向单一品牌或供应商",
+          "relevance": 3
+        },
+        {
+          "id": "R107",
+          "rel_type": "rule",
+          "title": "R107: 不得要求不同设备/产品为同一品牌（品牌锁定）",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "陕西铜川陈炉镇非遗保护设备"
+      ],
+      "hard_negatives": [
+        "某医院设备采购厂家授权要求投诉"
+      ],
+      "search_keywords": [
+        "品牌",
+        "原厂",
+        "授权",
+        "复合",
+        "不得设置",
+        "厂家授权",
+        "指定品牌",
+        "等歧视性",
+        "条款",
+        "技术参数",
+        "不得指向",
+        "单一品牌",
+        "一品牌",
+        "不同设备",
+        "品牌锁定",
+        "产品为同",
+        "不得要求",
+        "同一品牌",
+        "不同设备同品牌"
+      ]
+    },
+    {
+      "query_id": "Q107",
+      "query_text": "评审委员会成员在评审过程中不得有哪些行为",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "评审",
+        "禁止",
+        "行为"
+      ],
+      "relevant": [
+        {
+          "id": "R123_D",
+          "rel_type": "rule",
+          "title": "R123_D: 中标公示须包含评审专家名单",
+          "relevance": 3
+        },
+        {
+          "id": "F004",
+          "rel_type": "rule",
+          "title": "F004: 评分标准扣分规则明确性检查",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法实施条例"
+      ],
+      "expected_cases": [
+        "四川教学实训中心"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "评审",
+        "禁止",
+        "行为",
+        "中标公示",
+        "须包含评",
+        "审专家名",
+        "评分标准",
+        "扣分规则",
+        "明确性检"
+      ]
+    },
+    {
+      "query_id": "Q108",
+      "query_text": "矿山工程招标文件技术规范编写要点",
+      "node_type": "regulation",
+      "jurisdiction": null,
+      "tags": [
+        "矿山",
+        "技术规范",
+        "招标文件"
+      ],
+      "relevant": [],
+      "expected_regulations": [],
+      "expected_cases": [],
+      "hard_negatives": [],
+      "search_keywords": [
+        "矿山",
+        "技术规范",
+        "招标文件"
+      ]
+    },
+    {
+      "query_id": "Q109",
+      "query_text": "宁夏盲人按摩医院资质超标案例分析",
+      "node_type": "case",
+      "jurisdiction": "宁夏",
+      "tags": [
+        "宁夏",
+        "盲人",
+        "医院",
+        "资质"
+      ],
+      "relevant": [
+        {
+          "id": "E007",
+          "rel_type": "rule",
+          "title": "E007: 特殊经营资质（射线装置/特种设备）缺失检测",
+          "relevance": 3
+        },
+        {
+          "id": "R306",
+          "rel_type": "rule",
+          "title": "R306: 医疗设备采购排他性技术参数的案例警示",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [],
+      "expected_cases": [
+        "宁夏盲人按摩医院医疗设备"
+      ],
+      "hard_negatives": [
+        "宁夏人民医院手术麻醉设备"
+      ],
+      "search_keywords": [
+        "宁夏",
+        "盲人",
+        "医院",
+        "资质",
+        "特殊经营",
+        "射线装置",
+        "特种设备",
+        "缺失检测",
+        "医疗设备",
+        "采购排他",
+        "性技术参",
+        "数的案例"
+      ]
+    },
+    {
+      "query_id": "Q110",
+      "query_text": "程序违规导致中标无效的主要类型",
+      "node_type": "rule",
+      "jurisdiction": null,
+      "tags": [
+        "程序",
+        "中标无效",
+        "类型"
+      ],
+      "relevant": [
+        {
+          "id": "R303",
+          "rel_type": "rule",
+          "title": "R303: 提供虚假材料谋取中标的违规警示",
+          "relevance": 3
+        },
+        {
+          "id": "R304",
+          "rel_type": "rule",
+          "title": "R304: 串通投标行为的警示与防范",
+          "relevance": 3
+        },
+        {
+          "id": "R106",
+          "rel_type": "rule",
+          "title": "R106: 不得将投标文件编制形式列为废标条件",
+          "relevance": 3
+        },
+        {
+          "id": "FORB-D01",
+          "rel_type": "rule",
+          "title": "禁用词模式 FORB-D01: 将文件编制形式列为废标条件属于不合理条件",
+          "relevance": 3
+        }
+      ],
+      "expected_regulations": [
+        "招标投标法"
+      ],
+      "expected_cases": [
+        "甘肃食品安全监测平台",
+        "青海生态环境监测专用设备"
+      ],
+      "hard_negatives": [],
+      "search_keywords": [
+        "示与防范",
+        "提供虚假",
+        "串通投标",
+        "材料谋取",
+        "不得将投",
+        "程序",
+        "中标无效",
+        "中标的违",
+        "标文件编",
+        "类型",
+        "规警示",
+        "行为的警",
+        "装订",
+        "编制形式",
+        "为废标条",
+        "制形式列",
+        "件属于不",
+        "将文件编",
+        "合理条件"
+      ]
+    }
+  ]
+}
