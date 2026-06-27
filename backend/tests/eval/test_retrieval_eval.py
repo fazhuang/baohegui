@@ -40,9 +40,10 @@ from app.models.knowledge_graph import KGNode, KGEdge
 # ── Test DB fixture ──────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
-def eval_db_session():
-    """Create a SQLite DB, seed knowledge graph, return session factory."""
-    engine = create_engine("sqlite:///./tests/eval_test.db", echo=False)
+def eval_db_session(tmp_path_factory):
+    """Create a SQLite DB in pytest temp dir, seed knowledge graph, return session factory."""
+    db_path = tmp_path_factory.mktemp("eval_test") / "eval_test.db"
+    engine = create_engine(f"sqlite:///{db_path}", echo=False)
     from app.models.knowledge_graph import Base as KGBase
     from app.models.complaint_case import Base as CCBase
     from app.models.document import Base as DocBase
@@ -64,12 +65,7 @@ def eval_db_session():
 
     yield Session
 
-    # Cleanup
-    import os
-    try:
-        os.unlink("./tests/eval_test.db")
-    except OSError:
-        pass
+    # Cleanup — db_path is inside pytest tmp tree, auto-cleaned
 
 
 def make_db_factory(Session):
@@ -229,9 +225,10 @@ class TestBaselineRetrieval:
     """验证基线检索的基准指标 + 回归检测"""
 
     @pytest.fixture(scope="class")
-    def seeded_db(self):
-        """Class-scoped seeded DB, returns the sessionmaker directly."""
-        engine = create_engine("sqlite:///./tests/eval_test_baseline.db", echo=False)
+    def seeded_db(self, tmp_path_factory):
+        """Class-scoped seeded DB in pytest temp dir."""
+        db_path = tmp_path_factory.mktemp("eval_baseline_test") / "eval_test_baseline.db"
+        engine = create_engine(f"sqlite:///{db_path}", echo=False)
         from app.models.knowledge_graph import Base as KGBase
         from app.models.complaint_case import Base as CCBase
         from app.models.document import Base as DocBase
@@ -251,11 +248,7 @@ class TestBaselineRetrieval:
 
         yield Session
 
-        import os
-        try:
-            os.unlink("./tests/eval_test_baseline.db")
-        except OSError:
-            pass
+        # Cleanup — db_path is inside pytest tmp tree, auto-cleaned
 
     def test_baseline_no_empty_crash(self, seeded_db):
         """空白查询不应崩溃"""
@@ -358,14 +351,13 @@ class TestEvalReportDump:
     """生成完整评测报告（手动运行）"""
 
     @pytest.mark.slow
-    def test_dump_full_eval_report(self, eval_db_session):
-        """运行完整 110 条查询评测并输出报告"""
+    def test_dump_full_eval_report(self, eval_db_session, tmp_path):
+        """运行完整 110 条查询评测并输出报告（写入 tmp_path，不污染 tracked 文件）"""
         factory = make_db_factory(eval_db_session)
         results = run_full_eval(factory)
 
-        # Save report to file
-        report_dir = Path(__file__).resolve().parent
-        report_path = report_dir / "phase3_report.json"
+        # Save report to tmp_path — never overwrite tracked phase3_report.json
+        report_path = tmp_path / "phase3_report.json"
         report_data = {
             "timestamp": str(Path(".")),
             "baseline": _serialize_run(results["baseline"]),

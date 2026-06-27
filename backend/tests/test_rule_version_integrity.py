@@ -97,7 +97,7 @@ class TestRuleIdPollution:
     def test_manifest_no_polluted_ids(self):
         path = _versions_dir() / "manifest.json"
         if not path.exists():
-            return
+            pytest.fail("manifest.json does not exist — cannot verify integrity")
         data = json.loads(path.read_text("utf-8"))
         violations = []
         for vi, v in enumerate(data.get("versions", [])):
@@ -144,7 +144,7 @@ class TestFieldContentPollution:
     def test_manifest_no_polluted_fields(self):
         path = _versions_dir() / "manifest.json"
         if not path.exists():
-            return
+            pytest.fail("manifest.json does not exist — cannot verify integrity")
         data = json.loads(path.read_text("utf-8"))
         violations = []
         for vi, v in enumerate(data.get("versions", [])):
@@ -179,8 +179,9 @@ class TestManifestConsistency:
     def test_rule_count_matches_rules_length(self):
         path = _versions_dir() / "manifest.json"
         if not path.exists():
-            return
+            pytest.fail("manifest.json does not exist — cannot verify integrity")
         data = json.loads(path.read_text("utf-8"))
+        assert len(data.get("versions", [])) > 0, "manifest has no versions"
         violations = []
         for v in data.get("versions", []):
             rc = v.get("rule_count", 0)
@@ -191,10 +192,52 @@ class TestManifestConsistency:
                 )
         assert not violations, f"rule_count mismatch:\n" + "\n".join(violations)
 
+    def test_manifest_versions_have_snapshots(self):
+        """Every manifest version MUST have a corresponding rules_*.json snapshot."""
+        manifest_path = _versions_dir() / "manifest.json"
+        if not manifest_path.exists():
+            pytest.fail("manifest.json does not exist — cannot verify integrity")
+        data = json.loads(manifest_path.read_text("utf-8"))
+        violations = []
+        for v in data.get("versions", []):
+            ver = v["version"]
+            snap_path = _versions_dir() / f"rules_{ver}.json"
+            if not snap_path.exists():
+                violations.append(f"{ver}: missing snapshot rules_{ver}.json")
+        assert not violations, f"Manifest versions missing snapshots:\n" + "\n".join(violations)
+
+    def test_manifest_snapshot_content_consistency(self):
+        """Manifest rules MUST match snapshot rules exactly."""
+        manifest_path = _versions_dir() / "manifest.json"
+        if not manifest_path.exists():
+            pytest.fail("manifest.json does not exist — cannot verify integrity")
+        data = json.loads(manifest_path.read_text("utf-8"))
+        violations = []
+        for v in data.get("versions", []):
+            ver = v["version"]
+            snap_path = _versions_dir() / f"rules_{ver}.json"
+            if not snap_path.exists():
+                continue  # caught by test_manifest_versions_have_snapshots
+            snap = json.loads(snap_path.read_text("utf-8"))
+            manifest_rules = {r["rule_id"]: r for r in v["rules"]}
+            snap_rules = {r["rule_id"]: r for r in snap.get("rules", [])}
+            if manifest_rules.keys() != snap_rules.keys():
+                only_m = set(manifest_rules) - set(snap_rules)
+                only_s = set(snap_rules) - set(manifest_rules)
+                violations.append(f"{ver}: rule_id divergence: only in manifest={only_m}, only in snapshot={only_s}")
+                continue
+            for rid in manifest_rules:
+                mr = manifest_rules[rid]
+                sr = snap_rules[rid]
+                for field in ("platform_code", "description", "target", "mandatory", "enabled"):
+                    if mr.get(field) != sr.get(field):
+                        violations.append(f"{ver}/{rid}: {field} differs: manifest={mr.get(field)}, snapshot={sr.get(field)}")
+        assert not violations, f"Manifest/snapshot content mismatch:\n" + "\n".join(violations)
+
     def test_version_unique(self):
         path = _versions_dir() / "manifest.json"
         if not path.exists():
-            return
+            pytest.fail("manifest.json does not exist — cannot verify integrity")
         data = json.loads(path.read_text("utf-8"))
         versions = [v["version"] for v in data.get("versions", [])]
         dupes = [v for v in set(versions) if versions.count(v) > 1]
@@ -203,7 +246,7 @@ class TestManifestConsistency:
     def test_version_not_empty(self):
         path = _versions_dir() / "manifest.json"
         if not path.exists():
-            return
+            pytest.fail("manifest.json does not exist — cannot verify integrity")
         data = json.loads(path.read_text("utf-8"))
         violations = []
         for v in data.get("versions", []):
@@ -395,25 +438,48 @@ class TestNatl001Canonical:
     def test_platform_rules_natl001_canonical(self):
         path = _rules_dir() / "platform_rules.json"
         data = json.loads(path.read_text("utf-8"))
+        found = None
         for m in data.get("mappings", []):
-            if m.get("rule_id") == "NATL-001":
-                assert m["description"] in self.VALID, (
-                    f"NATL-001 description should be in {self.VALID}, "
-                    f"got '{m['description']}'"
-                )
-                return
-        pytest.fail("NATL-001 not found in platform_rules.json")
+            if m.get("platform_code") == "NATL-001":
+                if found is not None:
+                    pytest.fail(f"NATL-001 appears multiple times in platform_rules.json: {found['rule_id']} and {m['rule_id']}")
+                found = m
+        if not found:
+            pytest.fail("NATL-001 not found in platform_rules.json — canonical entry missing")
+        assert found["rule_id"] == "NATL-001", f"NATL-001 rule_id must be canonical 'NATL-001', got '{found['rule_id']}'"
+        assert found["description"] in self.VALID, (
+            f"NATL-001 description should be in {self.VALID}, "
+            f"got '{found['description']}'"
+        )
+        assert found["enabled"] is True, f"NATL-001 must be enabled, got {found['enabled']}"
 
     def test_snapshots_natl001_canonical(self):
         violations = []
         for fpath in sorted(_versions_dir().glob("rules_*.json")):
             data = json.loads(fpath.read_text("utf-8"))
+            found_natl001 = None
             for r in data.get("rules", []):
                 if r.get("rule_id") == "NATL-001":
-                    if r.get("description") not in self.VALID:
-                        violations.append(
-                            f"{fpath.name}: NATL-001 description='{r['description']}'"
-                        )
+                    if found_natl001 is not None:
+                        violations.append(f"{fpath.name}: duplicate NATL-001 entries")
+                    found_natl001 = r
+                elif r.get("rule_id") == "NATL-NATL-001":
+                    violations.append(f"{fpath.name}: polluted rule_id NATL-NATL-001 should be NATL-001")
+                elif r.get("platform_code") == "NATL-001" and r.get("rule_id") != "NATL-001":
+                    violations.append(f"{fpath.name}: platform_code=NATL-001 but rule_id={r['rule_id']} (should be NATL-001)")
+            if found_natl001 is None:
+                # Check if there's a NATL-NATL-001 that should have been canonical
+                for r in data.get("rules", []):
+                    if r.get("rule_id") == "NATL-NATL-001":
+                        violations.append(f"{fpath.name}: has NATL-NATL-001 but no canonical NATL-001")
+                        break
+                else:
+                    violations.append(f"{fpath.name}: NATL-001 not found in snapshot")
+                continue
+            if found_natl001.get("description") not in self.VALID:
+                violations.append(f"{fpath.name}: NATL-001 description='{found_natl001['description']}'")
+            if not found_natl001.get("enabled"):
+                violations.append(f"{fpath.name}: NATL-001 enabled={found_natl001.get('enabled')}, expected True")
         assert not violations, (
             f"NATL-001 not canonical in snapshots:\n" + "\n".join(violations)
         )
@@ -421,16 +487,26 @@ class TestNatl001Canonical:
     def test_manifest_natl001_canonical(self):
         path = _versions_dir() / "manifest.json"
         if not path.exists():
-            return
+            pytest.fail("manifest.json does not exist — cannot verify integrity")
         data = json.loads(path.read_text("utf-8"))
         violations = []
         for vi, v in enumerate(data.get("versions", [])):
+            found = None
             for ri, r in enumerate(v.get("rules", [])):
                 if r.get("rule_id") == "NATL-001":
-                    if r.get("description") not in self.VALID:
-                        violations.append(
-                            f"manifest[{vi}].rules[{ri}]: '{r['description']}'"
-                        )
+                    if found is not None:
+                        violations.append(f"manifest[{vi}]: duplicate NATL-001")
+                    found = (ri, r)
+                elif r.get("rule_id") == "NATL-NATL-001":
+                    violations.append(f"manifest[{vi}].rules[{ri}]: polluted NATL-NATL-001 should be NATL-001")
+            if found is None:
+                violations.append(f"manifest[{vi}]: NATL-001 not found")
+                continue
+            ri, r = found
+            if r.get("description") not in self.VALID:
+                violations.append(f"manifest[{vi}].rules[{ri}]: '{r['description']}' (not canonical)")
+            if not r.get("enabled"):
+                violations.append(f"manifest[{vi}].rules[{ri}]: enabled={r.get('enabled')}, expected True")
         assert not violations, (
             f"NATL-001 not canonical in manifest:\n" + "\n".join(violations)
         )

@@ -1,12 +1,30 @@
 # 知识库模块当前状态
 
-> 状态更新日期：2026-06-23
-> Git 基线：执行时通过 `git rev-parse --short HEAD` 获取
+> 状态更新日期：2026-06-27
+> Git 基线：`git rev-parse --short HEAD` = `91dd7d8f`
 > 当前分支：`main`
-> 工作区状态：clean
-> Codex 上次门禁：`PHASE_2_REJECTED`
-> 当前门禁码：`READY_FOR_CODEX_PHASE_2_REAUDIT` — 17 个阻塞项全部修复，141 tests passed，规则资产零污染，SessionLocal 泄漏已封堵
-> Codex 审计简报：`docs/case-library/CODEX_REAUDIT_BRIEF.md`
+> 工作区状态：dirty — Phase 3 阻塞项修复中
+
+## 0. 待提交变更清单
+
+| 文件 | 变更 | 说明 |
+|---|---|---|
+| `docs/case-library/CURRENT_STATUS.md` | M | 状态文档更新至真实状态 |
+| `backend/tests/eval/retrievers.py` | M | 移除 optimized_retriever() 及 run_full_eval() 中 optimized 分支 |
+| `backend/tests/eval/test_retrieval_eval.py` | M | eval DB 路径改为 tmp_path；移除 optimized 分支 |
+| `backend/app/services/crawler_service.py` | M | published_only 过滤 + visibility 修复 |
+| `backend/app/api/crawler.py` | M | 普通用户案例列表/详情发布状态过滤 |
+| `rules/platform_rules.json` | M | 移除 NATL-NATL-001 重复条目，保留 canonical NATL-001 |
+| `rules/versions/manifest.json` | M | NATL-NATL-001 → NATL-001；7 版本快照一致性 |
+| `rules/versions/rules_20260621102535.json` | M | NATL-NATL-001 移除；rule_count 修正为 25 |
+| `rules/versions/rules_20260622102549.json` | A | 新建缺失快照 (manifest 版本) |
+| `rules/versions/rules_20260622102601.json` | A | 新建缺失快照 |
+| `rules/versions/rules_20260623102615.json` | A | 新建缺失快照 |
+| `rules/versions/rules_20260623102627.json` | A | 新建缺失快照 |
+| `rules/versions/rules_20260624102641.json` | A | 新建缺失快照 |
+| `rules/versions/rules_20260624102653.json` | A | 新建缺失快照 |
+| `rules/versions/rules_20260621102523.json` | D | 旧版本快照清理 |
+| `backend/tests/test_rule_version_integrity.py` | M | 硬断言：manifest 不可为空、快照必须存在、内容一致 |
 
 ## 1. 阶段结论
 
@@ -14,85 +32,47 @@
 |---|---|---|
 | Phase 0 | 已完成 | `PHASE_0_ACCEPTED_WITH_CORRECTIONS` |
 | Phase 1 | 已完成 | `PHASE_1_ACCEPTED` |
-| Phase 2 | 修复完成 | 17 个阻塞项全部修复（9 个原始 + 8 个 re-audit），141 tests passed |
+| Phase 2 | 已完成 | `PHASE_2_ACCEPTED` — 检索门禁 PASS |
+| Phase 3 | 待验收 | Blocker 修复中 |
 
-## 2. 测试结果（2026-06-23）
+## 2. 检索评测架构
+
+当前检索路径（与代码一致）：
+- **Baseline**: 多关键词 ILIKE（`retrievers.py: baseline_search_retriever`）
+- **RAG Off**: 关键词搜索，无图谱增强（`rag_off_retriever`）
+- **RAG On**: 关键词搜索 + 图谱边遍历增强（`rag_on_retriever`）
+- **评测框架**: `backend/tests/eval/metrics.py` — Recall@K, MRR, nDCG, P95 Latency
+
+**不在当前生产/评测路径中的内容**（仅供参考，非当前架构）：
+- `semantic_reranker.py` — 两阶段语义重排序器原型，未接入评测或生产路径
+- pgvector 混合检索 — 未部署，不在评测 pipeline 中
+- `optimized_retriever()` — 已从 `retrievers.py` 移除
+
+## 3. 测试结果 (2026-06-27 阻断项修复后运行)
 
 | 验证项 | 结果 |
 |---|---|
-| **GitHub Actions CI** | `success` — 0 failed |
-| Phase 2 回归套件 (test_phase2_de.py) | `99 passed` |
-| 规则版本完整性 (test_rule_version_integrity.py) | `24 passed` |
-| 来源 Fixture 契约 (test_source_fixtures.py) | `18 passed` |
-| **总计** | **141 passed** |
-| Security 全部测试 | 通过 |
-| 规则资产 SHA-256 | platform_rules.json = `4898677a5637ef900f48dac59af21106168504885ebe1bc1b90fa4af6157af58` |
-| | manifest.json = `1627d35ece46b26fc655dacbf05d93099d9744b167248dbd62dc314e70c1bf47` |
-| 规则资产污染扫描 | 零污染 — NATL-001 可信基线已恢复，无测试产出物残留 |
-| 原始异常日志扫描 | 零路径 — 所有 `logger.error/warning` 经过 `_safe_error_summary` / `_safe_error_log` / `_sanitize_exc` |
-| SessionLocal 泄漏扫描 | 已封堵 — _save_case 复用外部 db；CCGP/宁夏/财政部 3 来源各 1 个 SessionLocal；KG 段补齐 rollback + close |
-| git status | clean |
+| 规则版本完整性 (test_rule_version_integrity.py) | **26 passed** |
+| Phase 2 服务层验收 (test_phase2_acceptance.py) | **29 passed** |
+| 检索评测全量 (test_retrieval_eval.py) | **31 passed** |
+| 规则资产污染扫描 | **零污染** |
+| 未追踪快照文件 | **0 个** |
 
-## 3. 阻塞项修复汇总（17 个）
+## 4. Phase 3 关键变更
 
-### 原始 9 个（第一轮 re-audit）
+| 变更 | 说明 |
+|---|---|
+| 检索评测框架 | 从 0 搭建 Recall@K / MRR / nDCG / P95 Latency 评测体系 |
+| 多检索器对比 | Baseline / RAG Off / RAG On 三路对照评测 |
+| 数据集 | 110 条查询，含相关文档标注和困难负样本 |
 
-| # | 阻塞项 | 提交 |
-|---|---|---|
-| 1 | 明细解析全部失败仍报告为 success | `8d39f3e5` |
-| 2 | 零有效产出 + KG 同步失败判为 partial | `8d39f3e5` |
-| 3 | 敏感错误信息未统一脱敏 | `8d39f3e5` |
-| 4 | 陕西全部解析失败仍报告 success（fetched=parsed_count）| `9e03e1a8` |
-| 5 | 单条明细失败导致整个来源 failed | `7312b20d` |
-| 6 | 原始敏感异常可进入 logger | `5dff5565` |
-| 7 | sync_scheduler NameError 风险 | `591de418` |
-| 8 | NATL-001 无依据文案 + 测试白名单放宽 | `8498217f` + `375648c9` |
-| 9 | 状态文档与实际结果不一致 | `375648c9` |
+## 5. 仓库卫生 (2026-06-27 阻断项修复)
 
-### 第二轮 4 个（re-audit blocking items）
-
-| # | 阻塞项 | 提交 | 修复要点 |
-|---|---|---|---|
-| 10 | sync_scheduler._safe_error_log 脱敏正则不完整 + sync() raw errors 未脱敏 | `52917f2a` | 补 Cookie/URL query 参数模式；sync() 走 `_safe_error_log` |
-| 11 | SafeFetchError.message 嵌入原始异常绕过脱敏 | `52917f2a` | 新增 `_sanitize_exc()`；safe_fetcher 4 处 raw `{e}` 替换；crawler_service stats["errors"] 双重脱敏 |
-| 12 | 陕西部分解析失败仍 success（parse_failed_count 未参与判定）| `52917f2a` | `_source_status` 新增 `parse_failed_count` 参数；fetched>0 且 parse_failed>0 → partial |
-| 13 | CURRENT_STATUS.md 基线 HEAD 不符 | `52917f2a` | 基线修正为 `52917f2a`；工作区 clean；测试结果 141 passed |
-
-### 第三轮 2 个（re-audit blocking items）
-
-| # | 阻塞项 | 提交 | 修复要点 |
-|---|---|---|---|
-| 14 | partial 缺少降级原因（None 传播至任务明细/健康表/快照）| `dffba4e0` | crawler_service 4 个来源加 `partial_parse` 分支；sync_scheduler 二次兜底派生 `error_type`/`error_message` |
-| 15 | CURRENT_STATUS.md 哈希失真（HEAD + 规则 SHA-256 与实际不符）| `dffba4e0` | HEAD 修正为 `dffba4e0`，规则哈希与 `shasum -a 256` 一致 |
-
-### 第四轮 2 个（re-audit blocking items）
-
-| # | 阻塞项 | 提交 | 修复要点 |
-|---|---|---|---|
-| 16 | _save_case 每条案例创建 SessionLocal() + KG 段裸 SessionLocal() 回收路径不含 rollback | `b2623f9d` | _save_case 改为接收外部 db；CCGP/宁夏/财政部各复用单个 SessionLocal（ccdb/nxdb/mdb）；KG 段补齐 rollback + finally-close |
-| 17 | CURRENT_STATUS.md HEAD SHA 失真（写 `dffba4e0`，实际 `ad40c183`）| `b2623f9d` | HEAD 更新至 `b2623f9d`；工作区 clean；状态如实反映 17 个阻塞项
-
-### 额外修复
-- CI flaky：uv path / UV_CACHE_DIR / stderr PIPE 诊断 (5 个提交)
-- 规则资产清理：61 条测试污染移除、manifest 去重、monkeypatch 加固 (4 个提交)
-- Conftest 迁移警告抑制 (`b80b2cbb`)
-
-## 4. 尚未完成的事项
-
-1. Canary 数据不足 7 天连续稳定
-2. 检索评测集未建立
-3. 空库和存量迁移待重新验证
-
-## 5. 生产试点前置条件
-
-- ❌ 真实来源 canary 连续稳定 7 天
-- ✅ 案例审核链路可用
-- ✅ 任务持久化、进程重启可追溯
-- ✅ CI 全绿（141 passed, 0 failed）
-- ❌ 检索评测集未建立
-
-## Codex 验收请求
-
-**复核审计简报**：`docs/case-library/CODEX_REAUDIT_BRIEF.md`  
-**基线提交**：`git rev-parse --short HEAD`  
-**请求结论**：`READY_FOR_CODEX_PHASE_2_REAUDIT`
+| 操作 | 状态 |
+|---|---|
+| 规则资产 NATL-001 规范化（platform_rules/manifest/snapshot 三方统一） | ✓ |
+| Manifest 7 版本快照补齐（每个版本对应 rules_*.json） | ✓ |
+| 测试硬断言（manifest 必须存在、快照必须对应、内容必须一致） | ✓ |
+| eval DB 路径改为 tmp_path（不再污染仓库目录） | ✓ |
+| `/api/crawler/cases` 普通用户可见性过滤 | ✓ |
+| CURRENT_STATUS.md 删除未实现的 pgvector/语义重排序叙述 | ✓ |

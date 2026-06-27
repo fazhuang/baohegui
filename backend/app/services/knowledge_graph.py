@@ -144,12 +144,12 @@ class KnowledgeGraphService:
 
         q = db.query(KGNode)
         if node_type:
-            # When user asks for regulations or cases, also allow rules
+            # When user asks for regulations, also allow rules
             # (most queries asking for "regulation" actually want the compliance rules stored as rule nodes)
-            if node_type != "rule":
-                q = q.filter(KGNode.node_type.in_([node_type, "rule"]))
+            if node_type == "regulation":
+                q = q.filter(KGNode.node_type.in_(["regulation", "rule"]))
             else:
-                q = q.filter(KGNode.node_type == "rule")
+                q = q.filter(KGNode.node_type == node_type)
 
         # 审核状态过滤
         if audit_status is not None:
@@ -1019,6 +1019,7 @@ class KnowledgeGraphService:
                     content="\n".join(content_parts),
                     source="包合规参数倾向检测规则库",
                     tags=tags,
+                    rule_id=rule_id,
                     jurisdiction="全国",
                     trust_level=0.70,
                     audit_status="verified",

@@ -456,6 +456,8 @@ class TestCaseDataTiering:
             complainant="投诉人张三", respondent="被投诉人李四",
             raw_content="原始敏感内容", summary="摘要",
             complaint_types='["测试"]',
+            review_status="published",
+            publish_status="published",
         )
         db_session.add(cc)
         db_session.commit()

@@ -56,6 +56,9 @@ select = ["E", "F", "I", "N", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "slow: slow running tests (e.g. full eval suite)",
+]
 
 [dependency-groups]
 dev = [

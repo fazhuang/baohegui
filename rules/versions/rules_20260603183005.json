@@ -13,7 +13,7 @@
       "description": "缺少规定章节",
       "version": "1.0",
       "effective_date": "2026-01-01",
-      "enabled": false,
+      "enabled": true,
       "category": "platform"
     },
     {
@@ -225,19 +225,6 @@
       "category": "platform"
     },
     {
-      "rule_id": "NATL-NATL-001",
-      "platform": "全国公共资源交易平台",
-      "platform_code": "NATL-001",
-      "rule_type": "chapter",
-      "target": "章节完整性",
-      "mandatory": true,
-      "description": "缺少规定章节",
-      "version": "1.0",
-      "effective_date": "2026-06-03",
-      "enabled": true,
-      "category": "platform"
-    },
-    {
       "rule_id": "NATL-NATL-003",
       "platform": "全国公共资源交易平台",
       "platform_code": "NATL-003",
@@ -342,5 +329,5 @@
       "category": "platform"
     }
   ],
-  "rule_count": 26
+  "rule_count": 25
 }

@@ -1,7 +1,7 @@
 {
   "version": "20260605183034",
   "timestamp": "2026-06-05 18:30:34",
-  "rule_count": 26,
+  "rule_count": 25,
   "change_log": "同步 全国公共资源交易平台 — 新增0 更新5",
   "rules": [
     {
@@ -14,7 +14,7 @@
       "description": "缺少规定章节",
       "version": "1.0",
       "effective_date": "2026-01-01",
-      "enabled": false,
+      "enabled": true,
       "category": "platform"
     },
     {
@@ -222,19 +222,6 @@
       "description": "检测到排他性语义",
       "version": "1.0",
       "effective_date": "2026-06-04",
-      "enabled": true,
-      "category": "platform"
-    },
-    {
-      "rule_id": "NATL-NATL-001",
-      "platform": "全国公共资源交易平台",
-      "platform_code": "NATL-001",
-      "rule_type": "chapter",
-      "target": "章节完整性",
-      "mandatory": true,
-      "description": "缺少规定章节",
-      "version": "1.0",
-      "effective_date": "2026-06-05",
       "enabled": true,
       "category": "platform"
     },

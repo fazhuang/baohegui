@@ -152,12 +152,18 @@ async def list_cases(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """已采集案例列表（分页）"""
+    """已采集案例列表（分页）
+
+    普通用户只能看到已发布 (published) 的案例。
+    管理员可以看到所有状态的案例。
+    """
+    is_admin = user.get("role") == "admin"
     cases = query_cases(
         db, province=province, decision_type=decision_type,
         limit=limit, offset=offset,
+        published_only=not is_admin,
     )
-    total = count_cases(db, province=province, decision_type=decision_type)
+    total = count_cases(db, province=province, decision_type=decision_type, published_only=not is_admin)
     return {
         "items": [
             {
@@ -185,9 +191,12 @@ async def get_case_detail(case_id: int, db: Session = Depends(get_db), user: dic
     """单条案例详情 — Phase 1 数据分级：
 
     - 管理员：返回完整信息（含 raw_content、complainant、respondent），记录审计日志。
-    - 普通用户：不返回 raw_content、complainant、respondent。
+    - 普通用户：只返回已发布案例的公开字段，不返回 raw_content、complainant、respondent。
+      访问未发布案例返回 404（不泄漏状态）。
     """
     from app.models.complaint_case import ComplaintCase
+
+    is_admin = user.get("role") == "admin"
 
     case = db.query(ComplaintCase).filter(ComplaintCase.id == case_id).first()
     if not case:
@@ -195,7 +204,12 @@ async def get_case_detail(case_id: int, db: Session = Depends(get_db), user: dic
 
         raise HTTPException(status_code=404, detail="案例不存在")
 
-    is_admin = user.get("role") == "admin"
+    # 普通用户只能查看已发布的案例
+    if not is_admin:
+        if case.review_status != "published" or case.publish_status != "published":
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="案例不存在")
 
     if is_admin:
         audit_service.log(

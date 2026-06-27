@@ -62,14 +62,17 @@ class TestPaginationContractFix:
         db_session.add(ComplaintCase(
             province="甘肃", title="甘肃案例", decision_type="upheld",
             complaint_types='["品牌锁定"]',
+            review_status="published", publish_status="published",
         ))
         db_session.add(ComplaintCase(
             province="宁夏", title="宁夏案例", decision_type="upheld",
             complaint_types='["参数排他"]',
+            review_status="published", publish_status="published",
         ))
         db_session.add(ComplaintCase(
             province="甘肃", title="甘肃案例2", decision_type="rejected",
             complaint_types='["评分标准"]',
+            review_status="published", publish_status="published",
         ))
         db_session.commit()
 
@@ -90,10 +93,12 @@ class TestPaginationContractFix:
         db_session.add(ComplaintCase(
             province="全国", title="成立案例", decision_type="upheld",
             complaint_types='["品牌锁定"]',
+            review_status="published", publish_status="published",
         ))
         db_session.add(ComplaintCase(
             province="全国", title="驳回案例", decision_type="rejected",
             complaint_types='["参数排他"]',
+            review_status="published", publish_status="published",
         ))
         db_session.commit()
 
@@ -112,14 +117,17 @@ class TestPaginationContractFix:
         db_session.add(ComplaintCase(
             province="甘肃", title="案例1", decision_type="upheld",
             complaint_types='["品牌锁定"]',
+            review_status="published", publish_status="published",
         ))
         db_session.add(ComplaintCase(
             province="甘肃", title="案例2", decision_type="rejected",
             complaint_types='["参数排他"]',
+            review_status="published", publish_status="published",
         ))
         db_session.add(ComplaintCase(
             province="宁夏", title="案例3", decision_type="upheld",
             complaint_types='["评分标准"]',
+            review_status="published", publish_status="published",
         ))
         db_session.commit()
 
@@ -144,6 +152,7 @@ class TestPaginationContractFix:
             db_session.add(ComplaintCase(
                 province="全国", title=f"案例{i}", decision_type="upheld",
                 complaint_types='["测试"]',
+                review_status="published", publish_status="published",
             ))
         db_session.commit()
 

@@ -508,6 +508,8 @@ def _save_case(data: dict, db: Session | None = None) -> bool:
     """将一条案例写入数据库（去重）
 
     自动转换 decision_date 字符串为 date 对象。
+    自动计算 content_hash 并设置 source_type 默认值。
+    保存前通过去重服务检查重复（canonical_url/source_url/content_hash/project_number/case_no）。
 
     Phase 2 fix: 接收外部 db session 复用连接，避免每条案例创建新 SessionLocal。
     未传入时自建 session（向后兼容）。
@@ -517,6 +519,8 @@ def _save_case(data: dict, db: Session | None = None) -> bool:
         own_db = SessionLocal()
         db = own_db
     try:
+        from app.services.dedup_service import dedup_service
+
         existing = db.query(ComplaintCase).filter(
             ComplaintCase.source_url == data["source_url"]
         ).first()
@@ -535,7 +539,34 @@ def _save_case(data: dict, db: Session | None = None) -> bool:
             else:
                 data["decision_date"] = None
 
+        # Phase 2: 默认 source_type（如果爬虫未提供）
+        data.setdefault("source_type", "ccgp")
+
         case = ComplaintCase(**data)
+
+        # Phase 2: 自动计算 content_hash
+        if not case.content_hash:
+            case.set_content_hash()
+
+        # Phase 2: 设置默认状态
+        if not case.review_status:
+            case.review_status = "fetched"
+        if not case.publish_status:
+            case.publish_status = "draft"
+
+        # Phase 2: 保存前去重检查（通过 canonical_url / source_url / content_hash / project_number）
+        dup_result = dedup_service.check_before_save(db, case)
+        if dup_result.get("is_duplicate") and dup_result.get("auto_resolved"):
+            logger.info(
+                "案例「%s」在保存时被去重标记为 duplicate (method=%s)",
+                case.title[:50],
+                dup_result.get("method", "?"),
+            )
+            # 仍然保存但状态已是 duplicate
+            db.add(case)
+            db.commit()
+            return True
+
         db.add(case)
         db.commit()
         return True
@@ -620,25 +651,29 @@ def query_cases(
     decision_type: str = "",
     limit: int = 50,
     offset: int = 0,
+    published_only: bool = False,
 ) -> list[ComplaintCase]:
     """查询已采集案例"""
-    q = _build_case_query(db, province=province, decision_type=decision_type)
+    q = _build_case_query(db, province=province, decision_type=decision_type, published_only=published_only)
     return q.order_by(ComplaintCase.created_at.desc()).offset(offset).limit(limit).all()
 
 
-def count_cases(db: Session, province: str = "", decision_type: str = "") -> int:
+def count_cases(db: Session, province: str = "", decision_type: str = "", published_only: bool = False) -> int:
     """返回符合筛选条件的案例总数"""
-    q = _build_case_query(db, province=province, decision_type=decision_type)
+    q = _build_case_query(db, province=province, decision_type=decision_type, published_only=published_only)
     return q.count()
 
 
-def _build_case_query(db: Session, province: str = "", decision_type: str = ""):
+def _build_case_query(db: Session, province: str = "", decision_type: str = "", published_only: bool = False):
     """构建带筛选条件的案例查询"""
     q = db.query(ComplaintCase)
     if province:
         q = q.filter(ComplaintCase.province == province)
     if decision_type:
         q = q.filter(ComplaintCase.decision_type == decision_type)
+    if published_only:
+        q = q.filter(ComplaintCase.review_status == "published")
+        q = q.filter(ComplaintCase.publish_status == "published")
     return q
 
 

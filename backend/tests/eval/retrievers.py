@@ -439,56 +439,6 @@ def rag_on_retriever(db_factory: Callable[[], Session]):
 
 
 # ══════════════════════════════════════════════════════════════════
-# Optimized Retriever — PostgreSQL enhanced (Phase 2)
-# ══════════════════════════════════════════════════════════════════
-
-def optimized_retriever(db_factory: Callable[[], Session]):
-    """Phase 2 optimized retriever using pg_trgm + FTS + RRF."""
-
-    def retrieve(query: EvalQuery) -> tuple[list[RetrievedDoc], float]:
-        from app.services.optimized_retrieval import OptimizedRetriever
-
-        db = db_factory()
-        try:
-            start = time.perf_counter()
-            search_query = " ".join(getattr(query, 'search_keywords', [])
-                                    or extract_keywords(query.query_text, query.tags))
-
-            opt = OptimizedRetriever(
-                db, use_fts=True, use_trigram=True,
-            )
-            results, _ = opt.search(
-                query=search_query,
-                node_type=query.node_type,
-                limit=20,
-                min_trust=0.0,
-                audit_status="verified",
-                jurisdiction=query.jurisdiction if query.jurisdiction else None,
-            )
-            elapsed = (time.perf_counter() - start) * 1000
-
-            docs = []
-            seen = set()
-            for i, r in enumerate(results):
-                cid = _canonical_id(r)
-                if cid not in seen:
-                    seen.add(cid)
-                    docs.append(RetrievedDoc(
-                        id=cid,
-                        rank=len(docs) + 1,
-                        score=float(r.get("trust_level", 0)),
-                        title=r.get("title", ""),
-                        node_type=r.get("node_type", ""),
-                        content=r.get("content", ""),
-                    ))
-            return docs, elapsed
-        finally:
-            db.close()
-
-    return retrieve
-
-
-# ══════════════════════════════════════════════════════════════════
 # Eval Runner — execute all retrievers and compare
 # ══════════════════════════════════════════════════════════════════
 
@@ -496,7 +446,7 @@ def run_full_eval(
     db_factory: Callable[[], Session],
     queries: Optional[list[EvalQuery]] = None,
 ) -> dict:
-    """Run baseline, RAG-off, RAG-on, and optimized evaluations. Print report."""
+    """Run baseline, RAG-off, and RAG-on evaluations. Print report."""
 
     if queries is None:
         queries = load_queries()
@@ -533,30 +483,14 @@ def run_full_eval(
         rag_mode=True,
     )
 
-    # 4. Optimized (pg_trgm + FTS + RRF)
-    print("\n▶ 运行 Optimized 检索...")
-    optimized = run_retrieval_eval(
-        queries,
-        optimized_retriever(db_factory),
-        name="Optimized (pg_trgm + FTS + RRF)",
-        rag_mode=True,
-    )
-
     # Compare: RAG On vs RAG Off
     print("\n" + "═" * 70)
     print("  RAG 对照结果:")
     print("═" * 70)
     print(format_eval_report(rag_on, baseline=rag_off))
 
-    # Compare: Optimized vs Baseline
-    print("\n" + "═" * 70)
-    print("  PostgreSQL 优化对照结果:")
-    print("═" * 70)
-    print(format_eval_report(optimized, baseline=baseline))
-
     return {
         "baseline": baseline,
         "rag_off": rag_off,
         "rag_on": rag_on,
-        "optimized": optimized,
     }

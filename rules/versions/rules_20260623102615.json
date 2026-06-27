@@ -1,21 +1,8 @@
 {
-  "version": "20260603175211",
-  "timestamp": "2026-06-03 17:52:11",
-  "change_log": "同步 重庆市公共资源交易平台 — 新增4 更新0",
+  "version": "20260623102615",
+  "timestamp": "2026-06-23 10:26:15",
+  "change_log": "同步 全国公共资源交易平台 — 新增0 更新5",
   "rules": [
-    {
-      "rule_id": "NATL-001",
-      "platform": "全国公共资源交易平台",
-      "platform_code": "NATL-001",
-      "rule_type": "chapter",
-      "target": "章节完整性",
-      "mandatory": true,
-      "description": "缺少规定章节",
-      "version": "1.0",
-      "effective_date": "2026-01-01",
-      "enabled": true,
-      "category": "platform"
-    },
     {
       "rule_id": "NATL-003",
       "platform": "全国公共资源交易平台",
@@ -155,7 +142,7 @@
       "mandatory": true,
       "description": "招标文件缺少必备章节",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-22",
       "enabled": true,
       "category": "platform"
     },
@@ -168,7 +155,7 @@
       "mandatory": true,
       "description": "未明确采购方式",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-22",
       "enabled": true,
       "category": "platform"
     },
@@ -181,7 +168,7 @@
       "mandatory": true,
       "description": "评标办法中缺少评分标准",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-22",
       "enabled": true,
       "category": "platform"
     },
@@ -194,7 +181,7 @@
       "mandatory": true,
       "description": "检测到指定品牌特征",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-22",
       "enabled": true,
       "category": "platform"
     },
@@ -207,7 +194,7 @@
       "mandatory": false,
       "description": "地域限制条款",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-22",
       "enabled": true,
       "category": "platform"
     },
@@ -220,7 +207,20 @@
       "mandatory": true,
       "description": "检测到排他性语义",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-22",
+      "enabled": true,
+      "category": "platform"
+    },
+    {
+      "rule_id": "NATL-001",
+      "platform": "全国公共资源交易平台",
+      "platform_code": "NATL-001",
+      "rule_type": "chapter",
+      "target": "章节完整性",
+      "mandatory": true,
+      "description": "缺少规定章节",
+      "version": "1.0",
+      "effective_date": "2026-06-23",
       "enabled": true,
       "category": "platform"
     },
@@ -233,7 +233,7 @@
       "mandatory": true,
       "description": "采购方式缺失",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-23",
       "enabled": true,
       "category": "platform"
     },
@@ -246,7 +246,7 @@
       "mandatory": true,
       "description": "地域歧视条款",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-23",
       "enabled": true,
       "category": "platform"
     },
@@ -259,7 +259,7 @@
       "mandatory": false,
       "description": "注册资金作为资格条件",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-23",
       "enabled": true,
       "category": "platform"
     },
@@ -272,7 +272,7 @@
       "mandatory": false,
       "description": "评分标准需符合公平原则",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-23",
       "enabled": true,
       "category": "platform"
     },
@@ -285,7 +285,7 @@
       "mandatory": true,
       "description": "章节缺失或为空",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-22",
       "enabled": true,
       "category": "platform"
     },
@@ -298,7 +298,7 @@
       "mandatory": true,
       "description": "评审标准缺失",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-22",
       "enabled": true,
       "category": "platform"
     },
@@ -311,7 +311,7 @@
       "mandatory": true,
       "description": "排他性条款",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-22",
       "enabled": true,
       "category": "platform"
     },
@@ -324,7 +324,7 @@
       "mandatory": false,
       "description": "独家授权排他性",
       "version": "1.0",
-      "effective_date": "2026-06-03",
+      "effective_date": "2026-06-22",
       "enabled": true,
       "category": "platform"
     }
