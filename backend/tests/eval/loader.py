@@ -1,4 +1,14 @@
-"""Phase 3 检索评测数据加载器"""
+"""Phase 3 检索评测数据加载器
+
+查询加载后可通过 canonical_id_map 将标题/名称映射到 KG canonical ID，
+以便指标计算和硬负样本检测。
+
+Canonical ID 规则（与 retrievers._canonical_id 一致）：
+- rule 节点：rule_id（如 "R001"）
+- 非 rule 节点：title 前缀匹配 + NODE-{id}（用于硬负检测）
+"""
+
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -11,6 +21,9 @@ _EVAL_DIR = Path(__file__).resolve().parent
 
 def load_queries(path: Optional[Path] = None, version: str = "v1") -> list[EvalQuery]:
     """Load annotated eval queries from JSON.
+
+    search_keywords 已从数据集剥离。检索器只能使用 query_text + tags
+    + node_type + jurisdiction 作为输入。
 
     Args:
         path: Optional explicit path to queries JSON.
@@ -38,11 +51,12 @@ def load_queries(path: Optional[Path] = None, version: str = "v1") -> list[EvalQ
 
         hard_negatives = []
         for hd in qd.get("hard_negatives", []):
-            # Hard negatives can be specified by title or id
+            # Hard negatives can be specified by title or object
+            # Title-only form is resolved against canonical_id_map at eval time
             if isinstance(hd, str):
                 hard_negatives.append(RelevantDoc(
-                    id=hd,  # title as id for string-only negatives
-                    rel_type="",
+                    id=hd,  # title — resolved via canonical_id_map at eval time
+                    rel_type="case",
                     relevance=0,
                     title=hd,
                     is_hard_negative=True,
@@ -50,14 +64,11 @@ def load_queries(path: Optional[Path] = None, version: str = "v1") -> list[EvalQ
             else:
                 hard_negatives.append(RelevantDoc(
                     id=hd["id"],
-                    rel_type=hd.get("rel_type", ""),
+                    rel_type=hd.get("rel_type", "case"),
                     relevance=0,
                     title=hd.get("title", ""),
                     is_hard_negative=True,
                 ))
-
-        jurisdiction = qd.get("jurisdiction")
-        search_keywords = qd.get("search_keywords", [])
 
         eq = EvalQuery(
             query_id=qd["query_id"],
@@ -65,12 +76,11 @@ def load_queries(path: Optional[Path] = None, version: str = "v1") -> list[EvalQ
             relevant_docs=relevant,
             hard_negatives=hard_negatives,
             node_type=qd.get("node_type"),
-            jurisdiction=jurisdiction,
+            jurisdiction=qd.get("jurisdiction"),
             tags=qd.get("tags", []),
             expected_regulations=qd.get("expected_regulations", []),
             expected_cases=qd.get("expected_cases", []),
         )
-        eq.search_keywords = search_keywords  # type: ignore
         queries.append(eq)
 
     return queries

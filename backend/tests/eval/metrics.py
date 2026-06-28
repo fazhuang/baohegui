@@ -69,8 +69,8 @@ class QueryResult:
     mis_cited: bool = False
     latency_ms: float = 0.0
     # RAG-specific
-    rag_regulation_recall: float = 0.0
-    rag_case_recall: float = 0.0
+    rag_regulation_recall: Optional[float] = 0.0
+    rag_case_recall: Optional[float] = 0.0
 
 
 @dataclass
@@ -174,7 +174,10 @@ def run_retrieval_eval(
     for q in queries:
         relevant_ids = {d.id for d in q.relevant_docs}
         relevant_map = {d.id: d.relevance for d in q.relevant_docs}
-        hard_neg_ids = {d.id for d in q.hard_negatives}
+        # Hard negatives stored as titles — match against retrieved titles
+        hard_neg_titles = {d.title.lower() for d in q.hard_negatives if d.title}
+        # Also collect hard negative IDs (for id-based matching)
+        hard_neg_ids = {d.id for d in q.hard_negatives if not isinstance(d.id, str) or not any(ord(c) > 127 for c in str(d.id))}
 
         retrieved, latency = retriever(q)
         latencies.append(latency)
@@ -191,8 +194,12 @@ def run_retrieval_eval(
         if empty:
             empty_count += 1
 
-        # Mis-citation detection: if a hard negative appears in top-10
-        mis_cited = bool(hard_neg_ids & set(retrieved_ids[:10]))
+        # Mis-citation detection: if ANY hard negative (by title or ID) appears in top-10
+        top10_titles = {r.title.lower() for r in retrieved[:10]}
+        top10_all_ids = set(retrieved_ids[:10])
+        mis_by_title = bool(hard_neg_titles & top10_titles)
+        mis_by_id = bool(hard_neg_ids & top10_all_ids)
+        mis_cited = mis_by_title or mis_by_id
         if mis_cited:
             mis_cited_count += 1
 
@@ -232,6 +239,10 @@ def run_retrieval_eval(
     if not _q_with_rel:
         _q_with_rel = per_query
 
+    # Type recall: only include queries that have expected_* annotations
+    reg_recalls = [qr.rag_regulation_recall for qr in per_query if qr.rag_regulation_recall is not None]
+    case_recalls = [qr.rag_case_recall for qr in per_query if qr.rag_case_recall is not None]
+
     return EvalRun(
         name=name,
         total_queries=n,
@@ -243,20 +254,48 @@ def run_retrieval_eval(
         mis_citation_rate=mis_cited_count / n if n else 0.0,
         p95_latency_ms=p95_latency(latencies),
         p50_latency_ms=statistics.median(latencies) if latencies else 0.0,
-        rag_regulation_recall=statistics.mean(qr.rag_regulation_recall for qr in per_query),
-        rag_case_recall=statistics.mean(qr.rag_case_recall for qr in per_query),
+        rag_regulation_recall=_safe_mean(reg_recalls),
+        rag_case_recall=_safe_mean(case_recalls),
         per_query=per_query,
     )
 
 
 def _compute_type_recall(retrieved: list[RetrievedDoc], query: EvalQuery, type_name: str) -> float:
-    """Compute recall specifically for a document type (regulation/case)."""
-    type_relevant = {d.id for d in query.relevant_docs if d.rel_type == type_name}
-    if not type_relevant:
-        return 1.0
-    type_retrieved = {r.id for r in retrieved if r.node_type == type_name}
-    found = type_relevant & type_retrieved
-    return len(found) / len(type_relevant)
+    """Compute recall specifically for a document type (regulation/case).
+
+    使用 expected_regulations / expected_cases 进行匹配（标题模糊匹配），
+    而非 relevant_docs（后者全是 rule 类型）。
+
+    没有期望标注的查询返回 None（从宏平均中排除），不是 1.0。
+    """
+    if type_name == "regulation":
+        expected = query.expected_regulations
+    elif type_name == "case":
+        expected = query.expected_cases
+    else:
+        return 0.0
+
+    if not expected:
+        # 返回 None 表示"不适用"，调用方从平均中排除
+        return None  # type: ignore
+
+    # 从 retrieved 中匹配：title 包含期望标题的前缀
+    retrieved_titles = {r.title.lower() for r in retrieved if r.node_type == type_name}
+    found = 0
+    for exp_title in expected:
+        exp_lower = exp_title.lower()
+        if any(exp_lower in rt for rt in retrieved_titles):
+            found += 1
+
+    return found / len(expected)
+
+
+def _safe_mean(values: list[float]) -> float:
+    """Safe mean — returns 0.0 for empty list instead of raising."""
+    import statistics
+    if not values:
+        return 0.0
+    return statistics.mean(values)
 
 
 # ── Timing decorator ──────────────────────────────────────────────
