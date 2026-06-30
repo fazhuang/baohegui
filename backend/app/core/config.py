@@ -172,6 +172,14 @@ class Settings(BaseSettings):
                 "请设置环境变量 BHG_SECRET_KEY 为至少 32 字符的随机字符串。"
                 "示例: python -c 'import secrets; print(secrets.token_urlsafe(64))'"
             )
+        # P2: MinIO 默认凭据校验 — 生产部署必须覆盖默认值
+        if self.minio_access_key == "baohegui" and self.minio_secret_key == "baohegui":
+            if not self.debug:
+                raise ValueError(
+                    "BHG_MINIO_ACCESS_KEY / BHG_MINIO_SECRET_KEY 不得使用默认值 'baohegui'。"
+                    "请设置环境变量覆盖默认凭据。"
+                    "示例: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+                )
         return self
 
     def get_cors_origins(self) -> list[str]:

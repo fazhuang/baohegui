@@ -33,15 +33,29 @@ _rate_window: int = 60  # 窗口秒数
 _rate_limits: dict[str, list[float]] = defaultdict(list)
 
 RATE_LIMITS = {
-    "/api/auth/login": 10,  # 登录: 10次/分钟
-    "/api/auth/register": 5,  # 注册: 5次/分钟
-    "/api/upload/": 20,  # 上传: 20次/分钟
-    "/api/check/": 30,  # 检查: 30次/分钟
+    "/api/auth/login": 10,          # login: 10/min per IP
+    "/api/auth/register": 5,        # register: 5/min per IP
+    "/api/auth/forgot-password": 3, # P2: forgot-password: 3/min per IP (prevents email spam)
+    "/api/upload/": 20,             # upload: 20/min per IP
+    "/api/check/": 30,              # check: 30/min per IP
 }
 
 
-def _check_rate_limit(path: str) -> tuple[bool, int]:
-    """检查路径是否超频。返回 (allowed, remaining)"""
+def _rate_limit_key(request: Request, path: str) -> str:
+    """P2: 速率限制 key = client_ip + path，替代纯 path 键。
+
+    防止单用户刷崩全局速率限制。
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    return f"{client_ip}:{path}"
+
+
+def _check_rate_limit(request: Request) -> tuple[bool, int]:
+    """检查请求是否超频。P2: 按 client_ip + path 键隔离。
+
+    Returns (allowed, remaining).
+    """
+    path = request.url.path
     limit = RATE_LIMITS.get(path)
     if limit is None:
         # 模糊匹配前缀
@@ -52,15 +66,16 @@ def _check_rate_limit(path: str) -> tuple[bool, int]:
     if limit is None:
         return True, 999
 
+    key = _rate_limit_key(request, path)
     now = time.time()
     cutoff = now - _rate_window
-    _rate_limits[path] = [t for t in _rate_limits[path] if t > cutoff]
+    _rate_limits[key] = [t for t in _rate_limits[key] if t > cutoff]
 
-    if len(_rate_limits[path]) >= limit:
+    if len(_rate_limits[key]) >= limit:
         return False, 0
 
-    _rate_limits[path].append(now)
-    return True, limit - len(_rate_limits[path])
+    _rate_limits[key].append(now)
+    return True, limit - len(_rate_limits[key])
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -271,8 +286,8 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    path = request.url.path
-    allowed, remaining = _check_rate_limit(path)
+    # P2: rate limit keyed by client IP + path
+    allowed, remaining = _check_rate_limit(request)
     if not allowed:
         return JSONResponse(
             status_code=429,

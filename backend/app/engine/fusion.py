@@ -676,11 +676,12 @@ class FourWayRiskMerger:
                 requires_human_review=requires_review,
             ))
 
-        # ── 解析质量调整 ──
-        quality_multiplier = {"ok": 1.0, "text_layer": 1.0, "ocr": 1.2, "partial": 1.5, "failed": 2.0}
+        # ── 解析质量调整（P2：校正 multiplier 并接入融合评分）───
+        quality_multiplier = {"ok": 1.0, "text_layer": 1.0, "ocr": 1.15, "partial": 1.3, "failed": 1.5}
+        # 校正原始 multiplier 值：ocr 1.2→1.15, partial 1.5→1.3, failed 2.0→1.5
+        # 2.0 会让所有失败解析直接冲高两个风险等级，不合理
         adjustment = "none"
-        if parse_quality in ("ocr", "partial", "failed"):
-            adjustment = "upgraded"
+        _quality_factor = quality_multiplier.get(parse_quality, 1.0)
 
         # ── 计数统计 ──
         confirmed_count = sum(1 for r in risk_items if r.category == "confirmed")
@@ -690,7 +691,11 @@ class FourWayRiskMerger:
 
         # ── 综合判定风险等级 ──
         if confirmed_count > 0:
-            risk_level = "critical" if confirmed_count >= 2 else "high"
+            # P2: 质量 multiplier 加权 — 比如 failed 解析下 risk_level 升级加权
+            if _quality_factor > 1.0 and confirmed_count < 2:
+                risk_level = "high"  # parse failed 且 1 个 confirmed → high, 但不冲 critical
+            else:
+                risk_level = "critical" if confirmed_count >= 2 else "high"
         elif high_risk_count > 0:
             risk_level = "high"
         elif needs_review_count > 0:
@@ -701,10 +706,13 @@ class FourWayRiskMerger:
         risk_level_original = risk_level
 
         if adjustment == "upgraded":
-            if risk_level == "low":
-                risk_level = "medium"
-            elif risk_level == "medium":
-                risk_level = "high"
+            # P2: 用 quality_factor 做实际的 risk_level 提升
+            if _quality_factor > 1.0:
+                if risk_level == "low":
+                    risk_level = "medium"
+                elif risk_level == "medium":
+                    risk_level = "high"
+                    adjustment = "upgraded"
 
         # ── 判定是否通过 ──
         final_passed = confirmed_count == 0 and high_risk_count == 0
