@@ -149,11 +149,13 @@ async def crawl_ningxia_list(fetcher) -> list[dict]:
 # ── 来源状态判定 ──────────────────────────────────────────────
 
 def _source_status(fetched: int, parsed_count: int, saved: int, errors: list,
-                   parse_failed_count: int = 0) -> str:
+                   parse_failed_count: int = 0, *,
+                   list_page_ok: bool = True) -> str:
     """根据抓取、解析、保存产出判定来源最终状态。
 
     规则（按优先级）：
-    - fetched == 0 → "success"（暂无新内容，非失败）
+    - fetched == 0 且 list_page_ok → "success"（暂无新内容，非失败）
+    - fetched == 0 且 not list_page_ok → "empty_source"（列表解析异常，可能有结构变更）
     - fetched > 0 且 parsed_count == 0 → "failed"（全部解析失败，含 errors）
     - 有 errors 但仍有产出（saved > 0 或 parsed_count > 0）→ "partial"
     - fetched > 0 且 saved == 0 但 parsed_count > 0 → "partial"（解析成功但全部重复）
@@ -161,7 +163,7 @@ def _source_status(fetched: int, parsed_count: int, saved: int, errors: list,
     - 否则 → "success"
     """
     if fetched == 0:
-        return "success"
+        return "success" if list_page_ok else "empty_source"
     if fetched > 0 and parsed_count == 0:
         # 全部解析失败 → 总是 failed，有无 errors 均同
         return "failed"
@@ -368,14 +370,19 @@ async def crawl_all() -> dict:
             # fetched = 列表页条目数（非已解析数），用于 _source_status 判定
             stats["shaanxi"]["fetched"] = shaanxi_result.get("listed", 0)
             stats["shaanxi"]["parse_failed_count"] = shaanxi_result.get("parse_failed", 0)
-            # fetched>0 且 saved==parsed_count==0 → 全部解析失败，必须 failed
+            # P0: 区分 fetched=0（列表解析无产出/暂无新内容）
+            list_page_ok = shaanxi_result.get("list_page_ok", True) if isinstance(shaanxi_result, dict) else True
             stats["shaanxi"]["status"] = _source_status(
                 stats["shaanxi"]["fetched"], stats["shaanxi"]["parsed_count"],
                 stats["shaanxi"]["saved"], stats["shaanxi"]["errors"],
-                stats["shaanxi"]["parse_failed_count"])
+                stats["shaanxi"]["parse_failed_count"],
+                list_page_ok=list_page_ok)
             if stats["shaanxi"]["status"] == "failed" and stats["shaanxi"]["fetched"] > 0:
                 stats["shaanxi"]["error_type"] = "parse_all_failed"
                 stats["shaanxi"]["error_message"] = f"全部 {stats['shaanxi']['fetched']} 条详情解析失败"
+            elif stats["shaanxi"]["status"] == "empty_source":
+                stats["shaanxi"]["error_type"] = "list_parse_empty"
+                stats["shaanxi"]["error_message"] = "列表页可能发生结构变更，解析产出 0 条"
             elif stats["shaanxi"]["status"] == "partial" and stats["shaanxi"]["parse_failed_count"] > 0:
                 stats["shaanxi"]["error_type"] = "partial_parse"
                 stats["shaanxi"]["error_message"] = f"部分条目解析失败: {stats['shaanxi']['parse_failed_count']}/{stats['shaanxi']['fetched']}"

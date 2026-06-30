@@ -31,6 +31,7 @@ class SourceStatus(str, Enum):
     PARTIAL = "partial"
     FAILED = "failed"
     SKIPPED = "skipped"
+    EMPTY_SOURCE = "empty_source"  # 列表页加载成功但解析零产出（疑似结构变更）
 
 
 class JobStatus(str, Enum):
@@ -66,7 +67,7 @@ def aggregate_job_status(
         return "failed"  # 所有来源都未执行 → failed
 
     successes = sum(1 for s in executed if s == "success")
-    partials = sum(1 for s in executed if s == "partial")
+    partials = sum(1 for s in executed if s in ("partial", "empty_source"))
     failures = sum(1 for s in executed if s == "failed")
 
     # 规则 3：所有执行来源均 failed

@@ -129,6 +129,56 @@ _ALLOWED_RISK_LEVELS: set[str] = set(
 )
 
 
+# ── rule_id 白名单（运行时构建，拦截 LLM 编造 ID）─────────────
+
+def _build_rule_id_whitelist() -> set[str]:
+    """从规则引擎 + 平台规则引擎提取所有合法 rule_id，构建白名单集合。
+
+    白名单来源：
+    1. rule_engine.rules — 基础规则 + 禁用词 + 行业规则
+    2. 投诉案例推导的 pattern_id（参数倾向性规则）
+    3. 平台规则映射中的 rule_id
+
+    若规则引擎未初始化，返回空集（降级为 schema-only 校验）。
+    """
+    ids: set[str] = set()
+    try:
+        from app.engine.rule_engine import rule_engine
+        for r in rule_engine.rules:
+            if r.id:
+                ids.add(r.id)
+    except Exception:
+        pass
+    try:
+        from app.engine.parameter_bias import PARAMETER_BIAS_RULES
+        for r in PARAMETER_BIAS_RULES:
+            pid = r.get("pattern_id") or r.get("rule_id")
+            if pid:
+                ids.add(pid)
+    except Exception:
+        pass
+    try:
+        from app.engine.platform_rules import platform_rule_engine
+        for mapping in getattr(platform_rule_engine, 'mappings', []) or []:
+            rid = (mapping.get("rule_id") or mapping.get("platform_rule_id"))
+            if rid:
+                ids.add(rid)
+    except Exception:
+        pass
+    return ids
+
+
+# 模块加载时构建一次；reload() 调用方需负责刷新
+_rule_id_whitelist: set[str] = _build_rule_id_whitelist()
+
+
+def refresh_rule_id_whitelist() -> None:
+    """热加载后刷新 rule_id 白名单。"""
+    global _rule_id_whitelist
+    _rule_id_whitelist = _build_rule_id_whitelist()
+    logger.info("rule_id 白名单已刷新，共 %d 个已知 ID", len(_rule_id_whitelist))
+
+
 # ═══════════════════════════════════════════════════════════════
 # 数据模型
 # ═══════════════════════════════════════════════════════════════
@@ -548,8 +598,10 @@ def _validate_schema(violations: list[dict]) -> list[dict]:
     1. 必须是 dict
     2. 新格式（验收要求）：必须包含 risk_title（非空）, is_risk_confirmed（bool）, original_text, location, problem_analysis
     3. 旧格式（向后兼容）：必须包含 type（枚举值中）, text（非空）
+    4. P0 强校验：新格式 rule_id 必须在运行时白名单内，否则拒绝（防止 LLM 编造 rule_id 触发 auto-fail）
+    5. P0 过滤：is_risk_confirmed=false 的条目是"已确认无风险"，不应作为违规项入库
 
-    规则 2 和 3 满足任一即视为有效。
+    规则 2 和 3 满足任一即视为格式有效；规则 4/5 为增量安检。
     """
     valid: list[dict] = []
 
@@ -563,6 +615,23 @@ def _validate_schema(violations: list[dict]) -> list[dict]:
         has_is_risk_confirmed = isinstance(item.get("is_risk_confirmed"), bool)
 
         if has_risk_title and has_is_risk_confirmed:
+            # P0-5: is_risk_confirmed=false → "已确认无风险"，丢弃不记违规
+            if item["is_risk_confirmed"] is False:
+                logger.info(
+                    "_validate_schema: item[%d] risk_title=%r 标记为 is_risk_confirmed=false，"
+                    "确认为非风险项，丢弃",
+                    i, item.get("risk_title"),
+                )
+                continue
+            # P0-1: rule_id 白名单校验 — 拦截 LLM 编造 ID
+            raw_rule_id = item.get("rule_id") or item.get("risk_id")
+            if raw_rule_id and _rule_id_whitelist and raw_rule_id not in _rule_id_whitelist:
+                logger.warning(
+                    "_validate_schema: item[%d] rule_id=%r 不在白名单中（%d 个已知 ID），"
+                    "疑似 LLM 编造，丢弃",
+                    i, raw_rule_id, len(_rule_id_whitelist),
+                )
+                continue
             # 新格式通过
             valid.append(item)
             continue

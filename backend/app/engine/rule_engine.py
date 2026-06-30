@@ -492,6 +492,12 @@ class RuleEngine:
             self.set_active_industries(self.active_industries)
         else:
             self._load_rules(industry=self.industry)
+        # P0: 刷新 LLM 引擎的 rule_id 白名单，使新/变更的规则 ID 立即生效
+        try:
+            from app.engine.llm_engine import refresh_rule_id_whitelist
+            refresh_rule_id_whitelist()
+        except Exception:
+            pass
         logger.info("规则已热加载（共 %d 条）", len(self.rules))
 
     def load_industry_rules(self, industry: str) -> int:

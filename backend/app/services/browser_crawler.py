@@ -63,14 +63,16 @@ async def crawl_shaanxi() -> dict:
 
     Returns:
         dict with {"saved": int, "parsed_count": int, "completeness_sum": float,
-                   "listed": int, "parse_failed": int}
+                   "listed": int, "parse_failed": int, "list_page_ok": bool}
         兼容旧调用方（历史上只消费 saved 字段）。
     """
     items = await crawl_shaanxi_with_playwright()
     listed = len(items)
+    # P0: 标记列表页是否成功加载（Playwright 未抛异常即视为页面可达）
+    list_page_ok = bool(items)  # items 来自 parse_shaanxi_list_html，空列表=解析无产出
     if not items:
         return {"saved": 0, "parsed_count": 0, "completeness_sum": 0.0,
-                "listed": 0, "parse_failed": 0}
+                "listed": 0, "parse_failed": 0, "list_page_ok": False}
     saved = 0
     parsed_count = 0
     completeness_sum = 0.0
@@ -95,7 +97,8 @@ async def crawl_shaanxi() -> dict:
             await asyncio.sleep(0.5)
     return {"saved": saved, "parsed_count": parsed_count,
             "completeness_sum": completeness_sum,
-            "listed": listed, "parse_failed": parse_failed}
+            "listed": listed, "parse_failed": parse_failed,
+            "list_page_ok": list_page_ok}
 
 
 import httpx  # noqa: E402
