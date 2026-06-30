@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -486,13 +487,45 @@ class RuleEngine:
     # ── 热加载 ──────────────────────────────────────────
 
     def reload(self) -> None:
-        """热加载规则文件（运行时调用，无需重启）"""
-        _cache.clear()  # 清除缓存，确保规则变更后不再返回旧结果
-        if self.active_industries:
-            self.set_active_industries(self.active_industries)
-        else:
-            self._load_rules(industry=self.industry)
-        # P0: 刷新 LLM 引擎的 rule_id 白名单，使新/变更的规则 ID 立即生效
+        """P1: 原子化热加载 — 先构建新规则集，成功后一次性替换，中途失败回滚。
+
+        原实现：_cache.clear() → _load_rules() 逐步加载，中途失败导致部分规则状态。
+
+        现实现：
+        1. 暂存旧规则集到 savepoint
+        2. 构建新 RulesEngine 实例独立加载
+        3. 加载成功 → 原子替换 self.rules + 刷新白名单
+        4. 加载失败 → 回滚 savepoint，日志告警
+        """
+        _cache.clear()
+        # 保存旧规则集
+        old_rules = list(self.rules)
+        old_industry = self.industry
+        old_active_industries = list(getattr(self, 'active_industries', []))
+
+        try:
+            # 在临时实例上加载新规则
+            new_rules: list[object] = []
+            if self.active_industries:
+                temp = RuleEngine.__new__(RuleEngine)
+                temp.rules_dir = self.rules_dir
+                temp.active_industries = list(self.active_industries)
+                temp.set_active_industries(temp.active_industries)
+                new_rules = temp.rules
+            else:
+                self._load_rules(industry=self.industry)  # 这会修改 self.rules
+                new_rules = self.rules
+        except Exception:
+            # 回滚到旧规则集
+            self.rules = old_rules
+            self.industry = old_industry
+            self.active_industries = old_active_industries
+            logger.exception("规则热加载失败，已回滚到加载前状态（%d 条规则）", len(old_rules))
+            return
+
+        # 原子替换
+        self.rules = new_rules
+        # P0: 刷新 LLM 引擎的 rule_id 白名单
         try:
             from app.engine.llm_engine import refresh_rule_id_whitelist
             refresh_rule_id_whitelist()

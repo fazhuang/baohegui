@@ -51,6 +51,11 @@ async def crawl_shaanxi_with_playwright() -> list[dict]:
             html = await page.content()
             # 使用统一生产解析器 parse_shaanxi_list_html
             items = parse_shaanxi_list_html(html)
+            if not items:
+                logger.warning(
+                    "陕西列表页加载成功(HTTP 200)但 parse_shaanxi_list_html 返回空列表 — "
+                    "可能网站结构变更，list_parse_empty 已上报"
+                )
         except Exception as e:
             logger.error("陕西 Playwright 采集异常: %s", _safe_error_summary(str(e)))
         finally:

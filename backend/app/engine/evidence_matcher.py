@@ -17,8 +17,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # ── 配置常量 ─────────────────────────────────────────────
-MAX_EDIT_DISTANCE = 3         # 编辑距离绝对阈值
-MIN_SIMILARITY_RATIO = 0.80   # 相似度比率阈值（1 - edit_dist / len）
+MAX_EDIT_DISTANCE = 2         # 编辑距离绝对阈值（P1: 3→2，收紧误匹配窗口）
+MIN_SIMILARITY_RATIO = 0.85   # 相似度比率阈值（P1: 0.80→0.85，需更强匹配置信度）
+MIN_EVIDENCE_LENGTH = 8       # P1: 最短 evidence 长度（<8 字符拒绝模糊匹配，要求精确命中）
 WINDOW_MARGIN = 20            # 返回片段时前后扩展的字符数
 
 
@@ -159,8 +160,9 @@ class EvidenceMatcher:
         full_norm = normalize_for_matching(full_text)
         ev_len = len(ev_norm)
 
-        if ev_len < 4:
-            # 太短的 evidence 不可靠，要求精确匹配
+        if ev_len < MIN_EVIDENCE_LENGTH:
+            # P1: 短 evidence 不可靠，要求精确匹配（阈值从 4 提升到 8）
+            logger.debug("evidence 长度=%d < %d，降级为精确匹配", ev_len, MIN_EVIDENCE_LENGTH)
             return EvidenceMatcher.exact_match(evidence, full_text)
 
         best: Optional[dict] = None

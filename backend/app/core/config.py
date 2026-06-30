@@ -23,15 +23,22 @@ if os.environ.get("VERCEL") or os.path.exists("/vercel"):
     os.environ.setdefault("BHG_llm_mock_mode", "true")
     os.environ.setdefault("BHG_minio_endpoint", "0.0.0.0:1")
     os.environ.setdefault("BHG_log_level", "warning")
-    # 规则文件目录：复制到 /tmp/ 以便写入版本目录
-    src = Path(__file__).resolve().parent.parent.parent / "rules"
+    # 规则文件目录：从项目根 rules/ 复制到 /tmp/ 以便写入版本目录
+    # 4 levels up from config.py → project root
+    src = Path(__file__).resolve().parent.parent.parent.parent / "rules"
     dst = Path("/tmp/rules")
     if src.exists() and not dst.exists():
         try:
             shutil.copytree(src, dst)
         except Exception:
             pass
-    os.environ.setdefault("BHG_rules_dir", "/tmp/rules")
+    # Only set BHG_rules_dir if the copy actually succeeded
+    if dst.exists() and any(dst.iterdir()):
+        os.environ.setdefault("BHG_rules_dir", "/tmp/rules")
+    elif src.exists():
+        os.environ.setdefault("BHG_rules_dir", str(src))
+    else:
+        os.environ.setdefault("BHG_rules_dir", "/tmp/rules")
 
 
 # ── Railway 环境检测 ────────────────────────────────
@@ -62,7 +69,7 @@ class Settings(BaseSettings):
     # JWT
     secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 480  # 8小时
+    access_token_expire_minutes: int = 60  # P1: 8h→1h，降低令牌泄漏窗口
 
     # CORS — 允许的前端来源（逗号分隔，生产环境必填）
     cors_origins: str = ""

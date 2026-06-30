@@ -407,11 +407,20 @@ async def get_rule_effectiveness(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """获取每条规则的效能统计"""
+    """获取每条规则的效能统计
+
+    P1: 普通用户仅返回自己报告的命中统计，管理员返回全系统数据。
+    """
     import json
     from app.models.document import ComplianceReport
 
-    reports = db.query(ComplianceReport).all()
+    query = db.query(ComplianceReport)
+    # 权限过滤：非管理员只能看自己创建的报告
+    if user.get("role") != "admin":
+        user_id = user.get("sub")
+        query = query.filter(ComplianceReport.checked_by == user_id)
+
+    reports = query.all()
     rule_stats: dict[str, dict] = {}
 
     for report in reports:

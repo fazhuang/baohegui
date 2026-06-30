@@ -47,4 +47,9 @@ COPY rules ./rules
 
 EXPOSE 8000
 
+# P1: 非 root 运行，减少容器逃逸面
+RUN addgroup --system app && adduser --system --group app
+RUN mkdir -p /tmp/baohegui_uploads && chown app:app /tmp/baohegui_uploads
+USER app
+
 CMD alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1

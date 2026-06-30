@@ -584,13 +584,28 @@ class FourWayRiskMerger:
 
         rule_ids = {v.rule_id for v in rule_violations if v.rule_id}
         bias_rule_ids = {f.rule_id for f in bias_findings if f.rule_id}
+        # P1: LLM rule_id 集合用于交叉确认，禁止 forbidden+bias 单点 auto-fail
+        llm_rule_ids_for_confirmation = {
+            lv.type for lv in llm_violations
+            if lv.type and not (lv.validation_error or lv.requires_human_review)
+        }
 
         # ── 从规则引擎提取风险 ──
         for v in rule_violations:
             is_forbidden = v.rule_type == "forbidden"
             confirmed_by_bias = v.rule_id in bias_rule_ids
+            # P1: forbidden 至少需要 bias + llm 两个别的源确认，或 bias 确认 + 无 llm 否定
+            confirmed_by_llm = v.rule_id in llm_rule_ids_for_confirmation
+            triple_confirmed = is_forbidden and confirmed_by_bias and (
+                confirmed_by_llm or (
+                    # LLM 未发现相关问题（llm_result 中不存在同 rule_id）
+                    # 但 bias 确认时，仍给 confirmed，只是 confidence 不设 0.95
+                    not llm_rule_ids_for_confirmation
+                    # LLM 结果为空的场景（mock mode 等）不应阻止 confirmed
+                )
+            )
 
-            if is_forbidden and confirmed_by_bias:
+            if triple_confirmed:
                 category = "confirmed"
             elif is_forbidden or v.risk_level == "high":
                 category = "high_risk"
@@ -598,6 +613,9 @@ class FourWayRiskMerger:
                 category = "needs_review"
             else:
                 category = "advisory"
+
+            # P1: confirmed 置信度 — triple confirmed > bias-only confirmed
+            _confirm_conf = 0.95 if (confirmed_by_bias and confirmed_by_llm) else 0.85
 
             risk_items.append(MergedRiskItem(
                 source="rule",
@@ -608,7 +626,7 @@ class FourWayRiskMerger:
                 evidence_text=v.text or "",
                 suggestion=v.suggestion,
                 law_ref=v.law_ref,
-                confidence=0.95 if category == "confirmed" else 0.80,
+                confidence=_confirm_conf if category == "confirmed" else 0.80,
             ))
 
         # ── 从参数倾向性提取风险 ──
