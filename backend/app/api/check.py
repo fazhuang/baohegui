@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.policy_kernel import policy_kernel, PlatformPolicy, TenantPolicy, UxPolicy
 from app.core.security import get_current_user, get_current_user_id, assert_resource_access
 from app.db.database import get_db
 from app.engine.fusion import fusion_engine, four_way_merger, validate_llm_evidence
@@ -82,6 +83,10 @@ async def run_compliance_check(
         description="采购方式：公开招标/邀请招标/竞争性谈判/竞争性磋商/询价/单一来源",
     ),
     project_type: str | None = Query(default=None, description="项目类型：货物类/服务类/工程类"),
+    platform: str | None = Query(
+        default=None,
+        description="目标平台ID，如 guangdong/jiangsu/gansu/sichuan/zhejiang",
+    ),
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -302,6 +307,47 @@ async def run_compliance_check(
             llm_result=llm_result,
             parse_quality=parse_quality,
         )
+
+        # ── PolicyKernel：系统唯一决策入口 ────────────────────
+        # 从用户订阅计划派生租户策略
+        from app.services.quota_service import get_or_create_quota
+        user_quota_record = get_or_create_quota(db, int(user["sub"]))
+        plan = user_quota_record.plan if user_quota_record else "free"
+        tenant_policy = TenantPolicy(
+            tenant_id=str(user["sub"]),
+            # enterprise 租户更宽松（不自动失败 keyword_required），free 最严
+            auto_fail_rule_types={"forbidden"} if plan != "enterprise" else set(),
+            requires_human_review_if_llm_only=plan != "enterprise",
+            industries=industry_list,
+        )
+
+        # 从平台规则引擎派生平台策略
+        platform_policy = PlatformPolicy()
+        if platform:
+            from app.engine.platform_rules import platform_rule_engine
+            plat = platform_rule_engine.get_platform(platform)
+            if plat:
+                platform_policy = PlatformPolicy(
+                    platform_id=platform,
+                    threshold_overrides=plat.get("threshold_overrides", {}),
+                    required_sections=set(plat.get("required_sections", [])),
+                    additional_forbidden_patterns=[
+                        r.get("description", "") for r in plat.get("additional_rules", [])
+                        if r.get("rule_type") == "forbidden_pattern"
+                    ],
+                    platform_law_refs=[
+                        ref.get("title", "") for r in plat.get("additional_rules", [])
+                        for ref in r.get("regulation_basis", [])
+                    ],
+                )
+
+        policy_decision = policy_kernel.decide(
+            rule_result=rule_result,
+            llm_result=llm_result,
+            tenant_policy=tenant_policy,
+            platform_policy=platform_policy,
+            ux_policy=UxPolicy(),
+        )
         t_fusion = time.monotonic() - t0
         t_total = time.monotonic() - t_check_start
 
@@ -365,6 +411,23 @@ async def run_compliance_check(
                 "high_risk_count": merge_result.high_risk_count,
                 "needs_review_count": merge_result.needs_review_count,
             },
+            "policy_decision": {
+                "final_action": policy_decision.final_action.value,
+                "final_risk_level": policy_decision.final_risk_level.value,
+                "requires_human_review": policy_decision.requires_human_review,
+                "overrides_applied": policy_decision.overrides_applied,
+                "trace_chain": [
+                    {
+                        "step": t.step,
+                        "source": t.source.value,
+                        "action": t.action.value,
+                        "reason": t.reason,
+                        "input_hash": t.input_hash,
+                        "output_hash": t.output_hash,
+                    }
+                    for t in policy_decision.trace_chain
+                ],
+            },
             "state_machine": {
                 "upload_status": "uploaded",
                 "check_flow": "uploaded → queued → checking → completed",
@@ -418,6 +481,23 @@ async def run_compliance_check(
                             for ri in merge_result.risk_items
                         ],
                     },
+                    "_policy_decision": {
+                        "final_action": policy_decision.final_action.value,
+                        "final_risk_level": policy_decision.final_risk_level.value,
+                        "requires_human_review": policy_decision.requires_human_review,
+                        "overrides_applied": policy_decision.overrides_applied,
+                        "trace_chain": [
+                            {
+                                "step": t.step,
+                                "source": t.source.value,
+                                "action": t.action.value,
+                                "reason": t.reason,
+                                "input_hash": t.input_hash,
+                                "output_hash": t.output_hash,
+                            }
+                            for t in policy_decision.trace_chain
+                        ],
+                    },
                 },
                 ensure_ascii=False,
             ),
@@ -462,6 +542,11 @@ async def run_compliance_check(
             "merge_requires_human_review": merge_result.requires_human_review,
             "merge_confirmed_count": merge_result.confirmed_count,
             "merge_high_risk_count": merge_result.high_risk_count,
+            "policy_decision": {
+                "final_action": policy_decision.final_action.value,
+                "final_risk_level": policy_decision.final_risk_level.value,
+                "requires_human_review": policy_decision.requires_human_review,
+            },
             "timing": {
                 "total_seconds": round(t_total, 3),
                 "routing_ms": round(t_routing * 1000, 1),
