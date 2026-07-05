@@ -60,8 +60,6 @@
 
 ### 1.3 api/ — 14 个路由模块
 
-| 文件 | 路由前缀 | 端点数量 | 认证依赖 |
-|------|---------|---------|---------|
 | 文件 | 前缀 | 真实端点 | 认证依赖 |
 |------|------|---------|---------|
 | `auth.py` | `/api/auth` | `POST /login`, `POST /register`, `POST /send-verification`, `POST /verify-email`, `POST /forgot-password`, `POST /reset-password`, `GET /me` | 公开(6) + `Depends(get_current_user)`(1, /me) |
@@ -235,7 +233,7 @@ mine_to_candidates(db: Session, case_ids: Optional[list[int]] = None, auto_write
 ## 7. 前端基线
 
 ### 路由: 35 条定义 (单一源 `routes/routeConfig.tsx`，sed 统计首 330 行中 `path:` 数量)
-- 3 公开路由 (login, forgot-password, reset-password), 28 受保护路由, 4 重定向 (upload, history, admin/rules, admin/panel)
+- 3 公开, 12 条仅 admin (rules 5条 + manage 3条 + reports/feedback + announcements/manage), 16 条 admin+user, 4 重定向
 - 6 条路由指向 `ComingSoonPage` (reports/feedback, announcements 2条, account 2条, rules/industry)
 
 ### 状态: 3 个 Zustand store
