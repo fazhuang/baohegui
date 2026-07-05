@@ -11,7 +11,24 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.policy_kernel import policy_kernel, PlatformPolicy, TenantPolicy, UxPolicy
+from app.core.policy_kernel import (
+    DecisionInput,
+    DecisionState,
+    ParseQuality,
+    PlanTier,
+    PlatformPolicy,
+    PolicyKernel,
+    RuleType,
+    RiskLevel,
+    RuleViolationInput,
+    LLMViolationInput,
+    BiasFindingInput,
+    RoutingInput,
+    TenantPolicy,
+    UxPolicy,
+    derive_merge_fields,
+    policy_kernel,
+)
 from app.core.security import get_current_user, get_current_user_id, assert_resource_access
 from app.db.database import get_db
 from app.engine.fusion import fusion_engine, four_way_merger, validate_llm_evidence
@@ -309,45 +326,62 @@ async def run_compliance_check(
         )
 
         # ── PolicyKernel：系统唯一决策入口 ────────────────────
-        # 从用户订阅计划派生租户策略
+        # 构建规范化 DecisionInput
         from app.services.quota_service import get_or_create_quota
         user_quota_record = get_or_create_quota(db, int(user["sub"]))
         plan = user_quota_record.plan if user_quota_record else "free"
-        tenant_policy = TenantPolicy(
-            tenant_id=str(user["sub"]),
-            # enterprise 租户更宽松（不自动失败 keyword_required），free 最严
-            auto_fail_rule_types={"forbidden"} if plan != "enterprise" else set(),
-            requires_human_review_if_llm_only=plan != "enterprise",
-            industries=industry_list,
-        )
+        _plan_to_tier = {"enterprise": PlanTier.ENTERPRISE, "pro": PlanTier.PRO, "free": PlanTier.FREE}
 
-        # 从平台规则引擎派生平台策略
-        platform_policy = PlatformPolicy()
-        if platform:
-            from app.engine.platform_rules import platform_rule_engine
-            plat = platform_rule_engine.get_platform(platform)
-            if plat:
-                platform_policy = PlatformPolicy(
-                    platform_id=platform,
-                    threshold_overrides=plat.get("threshold_overrides", {}),
-                    required_sections=set(plat.get("required_sections", [])),
-                    additional_forbidden_patterns=[
-                        r.get("description", "") for r in plat.get("additional_rules", [])
-                        if r.get("rule_type") == "forbidden_pattern"
-                    ],
-                    platform_law_refs=[
-                        ref.get("title", "") for r in plat.get("additional_rules", [])
-                        for ref in r.get("regulation_basis", [])
-                    ],
+        decision_input = DecisionInput(
+            schema_version="2.0.0",
+            routing=RoutingInput(
+                traffic_light=routing_result.traffic_light.value,
+                skip_llm=routing_result.skip_llm,
+            ),
+            rule_violations=[
+                RuleViolationInput(
+                    rule_id=v.rule_id,
+                    rule_type=RuleType(v.rule_type),
+                    risk_level=RiskLevel(v.risk_level),
+                    description=v.description,
+                    location=getattr(v, "location", None) or "",
                 )
-
-        policy_decision = policy_kernel.decide(
-            rule_result=rule_result,
-            llm_result=llm_result,
-            tenant_policy=tenant_policy,
-            platform_policy=platform_policy,
+                for v in (rule_result.violations if rule_result else [])
+            ],
+            bias_findings=[
+                BiasFindingInput(
+                    pattern_id=f.pattern_id,
+                    severity=RiskLevel(f.severity),
+                    description=f.description or f.pattern_name,
+                    matched_text=f.matched_text,
+                    matched_field=f.matched_field,
+                )
+                for f in (parameter_bias_result.findings if parameter_bias_result else [])
+            ],
+            llm_violations=[
+                LLMViolationInput(
+                    type=lv.type,
+                    risk_level=RiskLevel(lv.risk_level),
+                    reason=getattr(lv, "reason", ""),
+                    validation_error=getattr(lv, "validation_error", None),
+                )
+                for lv in (llm_result.violations if llm_result else [])
+            ],
+            parse_quality=ParseQuality(parse_quality),
+            tenant_policy=TenantPolicy(
+                tenant_id=str(user["sub"]),
+                auto_fail_rule_types={RuleType.FORBIDDEN} if plan != "enterprise" else set(),
+                requires_human_review_if_llm_only=(plan != "enterprise"),
+                plan_tier=_plan_to_tier.get(plan, PlanTier.FREE),
+            ),
+            platform_policy=PlatformPolicy(platform_id=platform or "") if platform else PlatformPolicy(),
             ux_policy=UxPolicy(),
         )
+
+        policy_decision = policy_kernel.decide(decision_input)
+
+        # PolicyDecision → 兼容字段（merge_*）
+        merge_compat = derive_merge_fields(policy_decision)
         t_fusion = time.monotonic() - t0
         t_total = time.monotonic() - t_check_start
 
@@ -403,25 +437,31 @@ async def run_compliance_check(
                 "high_count": parameter_bias_result.high_count,
             },
             "merge_result": {
-                "final_passed": merge_result.final_passed,
-                "risk_level": merge_result.risk_level,
-                "review_status": merge_result.review_status,
-                "requires_human_review": merge_result.requires_human_review,
+                "risk_items_count": len(merge_result.risk_items),
                 "confirmed_count": merge_result.confirmed_count,
                 "high_risk_count": merge_result.high_risk_count,
                 "needs_review_count": merge_result.needs_review_count,
+                "advisory_count": merge_result.advisory_count,
+                # 兼容字段（由 PolicyDecision 单向派生）
+                "final_passed": merge_compat["final_passed"],
+                "risk_level": merge_compat["risk_level"],
+                "review_status": merge_compat["review_status"],
+                "requires_human_review": merge_compat["requires_human_review"],
             },
             "policy_decision": {
                 "final_action": policy_decision.final_action.value,
                 "final_risk_level": policy_decision.final_risk_level.value,
                 "requires_human_review": policy_decision.requires_human_review,
                 "overrides_applied": policy_decision.overrides_applied,
+                "decision_hash": policy_decision.decision_hash,
                 "trace_chain": [
                     {
-                        "step": t.step,
+                        "execution_index": t.execution_index,
+                        "priority_rank": t.priority_rank,
                         "source": t.source.value,
-                        "action": t.action.value,
-                        "reason": t.reason,
+                        "reason_code": t.reason_code.value,
+                        "state_before": t.state_before.model_dump(mode="json"),
+                        "state_after": t.state_after.model_dump(mode="json"),
                         "input_hash": t.input_hash,
                         "output_hash": t.output_hash,
                     }
@@ -456,14 +496,16 @@ async def run_compliance_check(
                     **report.model_dump(),
                     "_diagnostics": diagnostics,
                     "_merge_result": {
-                        "final_passed": merge_result.final_passed,
-                        "risk_level": merge_result.risk_level,
-                        "review_status": merge_result.review_status,
-                        "requires_human_review": merge_result.requires_human_review,
+                        "risk_items_count": len(merge_result.risk_items),
                         "confirmed_count": merge_result.confirmed_count,
                         "high_risk_count": merge_result.high_risk_count,
                         "needs_review_count": merge_result.needs_review_count,
                         "advisory_count": merge_result.advisory_count,
+                        # 兼容字段（由 PolicyDecision 派生）
+                        "final_passed": merge_compat["final_passed"],
+                        "risk_level": merge_compat["risk_level"],
+                        "review_status": merge_compat["review_status"],
+                        "requires_human_review": merge_compat["requires_human_review"],
                         "risk_items": [
                             {
                                 "source": ri.source,
@@ -486,12 +528,17 @@ async def run_compliance_check(
                         "final_risk_level": policy_decision.final_risk_level.value,
                         "requires_human_review": policy_decision.requires_human_review,
                         "overrides_applied": policy_decision.overrides_applied,
+                        "decision_hash": policy_decision.decision_hash,
+                        "input_hash": policy_decision.input_hash,
+                        "schema_version": policy_decision.schema_version,
                         "trace_chain": [
                             {
-                                "step": t.step,
+                                "execution_index": t.execution_index,
+                                "priority_rank": t.priority_rank,
                                 "source": t.source.value,
-                                "action": t.action.value,
-                                "reason": t.reason,
+                                "reason_code": t.reason_code.value,
+                                "state_before": t.state_before.model_dump(mode="json"),
+                                "state_after": t.state_after.model_dump(mode="json"),
                                 "input_hash": t.input_hash,
                                 "output_hash": t.output_hash,
                             }
@@ -537,15 +584,16 @@ async def run_compliance_check(
             "routing_reasoning": routing_result.reasoning,
             "parameter_bias_score": parameter_bias_result.risk_score,
             "parameter_bias_findings": parameter_bias_result.critical_count + parameter_bias_result.high_count,
-            "merge_risk_level": merge_result.risk_level,
-            "merge_review_status": merge_result.review_status,
-            "merge_requires_human_review": merge_result.requires_human_review,
+            "merge_risk_level": merge_compat["risk_level"],
+            "merge_review_status": merge_compat["review_status"],
+            "merge_requires_human_review": merge_compat["requires_human_review"],
             "merge_confirmed_count": merge_result.confirmed_count,
             "merge_high_risk_count": merge_result.high_risk_count,
             "policy_decision": {
                 "final_action": policy_decision.final_action.value,
                 "final_risk_level": policy_decision.final_risk_level.value,
                 "requires_human_review": policy_decision.requires_human_review,
+                "decision_hash": policy_decision.decision_hash,
             },
             "timing": {
                 "total_seconds": round(t_total, 3),

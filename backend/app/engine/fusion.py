@@ -547,15 +547,11 @@ class MergedRiskItem(BaseModel):
 
 
 class MergeResult(BaseModel):
-    """四路风险合并结果"""
-    final_passed: bool = True
-    risk_level: str = Field(default="low", pattern=r"^(low|medium|high|critical)$")
-    risk_level_original: str = Field(default="low")
-    review_status: str = Field(
-        default="auto_passed",
-        pattern=r"^(auto_passed|auto_failed|needs_review|reviewed_passed|reviewed_failed)$",
-    )
-    requires_human_review: bool = False
+    """四路证据归一化结果 — 仅包含事实和统计，不含决策字段。
+
+    决策字段（final_passed / risk_level / review_status / requires_human_review）
+    已迁移至 PolicyKernel。MergeResult 只输出 risk_items + 计数统计。
+    """
     risk_items: list[MergedRiskItem] = []
     confirmed_count: int = 0
     high_risk_count: int = 0
@@ -564,9 +560,19 @@ class MergeResult(BaseModel):
     parse_quality_adjustment: str = "none"  # none / upgraded / downgraded
     routing_used: bool = False
 
+    # ── 旧决策字段（@deprecated），由 PolicyKernel.derive_merge_fields() 单向派生 ──
+    # 仅保留以兼容旧存储格式。读取时不应使用这些值做决策。
+    # final_passed / risk_level / review_status / requires_human_review
+    # 已不再由此模型持有。
+
 
 class FourWayRiskMerger:
-    """四路风险合并器 —— 合并路由、规则、参数倾向性、LLM四路结果"""
+    """证据归一化器 — 合并路由、规则、参数倾向性、LLM 四路结果。
+
+    只输出风险项列表（risk_items）和计数统计。
+    不再输出 final_passed / risk_level / review_status / requires_human_review。
+    这些决策字段由 PolicyKernel 统一判定。
+    """
 
     def merge(
         self,
@@ -676,10 +682,8 @@ class FourWayRiskMerger:
                 requires_human_review=requires_review,
             ))
 
-        # ── 解析质量调整（P2：校正 multiplier 并接入融合评分）───
+        # ── 解析质量调整（P2：校正 multiplier）───
         quality_multiplier = {"ok": 1.0, "text_layer": 1.0, "ocr": 1.15, "partial": 1.3, "failed": 1.5}
-        # 校正原始 multiplier 值：ocr 1.2→1.15, partial 1.5→1.3, failed 2.0→1.5
-        # 2.0 会让所有失败解析直接冲高两个风险等级，不合理
         adjustment = "none"
         _quality_factor = quality_multiplier.get(parse_quality, 1.0)
 
@@ -689,57 +693,15 @@ class FourWayRiskMerger:
         needs_review_count = sum(1 for r in risk_items if r.category == "needs_review")
         advisory_count = sum(1 for r in risk_items if r.category == "advisory")
 
-        # ── 综合判定风险等级 ──
-        if confirmed_count > 0:
-            # P2: 质量 multiplier 加权 — 比如 failed 解析下 risk_level 升级加权
-            if _quality_factor > 1.0 and confirmed_count < 2:
-                risk_level = "high"  # parse failed 且 1 个 confirmed → high, 但不冲 critical
-            else:
-                risk_level = "critical" if confirmed_count >= 2 else "high"
-        elif high_risk_count > 0:
-            risk_level = "high"
-        elif needs_review_count > 0:
-            risk_level = "medium"
-        else:
-            risk_level = "low"
-
-        risk_level_original = risk_level
-
-        if adjustment == "upgraded":
-            # P2: 用 quality_factor 做实际的 risk_level 提升
-            if _quality_factor > 1.0:
-                if risk_level == "low":
-                    risk_level = "medium"
-                elif risk_level == "medium":
-                    risk_level = "high"
-                    adjustment = "upgraded"
-
-        # ── 判定是否通过 ──
-        final_passed = confirmed_count == 0 and high_risk_count == 0
-
-        # ── 复核状态机 ──
-        if final_passed and needs_review_count == 0:
-            review_status = "auto_passed"
-            requires_human_review = False
-        elif confirmed_count > 0:
-            review_status = "auto_failed"
-            requires_human_review = True
-        else:
-            review_status = "needs_review"
-            requires_human_review = True
+        # ── 不在此处判定风险等级/通过/复核 —
+        #   决策由 PolicyKernel 统一执行 ──
 
         logger.info(
-            "四路合并: passed=%s level=%s status=%s confirmed=%d high=%d review=%d advisory=%d",
-            final_passed, risk_level, review_status,
+            "证据归一化完成: confirmed=%d high=%d review=%d advisory=%d",
             confirmed_count, high_risk_count, needs_review_count, advisory_count,
         )
 
         return MergeResult(
-            final_passed=final_passed,
-            risk_level=risk_level,
-            risk_level_original=risk_level_original,
-            review_status=review_status,
-            requires_human_review=requires_human_review,
             risk_items=risk_items,
             confirmed_count=confirmed_count,
             high_risk_count=high_risk_count,

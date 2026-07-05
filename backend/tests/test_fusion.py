@@ -795,11 +795,11 @@ class TestFourWayRiskMerger:
             llm_result=None,
             parse_quality="ok",
         )
-        assert result.risk_level in ("high", "critical")
-        assert result.requires_human_review is True
+        assert len(result.risk_items) > 0
+        assert any(r.source == "rule" for r in result.risk_items)
 
     def test_merge_four_ways_clean_document(self):
-        """干净文档 → auto_passed"""
+        """干净文档 → 无风险项"""
         from app.engine.fusion import FourWayRiskMerger
 
         merger = FourWayRiskMerger()
@@ -813,12 +813,12 @@ class TestFourWayRiskMerger:
             llm_result=None,
             parse_quality="ok",
         )
-        assert result.final_passed is True
-        assert result.review_status == "auto_passed"
-        assert result.requires_human_review is False
+        assert len(result.risk_items) == 0
+        assert result.confirmed_count == 0
+        assert result.high_risk_count == 0
 
     def test_merge_four_ways_only_rule_finding(self):
-        """仅规则引擎发现（非forbidden）→ advisory"""
+        """仅规则引擎发现（非forbidden）→ 有风险项"""
         from app.engine.fusion import FourWayRiskMerger
 
         merger = FourWayRiskMerger()
@@ -832,11 +832,10 @@ class TestFourWayRiskMerger:
             llm_result=None,
             parse_quality="ok",
         )
-        assert result.final_passed is True  # 仅low等级 → 通过
-        assert result.review_status == "auto_passed"
+        assert len(result.risk_items) > 0
 
     def test_merge_parse_quality_adjustment(self):
-        """解析质量差时风险上调"""
+        """解析质量差时 parse_quality_adjustment 反映"""
         from app.engine.fusion import FourWayRiskMerger
 
         merger = FourWayRiskMerger()
@@ -860,11 +859,11 @@ class TestFourWayRiskMerger:
             llm_result=None,
             parse_quality="ocr",
         )
-        assert result_ocr.risk_level_original == result_ok.risk_level
         assert hasattr(result_ocr, "parse_quality_adjustment")
+        assert len(result_ocr.risk_items) > 0
 
     def test_merge_four_ways_bias_only_critical(self):
-        """仅参数倾向性critial发现 → auto_failed"""
+        """仅参数倾向性critial发现 → 风险项被创建"""
         from app.engine.fusion import FourWayRiskMerger
 
         merger = FourWayRiskMerger()
@@ -890,5 +889,5 @@ class TestFourWayRiskMerger:
             llm_result=None,
             parse_quality="ok",
         )
-        assert result.review_status in ("auto_failed", "needs_review")
-        assert result.requires_human_review is True
+        assert len(result.risk_items) > 0
+        assert result.confirmed_count > 0 or result.high_risk_count > 0 or result.needs_review_count > 0

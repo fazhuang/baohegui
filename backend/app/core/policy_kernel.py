@@ -1,8 +1,16 @@
 """Policy Enforcement Kernel — 系统唯一决策入口
 
 强制执行优先级: HARD_RULE > PLATFORM > TENANT > UX > LLM
-每层只能升级(escalate)风险，不能降级(de-escalate)。
-每一步生成 hash trace，保证审计可追溯。
+每层只能升级（escalate），不能降级（de-escalate）。
+
+输入: DecisionInput（规范化证据 + 结构化策略）
+输出: PolicyDecision（final_action + final_risk_level + trace_chain + decision_hash）
+
+不变量:
+- 任何改变 final_action、risk_level、review_status、requires_human_review
+  的逻辑只能存在于 PolicyKernel 内部。
+- trace_chain[-1].state_after == PolicyDecision final state
+- 确定性: 相同 DecisionInput → 相同 PolicyDecision（含 hash）
 """
 
 from __future__ import annotations
@@ -10,13 +18,13 @@ from __future__ import annotations
 import hashlib
 import json
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
 
 # ═══════════════════════════════════════════════════════════════
-# 结构化策略类型（禁止字符串枚举）
+# 结构化策略类型 — 零裸字符串
 # ═══════════════════════════════════════════════════════════════
 
 class RiskLevel(str, Enum):
@@ -41,368 +49,718 @@ class PolicySource(str, Enum):
     LLM = "llm"
 
 
-class TenantPolicy(BaseModel):
-    """租户级策略 — 租户自定义风险偏好与规则覆盖"""
+class RuleType(str, Enum):
+    """规则类型 — 用于策略分支，禁止裸 'forbidden' 字符串"""
+    FORBIDDEN = "forbidden"
+    CHAPTER_REQUIRED = "chapter_required"
+    KEYWORD_REQUIRED = "keyword_required"
+    FORMAT_REQUIRED = "format_required"
 
+
+class PlanTier(str, Enum):
+    """订阅计划层级 — 禁止裸 'enterprise' 字符串"""
+    ENTERPRISE = "enterprise"
+    PRO = "pro"
+    FREE = "free"
+
+
+class ReasonCode(str, Enum):
+    """结构化原因码 — 每层决策必须使用，禁止裸原因字符串"""
+    # LLM
+    LLM_NO_ISSUES = "llm_no_issues"
+    LLM_HIGH_RISK = "llm_high_risk"
+    LLM_UNVERIFIED = "llm_unverified"
+    # UX — 仅展示，不改变判定
+    UX_PASSTHROUGH = "ux_passthrough"
+    # TENANT
+    TENANT_AUTO_FAIL = "tenant_auto_fail"
+    TENANT_SUPPRESSED = "tenant_suppressed"
+    TENANT_LLM_ONLY_REVIEW = "tenant_llm_only_review"
+    TENANT_PASSTHROUGH = "tenant_passthrough"
+    # PLATFORM
+    PLATFORM_NO_POLICY = "platform_no_policy"
+    PLATFORM_MISSING_SECTION = "platform_missing_section"
+    PLATFORM_PASSTHROUGH = "platform_passthrough"
+    # HARD_RULE
+    HARD_RULE_NONE = "hard_rule_none"
+    HARD_RULE_MULTI_FORBIDDEN = "hard_rule_multi_forbidden"
+    HARD_RULE_FORBIDDEN_HIGH = "hard_rule_forbidden_high"
+    HARD_RULE_FORBIDDEN = "hard_rule_forbidden"
+    HARD_RULE_MISSING_CHAPTER = "hard_rule_missing_chapter"
+    HARD_RULE_HIGH = "hard_rule_high"
+    HARD_RULE_PASSTHROUGH = "hard_rule_passthrough"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 单一优先级表（禁止重复定义）
+# ═══════════════════════════════════════════════════════════════
+
+_PRIORITY_ORDER: tuple[PolicySource, ...] = (
+    PolicySource.LLM,        # priority=5, execution_index=0
+    PolicySource.UX,         # priority=4, execution_index=1
+    PolicySource.TENANT,     # priority=3, execution_index=2
+    PolicySource.PLATFORM,   # priority=2, execution_index=3
+    PolicySource.HARD_RULE,  # priority=1, execution_index=4
+)
+
+_PRIORITY_RANK: dict[PolicySource, int] = {
+    src: len(_PRIORITY_ORDER) - i
+    for i, src in enumerate(_PRIORITY_ORDER)
+}
+
+_ACTION_RANK: dict[DecisionAction, int] = {
+    DecisionAction.PASS: 0,
+    DecisionAction.WARN: 1,
+    DecisionAction.REQUIRE_REVIEW: 2,
+    DecisionAction.BLOCK: 3,
+}
+
+_RISK_RANK: dict[RiskLevel, int] = {
+    RiskLevel.LOW: 0,
+    RiskLevel.MEDIUM: 1,
+    RiskLevel.HIGH: 2,
+    RiskLevel.CRITICAL: 3,
+}
+
+
+def _max_action(a: DecisionAction, b: DecisionAction) -> DecisionAction:
+    return a if _ACTION_RANK.get(a, 0) >= _ACTION_RANK.get(b, 0) else b
+
+
+def _max_risk(a: RiskLevel, b: RiskLevel) -> RiskLevel:
+    return a if _RISK_RANK.get(a, 0) >= _RISK_RANK.get(b, 0) else b
+
+
+# ═══════════════════════════════════════════════════════════════
+# 策略模型 — 所有字段结构化
+# ═══════════════════════════════════════════════════════════════
+
+class TenantPolicy(BaseModel):
+    """租户级策略"""
     tenant_id: str = "default"
-    risk_threshold: RiskLevel = RiskLevel.MEDIUM
-    # 该租户抑制的规则 ID：这些规则不触发 block
+    # 直接 block 的规则类型
+    auto_fail_rule_types: set[RuleType] = Field(default_factory=set)
+    # 不触发 block 的规则 ID（精确豁免）
     suppressed_rule_ids: set[str] = Field(default_factory=set)
-    # 自动失败规则类型：这些类型的违规直接 block
-    auto_fail_rule_types: set[str] = Field(default_factory=set)
     # LLM 单独发现的风险是否需要人工复核
     requires_human_review_if_llm_only: bool = True
-    # 租户自定义行业分类（影响规则激活）
-    industries: list[str] = Field(default_factory=list)
+    # 订阅层级
+    plan_tier: PlanTier = PlanTier.FREE
+
+
+    def model_dump(self, **kwargs) -> dict[str, Any]:
+        d = super().model_dump(**kwargs)
+        # 确保 set 字段稳定排序（model_dump 将 set 转 list，顺序依赖 hash seed）
+        if "auto_fail_rule_types" in d and isinstance(d["auto_fail_rule_types"], list):
+            d["auto_fail_rule_types"] = sorted(d["auto_fail_rule_types"])
+        if "suppressed_rule_ids" in d and isinstance(d["suppressed_rule_ids"], list):
+            d["suppressed_rule_ids"] = sorted(d["suppressed_rule_ids"])
+        if "industries" in d and isinstance(d["industries"], list):
+            d["industries"] = sorted(d["industries"])
+        return d
 
 
 class PlatformPolicy(BaseModel):
-    """平台级策略 — 公共资源交易平台的特定规则覆盖"""
-
+    """平台级策略"""
     platform_id: str = ""
-    # 平台特有的阈值覆盖
-    threshold_overrides: dict[str, float] = Field(default_factory=dict)
     # 平台强制要求的章节
     required_sections: set[str] = Field(default_factory=set)
-    # 平台额外禁止模式
-    additional_forbidden_patterns: list[str] = Field(default_factory=list)
-    # 平台特定法规引用
-    platform_law_refs: list[str] = Field(default_factory=list)
 
 
 class UxPolicy(BaseModel):
-    """UX 策略 — 展示/交互层面的决策"""
-
+    """UX 策略 — 仅影响展示，不改变判定"""
     collapse_threshold: int = 3
     hide_risk_levels_below: RiskLevel = RiskLevel.LOW
-    group_by: str = "section"
+
+
+# ═══════════════════════════════════════════════════════════════
+# DecisionInput — 完整决策输入
+# ═══════════════════════════════════════════════════════════════
+
+POLICY_SCHEMA_VERSION = "2.0.0"
+
+
+class RuleViolationInput(BaseModel):
+    """单条规则引擎违规"""
+    rule_id: str = ""
+    rule_type: RuleType = RuleType.FORBIDDEN
+    risk_level: RiskLevel = RiskLevel.MEDIUM
+    description: str = ""
+    location: str = ""
+
+
+class LLMViolationInput(BaseModel):
+    """单条 LLM 违规"""
+    type: str = ""
+    risk_level: RiskLevel = RiskLevel.MEDIUM
+    reason: str = ""
+    validation_error: Optional[str] = None
+
+
+class BiasFindingInput(BaseModel):
+    """单条参数倾向性发现"""
+    pattern_id: str = ""
+    severity: RiskLevel = RiskLevel.MEDIUM
+    description: str = ""
+    matched_text: str = ""
+    matched_field: str = ""
+
+
+class RoutingInput(BaseModel):
+    """路由审查结果"""
+    traffic_light: str = "green"  # green / yellow / red
+    skip_llm: bool = False
+
+
+class ParseQuality(str, Enum):
+    OK = "ok"
+    TEXT_LAYER = "text_layer"
+    OCR = "ocr"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class DecisionInput(BaseModel):
+    """系统唯一决策输入 — 所有影响决策的字段必须在此"""
+    schema_version: str = POLICY_SCHEMA_VERSION
+
+    # 证据
+    routing: RoutingInput = Field(default_factory=RoutingInput)
+    rule_violations: list[RuleViolationInput] = Field(default_factory=list)
+    bias_findings: list[BiasFindingInput] = Field(default_factory=list)
+    llm_violations: list[LLMViolationInput] = Field(default_factory=list)
+    parse_quality: ParseQuality = ParseQuality.OK
+
+    # 策略
+    tenant_policy: TenantPolicy = Field(default_factory=TenantPolicy)
+    platform_policy: PlatformPolicy = Field(default_factory=PlatformPolicy)
+    ux_policy: UxPolicy = Field(default_factory=UxPolicy)
 
 
 # ═══════════════════════════════════════════════════════════════
 # Trace + Decision
 # ═══════════════════════════════════════════════════════════════
 
-class TraceStep(BaseModel):
-    """单步执行追踪"""
-    step: int
-    source: PolicySource
+class DecisionState(BaseModel):
+    """一个策略层执行后的累积状态"""
     action: DecisionAction
-    reason: str
-    input_hash: str
-    output_hash: str
+    risk_level: RiskLevel
+    requires_human_review: bool
+
+
+class TraceStep(BaseModel):
+    """单步执行追踪 — state_after 是本层升级后的真实状态"""
+    execution_index: int  # 0-based 执行顺序
+    priority_rank: int    # 1=HARD_RULE ... 5=LLM
+    source: PolicySource
+    reason_code: ReasonCode
+    reason_params: dict[str, Any] = Field(default_factory=dict)
+    state_before: DecisionState
+    proposed_transition: DecisionState  # 本层提案
+    state_after: DecisionState          # 升级后真实状态
+    input_hash: str = ""
+    output_hash: str = ""
 
 
 class PolicyDecision(BaseModel):
-    """最终策略决策"""
+    """系统唯一决策输出"""
     final_action: DecisionAction
     final_risk_level: RiskLevel
     requires_human_review: bool
+    schema_version: str = POLICY_SCHEMA_VERSION
+    input_hash: str = ""
+    decision_hash: str = ""
     trace_chain: list[TraceStep] = Field(default_factory=list)
     overrides_applied: list[str] = Field(default_factory=list)
 
 
 # ═══════════════════════════════════════════════════════════════
-# Decision builder — 避免可变默认参数的 mutable 语义问题
+# 规范化 JSON — 跨进程确定性
 # ═══════════════════════════════════════════════════════════════
 
-class _DecisionBuilder:
-    """内部 builder：每层只能升级不能降级"""
-    __slots__ = ("action", "risk", "human_review", "overrides")
-
-    def __init__(self, action: DecisionAction, risk: RiskLevel, human_review: bool):
-        self.action = action
-        self.risk = risk
-        self.human_review = human_review
-        self.overrides: list[str] = []
-
-    def escalate(self, new_action: DecisionAction, new_risk: RiskLevel,
-                 force_review: bool, reason: str, source: PolicySource) -> bool:
-        """仅在升级时返回 True"""
-        changed = False
-        if _action_rank(new_action) > _action_rank(self.action):
-            self.action = new_action
-            self.overrides.append(f"{source.value}: {reason}")
-            changed = True
-        if _risk_rank(new_risk) > _risk_rank(self.risk):
-            self.risk = new_risk
-            self.overrides.append(f"{source.value}: risk {self.risk.value}→{new_risk.value}")
-            changed = True
-        if force_review and not self.human_review:
-            self.human_review = True
-            self.overrides.append(f"{source.value}: requires_human_review")
-            changed = True
-        return changed
-
-    def to_decision(self, trace: list[TraceStep]) -> PolicyDecision:
-        return PolicyDecision(
-            final_action=self.action,
-            final_risk_level=self.risk,
-            requires_human_review=self.human_review,
-            trace_chain=trace,
-            overrides_applied=self.overrides,
-        )
+def _canonical_json(obj: Any) -> bytes:
+    """规范化 JSON 序列化: UTF-8, sorted keys, compact separators, no default=str"""
+    return json.dumps(
+        _for_json(obj),
+        sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")
 
 
-def _action_rank(a: DecisionAction) -> int:
-    _map = {DecisionAction.PASS: 0, DecisionAction.WARN: 1,
-            DecisionAction.REQUIRE_REVIEW: 2, DecisionAction.BLOCK: 3}
-    return _map.get(a, 0)
+def _for_json(obj: Any) -> Any:
+    """递归转换对象为 JSON 可序列化，type-directed，不使用 default=str。
+
+    关键不变量：set 转 list 必须稳定排序（跨 PYTHONHASHSEED 一致）。
+    """
+    _SET_FIELDS = {"auto_fail_rule_types", "suppressed_rule_ids",
+                   "industries", "required_sections"}
+
+    if isinstance(obj, Enum):
+        return obj.value
+    elif isinstance(obj, dict):
+        result = {}
+        for k, v in sorted(obj.items()):
+            val = _for_json(v)
+            # 稳定 set 派生字段：任意嵌套层次都生效
+            if k in _SET_FIELDS and isinstance(val, list):
+                val = sorted(val)
+            result[k] = val
+        return result
+    elif isinstance(obj, set):
+        return sorted(_for_json(item) for item in obj)
+    elif isinstance(obj, (list, tuple)):
+        return [_for_json(item) for item in obj]
+    elif isinstance(obj, BaseModel):
+        return _for_json(obj.model_dump(mode="json"))
+    elif isinstance(obj, bytes):
+        return obj.hex()
+    elif obj is None:
+        return None
+    elif isinstance(obj, (int, float, str, bool)):
+        return obj
+    else:
+        return str(obj)
 
 
-def _risk_rank(r: RiskLevel) -> int:
-    _map = {RiskLevel.LOW: 0, RiskLevel.MEDIUM: 1,
-            RiskLevel.HIGH: 2, RiskLevel.CRITICAL: 3}
-    return _map.get(r, 0)
+def sha256_hex(data: bytes) -> str:
+    """完整 64 位 SHA-256 hex"""
+    return hashlib.sha256(data).hexdigest()
 
 
 # ═══════════════════════════════════════════════════════════════
-# PolicyKernel
+# PolicyKernel — 唯一决策入口
 # ═══════════════════════════════════════════════════════════════
 
 class PolicyKernel:
     """系统唯一决策入口。
 
-    输入四路结果 + 租户/平台/UX 策略，输出 final_decision + trace_chain。
-    强制执行优先级 HARD_RULE > PLATFORM > TENANT > UX > LLM，
-    每层只能升级风险，不能降级。
+    输入 DecisionInput，输出 PolicyDecision。
+    强制执行优先级 HARD_RULE > PLATFORM > TENANT > UX > LLM。
+    每层只能升级，不能降级。
+
+    trace_chain[-1].state_after == PolicyDecision final state（刚性不变量）
     """
 
-    @staticmethod
-    def _hash(*parts: object) -> str:
-        """确定性 hash — 相同输入永远产生相同 hash"""
-        raw = json.dumps(
-            [json.dumps(p, sort_keys=True, default=str, ensure_ascii=False)
-             if isinstance(p, dict) else str(p) for p in parts],
-            sort_keys=True, ensure_ascii=False,
-        )
-        return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-    # ── 各层策略 ────────────────────────────────────────────
-
-    def _llm_baseline(
-        self, llm_result, violations_from_llm: list[dict]
-    ) -> tuple[DecisionAction, RiskLevel, bool, str]:
-        """第5层 LLM：最底层基线。LLM 单独发现的风险 → warn/review"""
-        if not violations_from_llm:
-            return DecisionAction.PASS, RiskLevel.LOW, False, "LLM 未发现额外风险"
-        has_high = any(v.get("risk_level") == "high" for v in violations_from_llm)
-        has_unverified = any(v.get("validation_error") for v in violations_from_llm)
-        if has_high:
-            return (DecisionAction.REQUIRE_REVIEW, RiskLevel.HIGH, True,
-                    f"LLM 发现 {len(violations_from_llm)} 项风险，含 high")
-        if has_unverified:
-            return (DecisionAction.WARN, RiskLevel.MEDIUM, True,
-                    f"LLM 发现 {len(violations_from_llm)} 项待验证风险")
-        return (DecisionAction.WARN, RiskLevel.MEDIUM, False,
-                f"LLM 发现 {len(violations_from_llm)} 项风险")
-
-    def _apply_ux(
-        self, action: DecisionAction, risk: RiskLevel, human_review: bool,
-        ux: UxPolicy,
-    ) -> tuple[DecisionAction, RiskLevel, bool, str]:
-        """第4层 UX：展示策略 — 仅影响展示，不改变风险判定"""
-        return (action, risk, human_review,
-                f"collapse≥{ux.collapse_threshold} hide≤{ux.hide_risk_levels_below.value}")
-
-    def _apply_tenant(
-        self, action: DecisionAction, risk: RiskLevel, human_review: bool,
-        tenant: TenantPolicy,
-        rule_violations: list[dict], llm_violations: list[dict],
-    ) -> tuple[DecisionAction, RiskLevel, bool, str]:
-        """第3层 TENANT：租户自定义规则覆盖"""
-        reasons: list[str] = []
-
-        # 检查自动失败规则类型
-        auto_fail_types = tenant.auto_fail_rule_types
-        if auto_fail_types:
-            for rv in rule_violations:
-                if rv.get("rule_type") in auto_fail_types and rv.get("rule_id") not in tenant.suppressed_rule_ids:
-                    return (DecisionAction.BLOCK, RiskLevel.CRITICAL, True,
-                            f"租户自动失败规则类型 {rv['rule_type']} 触发: {rv.get('rule_id')}")
-
-        # 抑制规则检查
-        suppressed = [rv.get("rule_id") for rv in rule_violations
-                      if rv.get("rule_id") in tenant.suppressed_rule_ids]
-        if suppressed:
-            reasons.append(f"抑制规则 {suppressed}")
-
-        # LLM only 风险 → 人工复核
-        if tenant.requires_human_review_if_llm_only and llm_violations and not rule_violations:
-            reasons.append("仅 LLM 发现风险，按租户策略需人工复核")
-            return (DecisionAction.REQUIRE_REVIEW, risk, True, "; ".join(reasons))
-
-        if not reasons:
-            reasons.append("无租户策略覆盖触发")
-        return (action, risk, human_review, "; ".join(reasons))
-
-    def _apply_platform(
-        self, action: DecisionAction, risk: RiskLevel, human_review: bool,
-        platform: PlatformPolicy,
-        rule_violations: list[dict],
-    ) -> tuple[DecisionAction, RiskLevel, bool, str]:
-        """第2层 PLATFORM：平台特定规则覆盖"""
-        if not platform.platform_id:
-            return (action, risk, human_review, "无平台策略")
-
-        reasons: list[str] = []
-
-        # 平台强制章节检查 — 仅当已有 chapter_required 违规时才触发
-        if platform.required_sections:
-            chapter_violations = [
-                rv for rv in rule_violations
-                if rv.get("rule_type") == "chapter_required"
-            ]
-            if chapter_violations:
-                present_sections = {rv.get("location", "") for rv in chapter_violations}
-                missing = platform.required_sections - {s for s in present_sections if s}
-                if missing:
-                    return (DecisionAction.BLOCK, RiskLevel.CRITICAL, True,
-                            f"平台 {platform.platform_id} 缺少必需章节: {missing}")
-
-        # 平台额外禁止模式检查
-        if platform.additional_forbidden_patterns:
-            reasons.append(f"平台 {platform.platform_id} 已加载 {len(platform.additional_forbidden_patterns)} 项额外禁止模式")
-
-        # 平台阈值覆盖
-        if platform.threshold_overrides:
-            reasons.append(f"阈值覆盖: {list(platform.threshold_overrides.keys())}")
-
-        if not reasons:
-            reasons.append(f"平台 {platform.platform_id} 无额外约束")
-        return (action, risk, human_review, "; ".join(reasons))
-
-    def _apply_hard_rules(
-        self, action: DecisionAction, risk: RiskLevel, human_review: bool,
-        rule_violations: list[dict],
-    ) -> tuple[DecisionAction, RiskLevel, bool, str]:
-        """第1层 HARD_RULE：规则引擎违规 → 最高优先级"""
-        if not rule_violations:
-            return (action, risk, human_review, "无硬规则违规")
-
-        has_forbidden = any(rv.get("rule_type") == "forbidden" for rv in rule_violations)
-        has_high = any(rv.get("risk_level") == "high" for rv in rule_violations)
-        has_chapter = any(rv.get("rule_type") == "chapter_required" for rv in rule_violations)
-
-        forbidden_count = sum(1 for rv in rule_violations if rv.get("rule_type") == "forbidden")
-
-        if forbidden_count >= 2:
-            return (DecisionAction.BLOCK, RiskLevel.CRITICAL, True,
-                    f"多项禁止性违规: {forbidden_count} 项 forbidden")
-        if has_forbidden and has_high:
-            return (DecisionAction.BLOCK, RiskLevel.HIGH, True,
-                    "禁止性违规 + 高风险: 阻止发布")
-        if has_forbidden:
-            return (DecisionAction.REQUIRE_REVIEW, RiskLevel.HIGH, True,
-                    "存在禁止性违规，需人工复核")
-        if has_chapter:
-            return (DecisionAction.REQUIRE_REVIEW, RiskLevel.MEDIUM, True,
-                    "缺少必要章节")
-        if has_high:
-            return (DecisionAction.WARN, RiskLevel.MEDIUM, True,
-                    f"存在 {sum(1 for rv in rule_violations if rv.get('risk_level')=='high')} 项高风险")
-        return (action, risk, human_review, f"硬规则违规 {len(rule_violations)} 项，无升级")
-
-    # ── 主入口 ───────────────────────────────────────────────
-
-    def decide(
-        self,
-        *,
-        rule_result=None,        # RuleEngineResult
-        llm_result=None,         # LLMEngineResult | None
-        tenant_policy: TenantPolicy | None = None,
-        platform_policy: PlatformPolicy | None = None,
-        ux_policy: UxPolicy | None = None,
-    ) -> PolicyDecision:
-        """系统唯一决策入口。
-
-        输入四路审查结果 + 策略配置，输出 final_decision + trace_chain。
-        每一步生成确定性 hash trace。
-        """
-        tenant = tenant_policy or TenantPolicy()
-        platform = platform_policy or PlatformPolicy()
-        ux = ux_policy or UxPolicy()
-
-        # 提取违规数据（保持为 dict 列表，解耦引擎类型）
-        rule_violations: list[dict] = [
-            {
-                "rule_id": v.rule_id, "rule_type": v.rule_type,
-                "risk_level": v.risk_level, "description": v.description,
-                "location": getattr(v, "location", ""),
-            }
-            for v in (rule_result.violations if rule_result else [])
-        ]
-        llm_violations: list[dict] = [
-            {
-                "type": lv.type, "risk_level": lv.risk_level,
-                "reason": getattr(lv, "reason", ""),
-                "validation_error": getattr(lv, "validation_error", None),
-            }
-            for lv in (llm_result.violations if llm_result else [])
-        ]
-
-        # 输入 hash
-        input_hash = self._hash(rule_violations, llm_violations,
-                                tenant.model_dump(), platform.model_dump())
+    def decide(self, decision_input: DecisionInput) -> PolicyDecision:
+        """唯一决策入口"""
+        di = decision_input
+        root_hash = sha256_hex(_canonical_json(di))
 
         trace: list[TraceStep] = []
-        current_hash = input_hash
+        pre_hash = root_hash
 
-        # ── 核心流水线：逐层决策 ───────────────────────────
-        # 从最低优先级开始，累积升级
+        # 初始状态: 最低风险基线
+        state = DecisionState(
+            action=DecisionAction.PASS,
+            risk_level=RiskLevel.LOW,
+            requires_human_review=False,
+        )
 
-        # L5: LLM baseline
-        step5 = 5
-        l5_action, l5_risk, l5_review, l5_reason = self._llm_baseline(llm_result, llm_violations)
-        l5_hash = self._hash(current_hash, "LLM", l5_action.value, l5_risk.value)
-        trace.append(TraceStep(step=5, source=PolicySource.LLM,
-                               action=l5_action, reason=l5_reason,
-                               input_hash=current_hash, output_hash=l5_hash))
-        current_hash = l5_hash
+        # 按执行顺序逐层（LLM → UX → TENANT → PLATFORM → HARD_RULE）
+        for exec_idx, source in enumerate(_PRIORITY_ORDER):
+            priority = _PRIORITY_RANK[source]
+            state_before = state.model_copy(deep=True)
 
-        # 初始化 builder
-        dec = _DecisionBuilder(l5_action, l5_risk, l5_review)
+            proposed, code, params = self._evaluate_layer(source, di, state)
 
-        # L4: UX
-        l4_action, l4_risk, l4_review, l4_reason = self._apply_ux(
-            dec.action, dec.risk, dec.human_review, ux)
-        l4_hash = self._hash(current_hash, "UX", l4_action.value, l4_risk.value)
-        trace.append(TraceStep(step=4, source=PolicySource.UX,
-                               action=l4_action, reason=l4_reason,
-                               input_hash=current_hash, output_hash=l4_hash))
-        current_hash = l4_hash
-        dec.escalate(l4_action, l4_risk, l4_review, l4_reason, PolicySource.UX)
+            # 升级规则：只能向更严格的方向
+            new_action = _max_action(state.action, proposed.action)
+            new_risk = _max_risk(state.risk_level, proposed.risk_level)
+            new_hr = state.requires_human_review or proposed.requires_human_review
 
-        # L3: TENANT
-        l3_action, l3_risk, l3_review, l3_reason = self._apply_tenant(
-            dec.action, dec.risk, dec.human_review, tenant,
-            rule_violations, llm_violations)
-        l3_hash = self._hash(current_hash, "TENANT", l3_action.value, l3_risk.value)
-        trace.append(TraceStep(step=3, source=PolicySource.TENANT,
-                               action=l3_action, reason=l3_reason,
-                               input_hash=current_hash, output_hash=l3_hash))
-        current_hash = l3_hash
-        dec.escalate(l3_action, l3_risk, l3_review, l3_reason, PolicySource.TENANT)
+            state = DecisionState(
+                action=new_action,
+                risk_level=new_risk,
+                requires_human_review=new_hr,
+            )
 
-        # L2: PLATFORM
-        l2_action, l2_risk, l2_review, l2_reason = self._apply_platform(
-            dec.action, dec.risk, dec.human_review, platform, rule_violations)
-        l2_hash = self._hash(current_hash, "PLATFORM", l2_action.value, l2_risk.value)
-        trace.append(TraceStep(step=2, source=PolicySource.PLATFORM,
-                               action=l2_action, reason=l2_reason,
-                               input_hash=current_hash, output_hash=l2_hash))
-        current_hash = l2_hash
-        dec.escalate(l2_action, l2_risk, l2_review, l2_reason, PolicySource.PLATFORM)
+            # 构建 event hash
+            event = {
+                "schema_version": di.schema_version,
+                "execution_index": exec_idx,
+                "priority_rank": priority,
+                "source": source.value,
+                "state_before": state_before.model_dump(mode="json"),
+                "proposed_transition": proposed.model_dump(mode="json"),
+                "state_after": state.model_dump(mode="json"),
+                "reason_code": code.value,
+                "reason_params": params,
+            }
+            event_bytes = _canonical_json(event)
+            output_hash = sha256_hex(pre_hash.encode() + event_bytes)
 
-        # L1: HARD_RULE — 最高优先级
-        l1_action, l1_risk, l1_review, l1_reason = self._apply_hard_rules(
-            dec.action, dec.risk, dec.human_review, rule_violations)
-        l1_hash = self._hash(current_hash, "HARD_RULE", l1_action.value, l1_risk.value)
-        trace.append(TraceStep(step=1, source=PolicySource.HARD_RULE,
-                               action=l1_action, reason=l1_reason,
-                               input_hash=current_hash, output_hash=l1_hash))
-        dec.escalate(l1_action, l1_risk, l1_review, l1_reason, PolicySource.HARD_RULE)
+            trace.append(TraceStep(
+                execution_index=exec_idx,
+                priority_rank=priority,
+                source=source,
+                reason_code=code,
+                reason_params=params,
+                state_before=state_before,
+                proposed_transition=proposed,
+                state_after=state.model_copy(deep=True),
+                input_hash=pre_hash,
+                output_hash=output_hash,
+            ))
+            pre_hash = output_hash
 
-        return dec.to_decision(trace)
+        # 终端一致性不变量: trace[-1].state_after == final state
+        # （已由上面的循环保证）
+
+        overrides = [
+            f"{t.source.value}: {t.reason_code.value}"
+            for t in trace
+            if t.state_after != t.state_before
+        ]
+
+        # 构建最终决策（不含 hash）
+        final = PolicyDecision(
+            final_action=state.action,
+            final_risk_level=state.risk_level,
+            requires_human_review=state.requires_human_review,
+            schema_version=di.schema_version,
+            input_hash=root_hash,
+            trace_chain=trace,
+            overrides_applied=overrides,
+        )
+
+        # decision_hash = SHA256(terminal_output_hash || canonical final without hash)
+        final_data = _canonical_json({
+            "final_action": final.final_action.value,
+            "final_risk_level": final.final_risk_level.value,
+            "requires_human_review": final.requires_human_review,
+            "schema_version": final.schema_version,
+            "input_hash": final.input_hash,
+        })
+        final.decision_hash = sha256_hex(pre_hash.encode() + final_data)
+
+        return final
+
+    # ── 各层评估 ────────────────────────────────────────────
+
+    def _evaluate_layer(
+        self, source: PolicySource, di: DecisionInput, current: DecisionState,
+    ) -> tuple[DecisionState, ReasonCode, dict[str, Any]]:
+        """评估单层策略，返回 (提案, 原因码, 原因参数)"""
+        handlers = {
+            PolicySource.LLM: self._eval_llm,
+            PolicySource.UX: self._eval_ux,
+            PolicySource.TENANT: self._eval_tenant,
+            PolicySource.PLATFORM: self._eval_platform,
+            PolicySource.HARD_RULE: self._eval_hard_rule,
+        }
+        return handlers[source](di, current)
+
+    def _eval_llm(
+        self, di: DecisionInput, _current: DecisionState,
+    ) -> tuple[DecisionState, ReasonCode, dict]:
+        if not di.llm_violations:
+            return (
+                DecisionState(action=DecisionAction.PASS, risk_level=RiskLevel.LOW, requires_human_review=False),
+                ReasonCode.LLM_NO_ISSUES, {},
+            )
+        has_high = any(v.risk_level == RiskLevel.HIGH for v in di.llm_violations)
+        has_unverified = any(v.validation_error for v in di.llm_violations)
+        if has_high:
+            return (
+                DecisionState(action=DecisionAction.REQUIRE_REVIEW, risk_level=RiskLevel.HIGH, requires_human_review=True),
+                ReasonCode.LLM_HIGH_RISK, {"count": len(di.llm_violations)},
+            )
+        if has_unverified:
+            return (
+                DecisionState(action=DecisionAction.WARN, risk_level=RiskLevel.MEDIUM, requires_human_review=True),
+                ReasonCode.LLM_UNVERIFIED, {"count": len(di.llm_violations)},
+            )
+        return (
+            DecisionState(action=DecisionAction.WARN, risk_level=RiskLevel.MEDIUM, requires_human_review=False),
+            ReasonCode.LLM_HIGH_RISK, {"count": len(di.llm_violations)},
+        )
+
+    def _eval_ux(
+        self, di: DecisionInput, current: DecisionState,
+    ) -> tuple[DecisionState, ReasonCode, dict]:
+        # UX 不改变决策
+        return (
+            current.model_copy(deep=True),
+            ReasonCode.UX_PASSTHROUGH,
+            {"collapse_threshold": di.ux_policy.collapse_threshold},
+        )
+
+    def _eval_tenant(
+        self, di: DecisionInput, current: DecisionState,
+    ) -> tuple[DecisionState, ReasonCode, dict]:
+        tp = di.tenant_policy
+
+        # auto_fail 检查
+        if tp.auto_fail_rule_types:
+            for rv in di.rule_violations:
+                if rv.rule_type in tp.auto_fail_rule_types and rv.rule_id not in tp.suppressed_rule_ids:
+                    return (
+                        DecisionState(action=DecisionAction.BLOCK, risk_level=RiskLevel.CRITICAL, requires_human_review=True),
+                        ReasonCode.TENANT_AUTO_FAIL,
+                        {"rule_type": rv.rule_type.value, "rule_id": rv.rule_id},
+                    )
+
+        # 抑制检查
+        suppressed = [rv.rule_id for rv in di.rule_violations if rv.rule_id in tp.suppressed_rule_ids]
+
+        # LLM only 风险
+        if tp.requires_human_review_if_llm_only and di.llm_violations and not di.rule_violations:
+            return (
+                DecisionState(action=DecisionAction.REQUIRE_REVIEW, risk_level=current.risk_level, requires_human_review=True),
+                ReasonCode.TENANT_LLM_ONLY_REVIEW, {"suppressed": suppressed},
+            )
+
+        if suppressed:
+            return (
+                current.model_copy(deep=True),
+                ReasonCode.TENANT_SUPPRESSED, {"suppressed": suppressed},
+            )
+
+        return (
+            current.model_copy(deep=True),
+            ReasonCode.TENANT_PASSTHROUGH, {},
+        )
+
+    def _eval_platform(
+        self, di: DecisionInput, current: DecisionState,
+    ) -> tuple[DecisionState, ReasonCode, dict]:
+        pp = di.platform_policy
+        if not pp.platform_id:
+            return (
+                current.model_copy(deep=True),
+                ReasonCode.PLATFORM_NO_POLICY, {},
+            )
+
+        if pp.required_sections:
+            chapter_violations = [rv for rv in di.rule_violations if rv.rule_type == RuleType.CHAPTER_REQUIRED]
+            if chapter_violations:
+                present = {rv.location for rv in chapter_violations if rv.location}
+                missing = pp.required_sections - present
+                if missing:
+                    return (
+                        DecisionState(action=DecisionAction.BLOCK, risk_level=RiskLevel.CRITICAL, requires_human_review=True),
+                        ReasonCode.PLATFORM_MISSING_SECTION,
+                        {"platform_id": pp.platform_id, "missing": sorted(missing)},
+                    )
+
+        return (
+            current.model_copy(deep=True),
+            ReasonCode.PLATFORM_PASSTHROUGH,
+            {"platform_id": pp.platform_id},
+        )
+
+    def _eval_hard_rule(
+        self, di: DecisionInput, current: DecisionState,
+    ) -> tuple[DecisionState, ReasonCode, dict]:
+        if not di.rule_violations:
+            return (
+                current.model_copy(deep=True),
+                ReasonCode.HARD_RULE_NONE, {},
+            )
+
+        forbidden = [rv for rv in di.rule_violations if rv.rule_type == RuleType.FORBIDDEN]
+        highs = [rv for rv in di.rule_violations if rv.risk_level == RiskLevel.HIGH]
+        chapters = [rv for rv in di.rule_violations if rv.rule_type == RuleType.CHAPTER_REQUIRED]
+
+        if len(forbidden) >= 2:
+            return (
+                DecisionState(action=DecisionAction.BLOCK, risk_level=RiskLevel.CRITICAL, requires_human_review=True),
+                ReasonCode.HARD_RULE_MULTI_FORBIDDEN, {"count": len(forbidden)},
+            )
+        if forbidden and highs:
+            return (
+                DecisionState(action=DecisionAction.BLOCK, risk_level=RiskLevel.HIGH, requires_human_review=True),
+                ReasonCode.HARD_RULE_FORBIDDEN_HIGH, {"forbidden": len(forbidden), "high": len(highs)},
+            )
+        if forbidden:
+            return (
+                DecisionState(action=DecisionAction.REQUIRE_REVIEW, risk_level=RiskLevel.HIGH, requires_human_review=True),
+                ReasonCode.HARD_RULE_FORBIDDEN, {"forbidden": len(forbidden)},
+            )
+        if chapters:
+            return (
+                DecisionState(action=DecisionAction.REQUIRE_REVIEW, risk_level=RiskLevel.MEDIUM, requires_human_review=True),
+                ReasonCode.HARD_RULE_MISSING_CHAPTER, {"count": len(chapters)},
+            )
+        if highs:
+            return (
+                DecisionState(action=DecisionAction.WARN, risk_level=RiskLevel.MEDIUM, requires_human_review=True),
+                ReasonCode.HARD_RULE_HIGH, {"count": len(highs)},
+            )
+        return (
+            current.model_copy(deep=True),
+            ReasonCode.HARD_RULE_PASSTHROUGH, {"count": len(di.rule_violations)},
+        )
+
+
+# ═══════════════════════════════════════════════════════════════
+# Trace 验证
+# ═══════════════════════════════════════════════════════════════
+
+def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dict:
+    """验证 PolicyDecision 的完整性。
+
+    返回 {"valid": True/False, "errors": [...], "checks": {...}}
+    任一字段被篡改必须失败。
+    """
+    errors: list[str] = []
+    checks: dict[str, bool] = {}
+
+    # 1. 重算 root hash
+    expected_root = sha256_hex(_canonical_json(decision_input))
+    checks["root_hash"] = decision.input_hash == expected_root
+    if not checks["root_hash"]:
+        errors.append(f"input_hash mismatch: got {decision.input_hash}, expected {expected_root}")
+
+    # 2. 链连续性
+    trace = decision.trace_chain
+    for i, step in enumerate(trace):
+        if i == 0:
+            if step.input_hash != decision.input_hash:
+                errors.append(f"trace[{i}].input_hash != root_hash")
+                checks[f"trace[{i}].chain_input"] = False
+            else:
+                checks[f"trace[{i}].chain_input"] = True
+        else:
+            expected_in = trace[i - 1].output_hash
+            if step.input_hash != expected_in:
+                errors.append(f"trace[{i}].input_hash chain broken: expected {expected_in}, got {step.input_hash}")
+                checks[f"trace[{i}].chain_input"] = False
+            else:
+                checks[f"trace[{i}].chain_input"] = True
+
+    # 3. 重算每一步 hash
+    current_hash = decision.input_hash
+    recomputed = "<unset>"  # for error messages
+    for i, step in enumerate(trace):
+        event = {
+            "schema_version": decision_input.schema_version,
+            "execution_index": step.execution_index,
+            "priority_rank": step.priority_rank,
+            "source": step.source.value,
+            "state_before": step.state_before.model_dump(mode="json"),
+            "proposed_transition": step.proposed_transition.model_dump(mode="json"),
+            "state_after": step.state_after.model_dump(mode="json"),
+            "reason_code": step.reason_code.value,
+            "reason_params": step.reason_params,
+        }
+        event_bytes = _canonical_json(event)
+        recomputed = sha256_hex(current_hash.encode() + event_bytes)
+        if step.output_hash != recomputed:
+            errors.append(f"trace[{i}].output_hash mismatch: expected {recomputed}, got {step.output_hash}")
+            checks[f"trace[{i}].hash"] = False
+        else:
+            checks[f"trace[{i}].hash"] = True
+        # Always advance from the stored output_hash (to verify chain continuity)
+        current_hash = step.output_hash
+
+    # 4. 检查优先级顺序（strictly descending: 5 > 4 > 3 > 2 > 1）
+    for i in range(1, len(trace)):
+        if trace[i].priority_rank >= trace[i - 1].priority_rank:
+            errors.append(f"trace[{i}] priority_rank {trace[i].priority_rank} not < trace[{i-1}] {trace[i-1].priority_rank}")
+            checks["priority_order"] = False
+            break
+    else:
+        checks["priority_order"] = True
+
+    # 5. 检查执行序号
+    for i, step in enumerate(trace):
+        if step.execution_index != i:
+            errors.append(f"trace[{i}] execution_index {step.execution_index} != {i}")
+            checks["execution_order"] = False
+    checks.setdefault("execution_order", True)
+
+    # 6. terminal 一致性
+    last = trace[-1] if trace else None
+    if last:
+        final_state = DecisionState(
+            action=decision.final_action,
+            risk_level=decision.final_risk_level,
+            requires_human_review=decision.requires_human_review,
+        )
+        if last.state_after != final_state:
+            errors.append(f"terminal mismatch: trace[-1].state_after != final")
+            checks["terminal_consistency"] = False
+        else:
+            checks["terminal_consistency"] = True
+    else:
+        errors.append("empty trace")
+        checks["terminal_consistency"] = False
+
+    # 7. decision_hash
+    final_data = _canonical_json({
+        "final_action": decision.final_action.value,
+        "final_risk_level": decision.final_risk_level.value,
+        "requires_human_review": decision.requires_human_review,
+        "schema_version": decision.schema_version,
+        "input_hash": decision.input_hash,
+    })
+    expected_dh = sha256_hex(current_hash.encode() + final_data)
+    if decision.decision_hash != expected_dh:
+        errors.append(f"decision_hash mismatch: expected {expected_dh}, got {decision.decision_hash}")
+        checks["decision_hash"] = False
+    else:
+        checks["decision_hash"] = True
+
+    # 8. 每层只能升级（state_after 不能低于 state_before），且 state_after 必须等于 max(state_before, proposed_transition)
+    for i, step in enumerate(trace):
+        sb = step.state_before
+        sa = step.state_after
+        prop = step.proposed_transition
+
+        # 正确升级结果 = max(sb, prop)
+        expected_sa = DecisionState(
+            action=_max_action(sb.action, prop.action),
+            risk_level=_max_risk(sb.risk_level, prop.risk_level),
+            requires_human_review=sb.requires_human_review or prop.requires_human_review,
+        )
+
+        if sa != expected_sa:
+            errors.append(f"trace[{i}] state_after {sa} != expected {expected_sa} (upgrade rule)")
+            checks[f"trace[{i}].upgrade_rule"] = False
+        else:
+            checks[f"trace[{i}].upgrade_rule"] = True
+
+        # 额外降级检查
+        if _ACTION_RANK[sa.action] < _ACTION_RANK[sb.action]:
+            errors.append(f"trace[{i}] action downgraded")
+            checks[f"trace[{i}].no_downgrade"] = False
+        elif _RISK_RANK[sa.risk_level] < _RISK_RANK[sb.risk_level]:
+            errors.append(f"trace[{i}] risk downgraded")
+            checks[f"trace[{i}].no_downgrade"] = False
+        else:
+            checks[f"trace[{i}].no_downgrade"] = True
+
+    return {"valid": len(errors) == 0, "errors": errors, "checks": checks}
+
+
+# ═══════════════════════════════════════════════════════════════
+# PolicyDecision → 兼容映射 (merge_*)
+# ═══════════════════════════════════════════════════════════════
+
+class ReviewStatus(str, Enum):
+    AUTO_PASSED = "auto_passed"
+    AUTO_FAILED = "auto_failed"
+    NEEDS_REVIEW = "needs_review"
+    REVIEWED_PASSED = "reviewed_passed"
+    REVIEWED_FAILED = "reviewed_failed"
+
+
+def derive_merge_fields(decision: PolicyDecision) -> dict[str, Any]:
+    """从 PolicyDecision 单向派生 merge_* 兼容字段。"""
+    action = decision.final_action
+    if action == DecisionAction.PASS:
+        review_status = ReviewStatus.AUTO_PASSED
+    elif action == DecisionAction.BLOCK:
+        review_status = ReviewStatus.AUTO_FAILED
+    else:
+        review_status = ReviewStatus.NEEDS_REVIEW
+
+    return {
+        "final_passed": action == DecisionAction.PASS,
+        "risk_level": decision.final_risk_level.value,
+        "review_status": review_status.value,
+        "requires_human_review": decision.requires_human_review,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════
