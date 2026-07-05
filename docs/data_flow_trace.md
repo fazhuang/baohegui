@@ -147,45 +147,53 @@ flowchart TD
         A4["/api/auth/reset-password"] --> P1
         A5["/api/auth/send-verification"] --> P1
         A6["/api/auth/verify-email"] --> P1
+        A7["/api/announcements (GET '')"] --> P1
+        A8["/api/categories/*"] --> P1
     end
 
     subgraph "路径2: Depends(get_current_user)"
         B1["/api/upload/*"] --> Q1["get_current_user<br/>→ JWT decode → {sub, role, exp}"]
         B2["/api/check/*"] --> Q1
-        B3["/api/report/* (读)"] --> Q1
+        B3["/api/report/*"] --> Q1
         B4["/api/member/dashboard"] --> Q1
+        B5["/api/crawler (读: source-health, status, cases, case-detail, stats)"] --> Q1
+        B6["/api/kg (读: search, related, regulation, cases, similar-cases, template, rag-context, stats)"] --> Q1
     end
 
     subgraph "路径3: Depends(require_admin)"
         C1["/api/admin/*"] --> R1["require_admin<br/>→ get_current_user → 检查 role=='admin'"]
-        C2["/api/rules/* (写操作)"] --> R1
-        C3["/api/crawler (trigger)"] --> R1
-        C4["/api/kg/* (写操作)"] --> R1
+        C2["/api/rules (写: reload, platform POST/PUT/DELETE, toggle, import, sync-run, rollback, batch/toggle)"] --> R1
+        C3["/api/crawler (写: trigger, jobs, analyze)"] --> R1
+        C4["/api/kg (写: seed, node audit/create/update/delete, edge)"] --> R1
+        C5["/api/admin/cases (管理: review-queue, stats, detail, update, review, dedup, bulk-dedup)"] --> R1
+        C6["/api/admin/candidate-rules"] --> R1
     end
 
     subgraph "路径4: PermissionService.require_permission"
         D1["/api/report/feedback/rules-needing-review"] --> S1["require_permission(Permission.RULES_READ)<br/>→ get_current_user → PermissionService.has_permission()"]
+        D2["/api/stats/dashboard"] --> S2["require_permission(Permission.STATS_DASHBOARD)<br/>→ get_current_user → PermissionService.has_permission()"]
     end
 
-    subgraph "路径5: 显式 assert_resource_access (5处)"
-        E1["/api/report/{id}"] --> T1["assert_resource_access(db, db_report, user, owner_attr='checked_by')"]
-        E2["/api/report/{id}/pdf"] --> T1
-        E3["/api/report/{id}/export"] --> T1
-        E4["/api/check/{file_id}"] --> T2["assert_resource_access(db, db_file, user, owner_attr='user_id')"]
-        E5["/api/report/{id}/feedback (POST)"] --> T1
+    subgraph "路径5: 内联 owner/admin 判断 (无 assert_resource_access)"
+        F1["/api/upload/{file_id}/status<br/>Depends(get_current_user) →<br/>if db_file.user_id != int(user['sub'])<br/>and user.get('role') != 'admin' → 403"] --> U1["内联 owner/admin 检查"]
+        F2["/api/check/{file_id}/status<br/>Depends(get_current_user) →<br/>if db_file.user_id != int(user['sub'])<br/>and user.get('role') != 'admin' → 403"] --> U1
+        F3["/api/report/list/<br/>Depends(get_current_user) →<br/>if user.get('role') != 'admin':<br/>query = query.filter(checked_by==user_id)"] --> U2["内联 role 过滤"]
     end
 
-    subgraph "路径6: 内联所有者/admin判断 (无 assert_resource_access)"
-        F1["/api/upload/{file_id}/status<br/>if db_file.user_id != int(user['sub']) and user.get('role') != 'admin' → 403"] --> U1["内联 owner/admin 检查"]
-        F2["/api/check/{file_id}/status<br/>if db_file.user_id != int(user['sub']) and user.get('role') != 'admin' → 403"] --> U1
+    subgraph "路径6: Depends + 额外 assert_resource_access (5处)"
+        E1["/api/report/{report_id}"] --> T1["Depends(get_current_user) →<br/>assert_resource_access(db, db_report, user, owner_attr='checked_by')"]
+        E2["/api/report/{report_id}/pdf"] --> T1
+        E3["/api/report/{report_id}/export"] --> T1
+        E4["/api/report/feedback<br/>Depends(get_current_user) →<br/>从请求体 FeedbackRequest.report_id 查报告 →<br/>assert_resource_access(db, db_report, user, owner_attr='checked_by')"]
+        E5["/api/check/{file_id}<br/>Depends(get_current_user) →<br/>assert_resource_access(db, db_file, user)"]
     end
 ```
 
 ### 3.2 权限关键事实
 
-**`get_current_user_with_perms` 不是全局认证链**: 该函数仅在少数需要权限列表的端点上通过 `Depends` 使用。大多数端点直接使用 `get_current_user`。
+**`get_current_user_with_perms` 当前仅有定义，无任何API调用方**: `PermissionService.get_current_user_with_perms()` 仅存在于 `backend/app/core/permissions.py:120` 的定义中。`rg -n "get_current_user_with_perms" backend/app` 仅命中该定义，未发现任何 `Depends` 或代码引用，因此它不属于当前运行时认证链。
 
-**`assert_resource_access` 不是全局中间件**: 仅在 5 个端点上显式调用（报告 GET /{id}, GET /{id}/pdf, GET /{id}/export, POST /{id}/feedback + 检查 POST /{file_id}）。upload status 和 check status 使用内联 `if db_file.user_id != int(user["sub"]) and user.get("role") != "admin"` 模式，不调用 `assert_resource_access`。
+**`assert_resource_access` 不是全局中间件**: 仅在 5 处显式调用：report.py `GET /{report_id}` (行66), `GET /{report_id}/pdf` (行95), `GET /{report_id}/export` (行120), `POST /feedback` (行240, 从请求体 `FeedbackRequest.report_id` 查报告后守卫) + check.py `POST /{file_id}` (行102)。upload status 和 check status 使用内联 `if db_file.user_id != int(user["sub"]) and user.get("role") != "admin"` 模式，不调用 `assert_resource_access`。
 
 **`AuditService` 不是全局审计中间件**: 审计日志仅在显式调用 `audit_service.log(...)` 的端点上记录。未记录的接口无审计轨迹。
 

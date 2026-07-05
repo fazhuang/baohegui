@@ -62,20 +62,22 @@
 
 | 文件 | 路由前缀 | 端点数量 | 认证依赖 |
 |------|---------|---------|---------|
-| `auth.py` | `/api/auth` | 7 (login, register, send-verification, verify-email, forgot-password, reset-password, me) | 公开(6) + `get_current_user`(1) |
-| `upload.py` | `/api/upload` | 2 (POST /, GET /{file_id}/status) | `get_current_user`(2); status 端点内联所有者/admin判断 |
-| `check.py` | `/api/check` | 2 (POST /{file_id}, GET /{file_id}/status) | `get_current_user`(2); status 端点内联所有者/admin判断; check 端点 `assert_resource_access` |
-| `report.py` | `/api/report` | 7 (GET /{id}, GET /{id}/pdf, GET /{id}/export, GET /list/, POST /feedback, GET /feedback/rules-needing-review, POST /generate-clause) | `get_current_user`(6) + `PermissionService.require_permission`(1, rules-needing-review) |
-| `rules.py` | `/api/rules` | 20 (CRUD + 同步 + 版本 + 批量操作) | `get_current_user`(11: engine-status, platforms, platform-rules, platform-rule, rules, rule, rule-versions, sync-status, sync-history, search, export) + `require_admin`(9: reload, create, update, delete, batch-enable, batch-disable, batch-delete, sync-trigger, promote-candidate) |
-| `admin.py` | `/api/admin` | 9 (users, user-detail, user-update, audit-logs, file-compare, file-text, billing-threshold get/put, billing-status) | `require_admin`(9) |
-| `announcements.py` | `/api/announcements` | 1 (GET /) | 公开，无认证依赖 |
-| `categories.py` | `/api/categories` | 3 (GET /, GET /groups, GET /groups/{group_id}/categories) | 公开，无认证依赖 |
-| `knowledge_graph.py` | `/api/kg` | 15 (search, suggest, related-nodes, get-node, get-relations, rag-context, stats, export, seed, create-node, update-node, delete-node, batch-create, review-node, delete-edges) | `get_current_user`(8, 读) + `require_admin`(7, 写) |
-| `crawler.py` | `/api/crawler` | 9 (POST /trigger, GET /source-health, GET /status, GET /jobs, GET /jobs/{job_id}, GET /cases, GET /cases/{case_id}, POST /analyze, GET /stats) | `require_admin`(4: trigger, jobs, jobs/{job_id}, analyze) + `get_current_user`(5: source-health, status, cases, case-detail, stats) |
-| `stats.py` | `/api/stats` | 1 (GET /dashboard) | `PermissionService.require_permission(Permission.STATS_DASHBOARD)` |
-| `member.py` | `/api/member` | 1 (GET /dashboard) | `get_current_user` |
-| `case_review.py` | `/api/admin/cases` | 9 (review-queue, review-queue/stats, case-detail, case-update, review, dedup-check, bulk-dedup, public-list, public-detail) | `require_admin`(7: 管理端点) + `get_current_user`(2: /public/*) |
-| `candidate_rules.py` | `/api/admin/candidate-rules` | 4 (list, stats, review, promote) | `require_admin`(4) |
+| 文件 | 前缀 | 真实端点 | 认证依赖 |
+|------|------|---------|---------|
+| `auth.py` | `/api/auth` | `POST /login`, `POST /register`, `POST /send-verification`, `POST /verify-email`, `POST /forgot-password`, `POST /reset-password`, `GET /me` | 公开(6) + `Depends(get_current_user)`(1, /me) |
+| `upload.py` | `/api/upload` | `POST /`, `GET /{file_id}/status` | `Depends(get_current_user)`(2); status 端点后接内联 `if db_file.user_id != int(user["sub"]) and user.get("role") != "admin" → 403` |
+| `check.py` | `/api/check` | `POST /{file_id}`, `GET /{file_id}/status` | `Depends(get_current_user)`(2); POST /{file_id} 额外 `assert_resource_access(db, db_file, user)`; GET /{file_id}/status 后接内联 owner/admin 判断 |
+| `report.py` | `/api/report` | `GET /{report_id}`, `GET /{report_id}/pdf`, `GET /{report_id}/export`, `GET /list/`, `POST /feedback`, `GET /feedback/rules-needing-review`, `POST /generate-clause` | `Depends(get_current_user)`(6) + `Depends(PermissionService.require_permission(Permission.RULES_READ))`(1, /feedback/rules-needing-review)。GET /{report_id}, GET /{report_id}/pdf, GET /{report_id}/export, POST /feedback 认证后额外 `assert_resource_access` |
+| `rules.py` | `/api/rules` | `POST /reload`, `GET /engine/status`, `GET /platforms`, `GET /platforms/{platform_id}`, `GET /platform/list`, `GET /platform/{rule_id}`, `POST /platform`, `PUT /platform/{rule_id}`, `DELETE /platform/{rule_id}`, `POST /platform/{rule_id}/toggle`, `POST /import`, `GET /sync/status`, `POST /sync/run`, `GET /sync/history`, `GET /sync/diff`, `GET /versions`, `POST /versions/rollback`, `GET /effectiveness`, `POST /batch/toggle`, `GET /stats` | `Depends(get_current_user)`(11: /engine/status, /platforms, /platforms/{platform_id}, /platform/list, /platform/{rule_id}, /sync/status, /sync/history, /sync/diff, /versions, /effectiveness, /stats) + `Depends(require_admin)`(9: /reload, /platform, /platform/{rule_id}, /platform/{rule_id}/toggle, /import, /sync/run, /versions/rollback, /batch/toggle, DELETE /platform/{rule_id}) |
+| `admin.py` | `/api/admin` | `GET /users`, `POST /users`, `PUT /users/{user_id}`, `DELETE /users/{user_id}`, `GET /audit`, `GET /compare`, `GET /billing/threshold`, `PUT /billing/threshold`, `GET /billing/status` | `Depends(require_admin)`(9) |
+| `announcements.py` | `/api/announcements` | `GET ""` | 公开，无认证依赖 |
+| `categories.py` | `/api/categories` | `GET /`, `GET /groups`, `GET /groups/{group_id}/categories` | 公开，无认证依赖 |
+| `knowledge_graph.py` | `/api/kg` | `GET /search`, `GET /related/{node_id}`, `GET /regulation/{rule_id}`, `GET /cases/{rule_id}`, `GET /similar-cases`, `GET /template/{rule_id}`, `GET /rag-context`, `GET /stats`, `POST /seed`, `PUT /node/{node_id}/audit`, `GET /nodes/needing-review`, `POST /node`, `PUT /node/{node_id}`, `DELETE /node/{node_id}`, `POST /edge` | `Depends(get_current_user)`(8: /search, /related/{node_id}, /regulation/{rule_id}, /cases/{rule_id}, /similar-cases, /template/{rule_id}, /rag-context, /stats) + `Depends(require_admin)`(7: /seed, /node/{node_id}/audit, /nodes/needing-review, /node, /node/{node_id}, DELETE /node/{node_id}, /edge) |
+| `crawler.py` | `/api/crawler` | `POST /trigger`, `GET /source-health`, `GET /status`, `GET /jobs`, `GET /jobs/{job_id}`, `GET /cases`, `GET /cases/{case_id}`, `POST /analyze`, `GET /stats` | `Depends(require_admin)`(4: /trigger, /jobs, /jobs/{job_id}, /analyze) + `Depends(get_current_user)`(5: /source-health, /status, /cases, /cases/{case_id}, /stats) |
+| `stats.py` | `/api/stats` | `GET /dashboard` | `Depends(PermissionService.require_permission(Permission.STATS_DASHBOARD))` |
+| `member.py` | `/api/member` | `GET /dashboard` | `Depends(get_current_user)` |
+| `case_review.py` | `/api/admin/cases` | `GET /review-queue`, `GET /review-queue/stats`, `GET /{case_id}`, `PUT /{case_id}`, `POST /review`, `POST /dedup-check`, `POST /bulk-dedup`, `GET /public/list`, `GET /public/{case_id}` | `Depends(require_admin)`(7: /review-queue, /review-queue/stats, /{case_id} GET+PUT, /review, /dedup-check, /bulk-dedup) + `Depends(get_current_user)`(2: /public/list, /public/{case_id}) |
+| `candidate_rules.py` | `/api/admin/candidate-rules` | `GET ""`, `GET /stats`, `GET /{candidate_id}`, `POST /review` | `Depends(require_admin)`(4) |
 
 ### 1.4 models/ — 10 个模型文件
 
