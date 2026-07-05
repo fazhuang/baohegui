@@ -81,13 +81,16 @@ class ReasonCode(str, Enum):
     PLATFORM_NO_POLICY = "platform_no_policy"
     PLATFORM_MISSING_SECTION = "platform_missing_section"
     PLATFORM_PASSTHROUGH = "platform_passthrough"
-    # HARD_RULE
+    # HARD_RULE — bias findings are determined by parameter analysis, not legal rules
     HARD_RULE_NONE = "hard_rule_none"
     HARD_RULE_MULTI_FORBIDDEN = "hard_rule_multi_forbidden"
     HARD_RULE_FORBIDDEN_HIGH = "hard_rule_forbidden_high"
     HARD_RULE_FORBIDDEN = "hard_rule_forbidden"
     HARD_RULE_MISSING_CHAPTER = "hard_rule_missing_chapter"
     HARD_RULE_HIGH = "hard_rule_high"
+    HARD_RULE_BIAS_CRITICAL = "hard_rule_bias_critical"
+    HARD_RULE_BIAS_HIGH = "hard_rule_bias_high"
+    HARD_RULE_BIAS_MEDIUM = "hard_rule_bias_medium"
     HARD_RULE_PASSTHROUGH = "hard_rule_passthrough"
 
 
@@ -206,9 +209,15 @@ class BiasFindingInput(BaseModel):
     matched_field: str = ""
 
 
+class TrafficLight(str, Enum):
+    GREEN = "green"
+    YELLOW = "yellow"
+    RED = "red"
+
+
 class RoutingInput(BaseModel):
     """路由审查结果"""
-    traffic_light: str = "green"  # green / yellow / red
+    traffic_light: TrafficLight = TrafficLight.GREEN
     skip_llm: bool = False
 
 
@@ -551,10 +560,86 @@ class PolicyKernel:
     def _eval_hard_rule(
         self, di: DecisionInput, current: DecisionState,
     ) -> tuple[DecisionState, ReasonCode, dict]:
+        # ── parameter bias findings (HARD_RULE sub-layer, executed first) ──
+        bias_result = self._eval_bias(di, current)
+
+        # ── rule violations ──
+        rule_result = self._eval_rule_violations(di, current)
+
+        # Merge: bias + rules, escalate to the stricter of the two
+        action = _max_action(bias_result[0].action, rule_result[0].action)
+        risk = _max_risk(bias_result[0].risk_level, rule_result[0].risk_level)
+        hr = bias_result[0].requires_human_review or rule_result[0].requires_human_review
+
+        # Reason code: prefer the more specific one (bias > rules > passthrough)
+        if bias_result[1] != ReasonCode.HARD_RULE_PASSTHROUGH:
+            code = bias_result[1]
+            params = bias_result[2]
+        elif rule_result[1] != ReasonCode.HARD_RULE_PASSTHROUGH:
+            code = rule_result[1]
+            params = rule_result[2]
+        else:
+            code = ReasonCode.HARD_RULE_NONE
+            params = {}
+
+        return (
+            DecisionState(action=action, risk_level=risk, requires_human_review=hr),
+            code, params,
+        )
+
+    def _eval_bias(
+        self, di: DecisionInput, _current: DecisionState,
+    ) -> tuple[DecisionState, ReasonCode, dict]:
+        """参数倾向性发现 → HARD_RULE 层子评估。
+
+        语义：bias 是参数分析工具发现的倾向性证据，不是法律确定违规。
+        因此不对单条 bias 自动 BLOCK — 需要 rule_violations 协同才可能 block。
+        """
+        if not di.bias_findings:
+            return (
+                _current.model_copy(deep=True),
+                ReasonCode.HARD_RULE_PASSTHROUGH, {},
+            )
+
+        max_severity = max(di.bias_findings, key=lambda b: _RISK_RANK.get(b.severity, 0))
+        sev = max_severity.severity
+
+        if sev == RiskLevel.CRITICAL:
+            return (
+                DecisionState(action=DecisionAction.REQUIRE_REVIEW, risk_level=RiskLevel.CRITICAL, requires_human_review=True),
+                ReasonCode.HARD_RULE_BIAS_CRITICAL,
+                {"count": len(di.bias_findings), "max_severity": sev.value,
+                 "pattern_ids": [b.pattern_id for b in di.bias_findings]},
+            )
+        elif sev == RiskLevel.HIGH:
+            return (
+                DecisionState(action=DecisionAction.REQUIRE_REVIEW, risk_level=RiskLevel.HIGH, requires_human_review=True),
+                ReasonCode.HARD_RULE_BIAS_HIGH,
+                {"count": len(di.bias_findings), "max_severity": sev.value,
+                 "pattern_ids": [b.pattern_id for b in di.bias_findings]},
+            )
+        elif sev == RiskLevel.MEDIUM:
+            return (
+                DecisionState(action=DecisionAction.WARN, risk_level=RiskLevel.MEDIUM, requires_human_review=True),
+                ReasonCode.HARD_RULE_BIAS_MEDIUM,
+                {"count": len(di.bias_findings), "max_severity": sev.value,
+                 "pattern_ids": [b.pattern_id for b in di.bias_findings]},
+            )
+        else:
+            # low bias: advisory only, no escalation
+            return (
+                _current.model_copy(deep=True),
+                ReasonCode.HARD_RULE_PASSTHROUGH,
+                {"bias_low_count": len(di.bias_findings)},
+            )
+
+    def _eval_rule_violations(
+        self, di: DecisionInput, current: DecisionState,
+    ) -> tuple[DecisionState, ReasonCode, dict]:
         if not di.rule_violations:
             return (
                 current.model_copy(deep=True),
-                ReasonCode.HARD_RULE_NONE, {},
+                ReasonCode.HARD_RULE_PASSTHROUGH, {},
             )
 
         forbidden = [rv for rv in di.rule_violations if rv.rule_type == RuleType.FORBIDDEN]
@@ -597,21 +682,97 @@ class PolicyKernel:
 # ═══════════════════════════════════════════════════════════════
 
 def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dict:
-    """验证 PolicyDecision 的完整性。
+    """验证 PolicyDecision 的完整性 — 语义回放。
 
-    返回 {"valid": True/False, "errors": [...], "checks": {...}}
-    任一字段被篡改必须失败。
+给定 DecisionInput 和当前 policy schema，判断这个 PolicyDecision
+是否正是 PolicyKernel 应产生的唯一结果。
+
+除哈希链验证外，还执行完整的 semantic replay：
+expected = PolicyKernel().decide(decision_input)，逐字段对比。
+
+返回 {"valid": True/False, "integrity_status": str, "errors": [...], "checks": {...}}
+
+边界声明：
+  SHA-256 链提供可重复审计和一致性校验，不提供数据库攻击者级别的
+  真实性证明。如需不可伪造性，请使用 HMAC 或数字签名。
+"""
+
+from app.core.policy_kernel import PolicyKernel as _KernelSingleton
+
+
+def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dict:
+    """语义回放验证：重新执行 Kernel 并逐字段对比。
+
+    SHA-256 链自洽只是必要条件，不是充分条件。
+    本函数还验证：
+    - 五层完整
+    - source 序列精确匹配
+    - 每一步通过 replay 获得相同 proposal / state_after / hash
+    - 终端决策字段完全一致
     """
     errors: list[str] = []
     checks: dict[str, bool] = {}
 
-    # 1. 重算 root hash
+    # ── 0. 基础结构检查（在执行 replay 之前） ──
+    if not decision.trace_chain:
+        errors.append("empty trace_chain")
+        checks["trace_count"] = False
+    else:
+        checks["trace_count"] = len(decision.trace_chain) == 5
+        if not checks["trace_count"]:
+            errors.append(f"expected 5 trace steps, got {len(decision.trace_chain)}")
+
+    # ── 1. Semantic replay ──
+    try:
+        expected = _KernelSingleton().decide(decision_input)
+    except Exception as e:
+        errors.append(f"replay failed: {e}")
+        return {"valid": False, "integrity_status": "replay_error", "errors": errors, "checks": checks}
+    # ponytail: avoid import-time circular — _KernelSingleton is the same PolicyKernel class
+
+    if expected.decision_hash != decision.decision_hash:
+        checks["replay_semantic_match"] = False
+        errors.append(f"replay produced different decision_hash: {expected.decision_hash[:16]}... vs {decision.decision_hash[:16]}...")
+    else:
+        checks["replay_semantic_match"] = True
+
+    # ── 2. Input hash ──
     expected_root = sha256_hex(_canonical_json(decision_input))
     checks["root_hash"] = decision.input_hash == expected_root
     if not checks["root_hash"]:
-        errors.append(f"input_hash mismatch: got {decision.input_hash}, expected {expected_root}")
+        errors.append(f"input_hash mismatch")
 
-    # 2. 链连续性
+    # ── 3. Full structural diff against replay output ──
+    for field in ["final_action", "final_risk_level", "requires_human_review", "overrides_applied"]:
+        expected_val = getattr(expected, field)
+        actual_val = getattr(decision, field)
+        if field == "overrides_applied":
+            expected_val = sorted(expected_val)
+            actual_val = sorted(actual_val)
+        checks[f"final_{field}"] = expected_val == actual_val
+        if not checks[f"final_{field}"]:
+            errors.append(f"final.{field}: expected {expected_val}, got {actual_val}")
+
+    # ── 4. Trace step-by-step comparison ──
+    for i, (exp_step, act_step) in enumerate(zip(expected.trace_chain, decision.trace_chain)):
+        for attr in ["execution_index", "priority_rank", "source", "reason_code",
+                      "reason_params", "state_before", "proposed_transition",
+                      "state_after", "input_hash", "output_hash"]:
+            exp_val = getattr(exp_step, attr)
+            act_val = getattr(act_step, attr)
+            match = exp_val == act_val
+            checks[f"trace[{i}].{attr}"] = match
+            if not match:
+                errors.append(f"trace[{i}].{attr}: expected {exp_val}, got {act_val}")
+
+    # ── 5. Canonical source sequence ────────────────
+    expected_sources = ["llm", "ux", "tenant", "platform", "hard_rule"]
+    actual_sources = [t.source.value for t in decision.trace_chain] if decision.trace_chain else []
+    checks["source_sequence"] = actual_sources == expected_sources
+    if not checks["source_sequence"]:
+        errors.append(f"source sequence mismatch: expected {expected_sources}, got {actual_sources}")
+
+    # ── 6. Chain and structural checks (carried over) ──
     trace = decision.trace_chain
     for i, step in enumerate(trace):
         if i == 0:
@@ -623,114 +784,40 @@ def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dic
         else:
             expected_in = trace[i - 1].output_hash
             if step.input_hash != expected_in:
-                errors.append(f"trace[{i}].input_hash chain broken: expected {expected_in}, got {step.input_hash}")
+                errors.append(f"trace[{i}].input_hash chain broken")
                 checks[f"trace[{i}].chain_input"] = False
             else:
                 checks[f"trace[{i}].chain_input"] = True
 
-    # 3. 重算每一步 hash
-    current_hash = decision.input_hash
-    recomputed = "<unset>"  # for error messages
-    for i, step in enumerate(trace):
-        event = {
-            "schema_version": decision_input.schema_version,
-            "execution_index": step.execution_index,
-            "priority_rank": step.priority_rank,
-            "source": step.source.value,
-            "state_before": step.state_before.model_dump(mode="json"),
-            "proposed_transition": step.proposed_transition.model_dump(mode="json"),
-            "state_after": step.state_after.model_dump(mode="json"),
-            "reason_code": step.reason_code.value,
-            "reason_params": step.reason_params,
-        }
-        event_bytes = _canonical_json(event)
-        recomputed = sha256_hex(current_hash.encode() + event_bytes)
-        if step.output_hash != recomputed:
-            errors.append(f"trace[{i}].output_hash mismatch: expected {recomputed}, got {step.output_hash}")
-            checks[f"trace[{i}].hash"] = False
-        else:
-            checks[f"trace[{i}].hash"] = True
-        # Always advance from the stored output_hash (to verify chain continuity)
-        current_hash = step.output_hash
-
-    # 4. 检查优先级顺序（strictly descending: 5 > 4 > 3 > 2 > 1）
-    for i in range(1, len(trace)):
-        if trace[i].priority_rank >= trace[i - 1].priority_rank:
-            errors.append(f"trace[{i}] priority_rank {trace[i].priority_rank} not < trace[{i-1}] {trace[i-1].priority_rank}")
-            checks["priority_order"] = False
-            break
-    else:
-        checks["priority_order"] = True
-
-    # 5. 检查执行序号
-    for i, step in enumerate(trace):
-        if step.execution_index != i:
-            errors.append(f"trace[{i}] execution_index {step.execution_index} != {i}")
-            checks["execution_order"] = False
-    checks.setdefault("execution_order", True)
-
-    # 6. terminal 一致性
-    last = trace[-1] if trace else None
-    if last:
-        final_state = DecisionState(
-            action=decision.final_action,
-            risk_level=decision.final_risk_level,
-            requires_human_review=decision.requires_human_review,
-        )
-        if last.state_after != final_state:
-            errors.append(f"terminal mismatch: trace[-1].state_after != final")
-            checks["terminal_consistency"] = False
-        else:
-            checks["terminal_consistency"] = True
-    else:
-        errors.append("empty trace")
-        checks["terminal_consistency"] = False
-
-    # 7. decision_hash
-    final_data = _canonical_json({
-        "final_action": decision.final_action.value,
-        "final_risk_level": decision.final_risk_level.value,
-        "requires_human_review": decision.requires_human_review,
-        "schema_version": decision.schema_version,
-        "input_hash": decision.input_hash,
-    })
-    expected_dh = sha256_hex(current_hash.encode() + final_data)
-    if decision.decision_hash != expected_dh:
-        errors.append(f"decision_hash mismatch: expected {expected_dh}, got {decision.decision_hash}")
-        checks["decision_hash"] = False
-    else:
-        checks["decision_hash"] = True
-
-    # 8. 每层只能升级（state_after 不能低于 state_before），且 state_after 必须等于 max(state_before, proposed_transition)
+    # ── 7. No downgrade check ──
     for i, step in enumerate(trace):
         sb = step.state_before
         sa = step.state_after
-        prop = step.proposed_transition
-
-        # 正确升级结果 = max(sb, prop)
-        expected_sa = DecisionState(
-            action=_max_action(sb.action, prop.action),
-            risk_level=_max_risk(sb.risk_level, prop.risk_level),
-            requires_human_review=sb.requires_human_review or prop.requires_human_review,
-        )
-
-        if sa != expected_sa:
-            errors.append(f"trace[{i}] state_after {sa} != expected {expected_sa} (upgrade rule)")
-            checks[f"trace[{i}].upgrade_rule"] = False
-        else:
-            checks[f"trace[{i}].upgrade_rule"] = True
-
-        # 额外降级检查
-        if _ACTION_RANK[sa.action] < _ACTION_RANK[sb.action]:
+        if _ACTION_RANK.get(sa.action, 0) < _ACTION_RANK.get(sb.action, 0):
             errors.append(f"trace[{i}] action downgraded")
             checks[f"trace[{i}].no_downgrade"] = False
-        elif _RISK_RANK[sa.risk_level] < _RISK_RANK[sb.risk_level]:
+        elif _RISK_RANK.get(sa.risk_level, 0) < _RISK_RANK.get(sb.risk_level, 0):
             errors.append(f"trace[{i}] risk downgraded")
             checks[f"trace[{i}].no_downgrade"] = False
         else:
             checks[f"trace[{i}].no_downgrade"] = True
 
-    return {"valid": len(errors) == 0, "errors": errors, "checks": checks}
+    valid = len(errors) == 0
+
+    # ── 8. Integrity status ──
+    if valid:
+        status = "verified"
+    else:
+        # Distinguish: if input_hash is wrong → legacy_unverifiable (different input)
+        # Otherwise → integrity_failed
+        if not checks.get("root_hash", False) and len(errors) == 1:
+            status = "input_hash_mismatch"
+        elif not checks.get("replay_semantic_match", True):
+            status = "replay_mismatch"
+        else:
+            status = "integrity_failed"
+
+    return {"valid": valid, "integrity_status": status, "errors": errors, "checks": checks}
 
 
 # ═══════════════════════════════════════════════════════════════

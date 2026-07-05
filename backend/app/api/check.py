@@ -25,6 +25,7 @@ from app.core.policy_kernel import (
     BiasFindingInput,
     RoutingInput,
     TenantPolicy,
+    TrafficLight,
     UxPolicy,
     derive_merge_fields,
     policy_kernel,
@@ -332,10 +333,23 @@ async def run_compliance_check(
         plan = user_quota_record.plan if user_quota_record else "free"
         _plan_to_tier = {"enterprise": PlanTier.ENTERPRISE, "pro": PlanTier.PRO, "free": PlanTier.FREE}
 
+        # 从平台规则引擎派生平台策略（加载真实 required_sections）
+        platform_policy = PlatformPolicy()
+        if platform:
+            from app.engine.platform_rules import platform_rule_engine
+            plat = platform_rule_engine.get_platform(platform)
+            if plat:
+                platform_policy = PlatformPolicy(
+                    platform_id=platform,
+                    required_sections=set(plat.get("required_sections", [])),
+                )
+            else:
+                logger.warning("platform=%s not found in platform_rule_engine, using empty policy", platform)
+
         decision_input = DecisionInput(
             schema_version="2.0.0",
             routing=RoutingInput(
-                traffic_light=routing_result.traffic_light.value,
+                traffic_light=TrafficLight(routing_result.traffic_light.value),
                 skip_llm=routing_result.skip_llm,
             ),
             rule_violations=[
@@ -374,7 +388,7 @@ async def run_compliance_check(
                 requires_human_review_if_llm_only=(plan != "enterprise"),
                 plan_tier=_plan_to_tier.get(plan, PlanTier.FREE),
             ),
-            platform_policy=PlatformPolicy(platform_id=platform or "") if platform else PlatformPolicy(),
+            platform_policy=platform_policy,
             ux_policy=UxPolicy(),
         )
 
@@ -495,6 +509,8 @@ async def run_compliance_check(
                 {
                     **report.model_dump(),
                     "_diagnostics": diagnostics,
+                    "_decision_input": decision_input.model_dump(mode="json"),
+                    "_policy_decision": policy_decision.model_dump(mode="json"),
                     "_merge_result": {
                         "risk_items_count": len(merge_result.risk_items),
                         "confirmed_count": merge_result.confirmed_count,
@@ -550,6 +566,14 @@ async def run_compliance_check(
             ),
             checked_by=int(user["sub"]),
         )
+        # ── 写入权威决策列 ──────────────────────────────────────
+        db_report.decision_action = policy_decision.final_action.value
+        db_report.decision_risk_level = policy_decision.final_risk_level.value
+        db_report.decision_requires_human_review = 1 if policy_decision.requires_human_review else 0
+        db_report.decision_hash = policy_decision.decision_hash
+        db_report.policy_schema_version = policy_decision.schema_version
+        db_report.decision_integrity_status = "verified"
+
         db.add(db_report)
         db_file.status = "completed"
         db.commit()

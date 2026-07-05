@@ -59,12 +59,50 @@ async def get_report(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """获取合规报告详情（含规则溯源信息）"""
+    """获取合规报告详情（含规则溯源 + 决策完整性校验）"""
     db_report = db.query(ReportModel).filter(ReportModel.id == report_id).first()
     if not db_report:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="报告不存在")
     assert_resource_access(db, db_report, user, owner_attr="checked_by")
     report_dict = json.loads(db_report.report_data)
+
+    # ── 决策完整性校验 ───────────────────────────────────────
+    integrity_status = db_report.decision_integrity_status or "legacy_unverifiable"
+    report_dict["_integrity"] = {
+        "status": integrity_status,
+        "decision_action": db_report.decision_action or "unknown",
+        "decision_risk_level": db_report.decision_risk_level or "unknown",
+        "decision_hash": db_report.decision_hash,
+        "policy_schema_version": db_report.policy_schema_version,
+    }
+
+    # schema v2+: try verify_trace, fail closed if corrupted
+    _di_raw = report_dict.get("_decision_input")
+    _pd_raw = report_dict.get("_policy_decision")
+    if _di_raw and _pd_raw and (db_report.policy_schema_version or "").startswith("2"):
+        try:
+            from app.core.policy_kernel import (
+                DecisionInput, PolicyDecision, verify_trace,
+            )
+            di = DecisionInput.model_validate(_di_raw)
+            pd = PolicyDecision.model_validate(_pd_raw)
+            vr = verify_trace(di, pd)
+            report_dict["_integrity"]["verify_result"] = vr
+            if not vr["valid"]:
+                report_dict["_integrity"]["status"] = "integrity_failed"
+                report_dict["_integrity"]["warning"] = (
+                    "决策完整性校验失败，本报告结论可能已被篡改。请重新执行合规审查。"
+                )
+        except Exception as e:
+            report_dict["_integrity"]["verify_result"] = {"valid": False, "errors": [str(e)]}
+            if integrity_status == "verified":
+                report_dict["_integrity"]["status"] = "integrity_failed"
+    elif not _di_raw:
+        report_dict["_integrity"]["status"] = "legacy_unverifiable"
+        report_dict["_integrity"]["warning"] = (
+            "本报告为历史版本，缺少决策回放材料，无法执行完整性校验。"
+            "合规结论仅供参考，建议重新执行审查。"
+        )
 
     # v3: 注入规则溯源元数据
     from app.engine.rule_engine import rule_engine

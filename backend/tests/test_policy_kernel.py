@@ -44,25 +44,39 @@ def _lv(lv_type="exclusivity", risk_level=RiskLevel.HIGH, reason="排他性条�
 
 class TestBiasOnly:
     def test_bias_high_only_not_pass(self):
-        """仅 parameter-bias high → 不应无风险 PASS（LLM 层基线不影响 bias）"""
+        """仅 parameter-bias high → REQUIRE_REVIEW + HIGH + human_review"""
         di = DecisionInput(
-            bias_findings=[_bf("brand_lock", RiskLevel.HIGH, "品牌锁定")],
-        )
-        d = kernel.decide(di)
-        # bias 作为 DecisionInput 影响 hash，但不直接触发任何层的升级（各层只看 rule/llm）
-        # 当前架构: bias info 进入 hash 但不触发决策升级 → PASS
-        # 这是 known-gap: bias 需要通过 rule_violations 传入才触发 hard_rule
-        assert d.final_action == DecisionAction.PASS  # 当前实际行为
-        assert d.requires_human_review is False  # 当前实际行为
-
-    def test_bias_routed_through_rules_affects_decision(self):
-        """bias finding 转化为规则违规后影响决策"""
-        di = DecisionInput(
-            rule_violations=[_rv("BIAS-brand_lock", RuleType.FORBIDDEN, RiskLevel.HIGH, desc="品牌锁定 - from bias")],
             bias_findings=[_bf("brand_lock", RiskLevel.HIGH, "品牌锁定")],
         )
         d = kernel.decide(di)
         assert d.final_action != DecisionAction.PASS
+        assert d.final_risk_level == RiskLevel.HIGH
+        assert d.requires_human_review is True
+        # HARD_RULE trace 必须包含 bias reason code
+        hard = d.trace_chain[-1]
+        assert hard.reason_code == ReasonCode.HARD_RULE_BIAS_HIGH
+        assert "brand_lock" in str(hard.reason_params.get("pattern_ids", []))
+
+    def test_bias_critical_not_pass_or_low(self):
+        """仅 parameter-bias critical → REQUIRE_REVIEW + CRITICAL"""
+        di = DecisionInput(
+            bias_findings=[_bf("brand_lock", RiskLevel.CRITICAL, "品牌锁定-严重")],
+        )
+        d = kernel.decide(di)
+        assert d.final_action != DecisionAction.PASS
+        assert d.final_risk_level == RiskLevel.CRITICAL
+        assert d.requires_human_review is True
+        assert d.trace_chain[-1].reason_code == ReasonCode.HARD_RULE_BIAS_CRITICAL
+
+    def test_bias_medium_warns(self):
+        """仅 parameter-bias medium → WARN + MEDIUM"""
+        di = DecisionInput(
+            bias_findings=[_bf("weak_bias", RiskLevel.MEDIUM, "轻微倾向")],
+        )
+        d = kernel.decide(di)
+        assert d.final_action == DecisionAction.WARN
+        assert d.final_risk_level == RiskLevel.MEDIUM
+        assert d.trace_chain[-1].reason_code == ReasonCode.HARD_RULE_BIAS_MEDIUM
 
 
 # ═══════════════════════════════════════════════════════════════

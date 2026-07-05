@@ -53,7 +53,16 @@ class ComplianceReport(Base):
     forbidden_score = Column(Float, nullable=True)
     semantic_score = Column(Float, nullable=True)
     violation_count = Column(Integer, default=0)
-    report_data = Column(Text, nullable=True)  # JSON 详细数据
+    report_data = Column(Text, nullable=True)  # JSON: DecisionInput + PolicyDecision
+
+    # ── 权威决策列（PolicyKernel v2） ─────────────────────────
+    decision_action = Column(String(32), nullable=True)       # pass / warn / require_review / block
+    decision_risk_level = Column(String(16), nullable=True)   # low / medium / high / critical
+    decision_requires_human_review = Column(Integer, nullable=True)  # 0 or 1
+    decision_hash = Column(String(64), nullable=True)
+    policy_schema_version = Column(String(16), nullable=True)
+    decision_integrity_status = Column(String(32), nullable=True)  # verified / legacy_unverifiable / integrity_failed
+
     report_pdf_path = Column(String(512), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     checked_by = Column(Integer, nullable=True)
