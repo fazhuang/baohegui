@@ -239,6 +239,8 @@ class DecisionInput(BaseModel):
     bias_findings: list[BiasFindingInput] = Field(default_factory=list)
     llm_violations: list[LLMViolationInput] = Field(default_factory=list)
     parse_quality: ParseQuality = ParseQuality.OK
+    # 文档真实章节集合（经规范化），用于平台策略等层比对
+    present_sections: set[str] = Field(default_factory=set)
 
     # 策略
     tenant_policy: TenantPolicy = Field(default_factory=TenantPolicy)
@@ -301,7 +303,7 @@ def _for_json(obj: Any) -> Any:
     关键不变量：set 转 list 必须稳定排序（跨 PYTHONHASHSEED 一致）。
     """
     _SET_FIELDS = {"auto_fail_rule_types", "suppressed_rule_ids",
-                   "industries", "required_sections"}
+                   "industries", "required_sections", "present_sections"}
 
     if isinstance(obj, Enum):
         return obj.value
@@ -540,16 +542,13 @@ class PolicyKernel:
             )
 
         if pp.required_sections:
-            chapter_violations = [rv for rv in di.rule_violations if rv.rule_type == RuleType.CHAPTER_REQUIRED]
-            if chapter_violations:
-                present = {rv.location for rv in chapter_violations if rv.location}
-                missing = pp.required_sections - present
-                if missing:
-                    return (
-                        DecisionState(action=DecisionAction.BLOCK, risk_level=RiskLevel.CRITICAL, requires_human_review=True),
-                        ReasonCode.PLATFORM_MISSING_SECTION,
-                        {"platform_id": pp.platform_id, "missing": sorted(missing)},
-                    )
+            missing = pp.required_sections - di.present_sections
+            if missing:
+                return (
+                    DecisionState(action=DecisionAction.BLOCK, risk_level=RiskLevel.CRITICAL, requires_human_review=True),
+                    ReasonCode.PLATFORM_MISSING_SECTION,
+                    {"platform_id": pp.platform_id, "missing": sorted(missing)},
+                )
 
         return (
             current.model_copy(deep=True),
@@ -682,38 +681,27 @@ class PolicyKernel:
 # ═══════════════════════════════════════════════════════════════
 
 def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dict:
-    """验证 PolicyDecision 的完整性 — 语义回放。
+    """验证 PolicyDecision 的完整性 — 语义回放 + SHA-256 链。
 
-给定 DecisionInput 和当前 policy schema，判断这个 PolicyDecision
-是否正是 PolicyKernel 应产生的唯一结果。
+    给定 DecisionInput 和当前 policy schema，判断这个 PolicyDecision
+    是否正是 PolicyKernel 应产生的唯一结果。
 
-除哈希链验证外，还执行完整的 semantic replay：
-expected = PolicyKernel().decide(decision_input)，逐字段对比。
+    验证内容：
+    - SHA-256 链自洽（input_hash → 各步 output_hash → decision_hash）
+    - semantic replay（重新执行 Kernel 并逐字段对比）
+    - 五层完整，source 序列精确匹配
+    - 每步 state_after >= state_before（无降级）
 
-返回 {"valid": True/False, "integrity_status": str, "errors": [...], "checks": {...}}
+    返回 {"valid": True/False, "integrity_status": str, "errors": [...], "checks": {...}}
 
-边界声明：
-  SHA-256 链提供可重复审计和一致性校验，不提供数据库攻击者级别的
-  真实性证明。如需不可伪造性，请使用 HMAC 或数字签名。
-"""
-
-from app.core.policy_kernel import PolicyKernel as _KernelSingleton
-
-
-def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dict:
-    """语义回放验证：重新执行 Kernel 并逐字段对比。
-
-    SHA-256 链自洽只是必要条件，不是充分条件。
-    本函数还验证：
-    - 五层完整
-    - source 序列精确匹配
-    - 每一步通过 replay 获得相同 proposal / state_after / hash
-    - 终端决策字段完全一致
+    边界声明：
+      SHA-256 链提供可重复审计和一致性校验，不提供数据库攻击者级别的
+      真实性证明。如需不可伪造性，请使用 HMAC 或数字签名。
     """
     errors: list[str] = []
     checks: dict[str, bool] = {}
 
-    # ── 0. 基础结构检查（在执行 replay 之前） ──
+    # ── 0. 基础结构检查 ──
     if not decision.trace_chain:
         errors.append("empty trace_chain")
         checks["trace_count"] = False
@@ -724,11 +712,10 @@ def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dic
 
     # ── 1. Semantic replay ──
     try:
-        expected = _KernelSingleton().decide(decision_input)
+        expected = PolicyKernel().decide(decision_input)
     except Exception as e:
         errors.append(f"replay failed: {e}")
         return {"valid": False, "integrity_status": "replay_error", "errors": errors, "checks": checks}
-    # ponytail: avoid import-time circular — _KernelSingleton is the same PolicyKernel class
 
     if expected.decision_hash != decision.decision_hash:
         checks["replay_semantic_match"] = False
@@ -740,7 +727,7 @@ def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dic
     expected_root = sha256_hex(_canonical_json(decision_input))
     checks["root_hash"] = decision.input_hash == expected_root
     if not checks["root_hash"]:
-        errors.append(f"input_hash mismatch")
+        errors.append("input_hash mismatch")
 
     # ── 3. Full structural diff against replay output ──
     for field in ["final_action", "final_risk_level", "requires_human_review", "overrides_applied"]:
@@ -772,7 +759,7 @@ def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dic
     if not checks["source_sequence"]:
         errors.append(f"source sequence mismatch: expected {expected_sources}, got {actual_sources}")
 
-    # ── 6. Chain and structural checks (carried over) ──
+    # ── 6. Chain continuity ──
     trace = decision.trace_chain
     for i, step in enumerate(trace):
         if i == 0:
@@ -808,8 +795,6 @@ def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dic
     if valid:
         status = "verified"
     else:
-        # Distinguish: if input_hash is wrong → legacy_unverifiable (different input)
-        # Otherwise → integrity_failed
         if not checks.get("root_hash", False) and len(errors) == 1:
             status = "input_hash_mismatch"
         elif not checks.get("replay_semantic_match", True):

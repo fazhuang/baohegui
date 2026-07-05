@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import CheckConstraint, Column, DateTime, Enum, Float, ForeignKey, Integer, String, Text, Boolean
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -44,6 +44,20 @@ class DocumentSection(Base):
 
 class ComplianceReport(Base):
     __tablename__ = "compliance_reports"
+    __table_args__ = (
+        CheckConstraint(
+            "decision_action IN ('pass', 'warn', 'require_review', 'block') OR decision_action IS NULL",
+            name="ck_decision_action",
+        ),
+        CheckConstraint(
+            "decision_risk_level IN ('low', 'medium', 'high', 'critical') OR decision_risk_level IS NULL",
+            name="ck_decision_risk_level",
+        ),
+        CheckConstraint(
+            "decision_integrity_status IN ('verified', 'legacy_unverifiable', 'integrity_failed') OR decision_integrity_status IS NULL",
+            name="ck_decision_integrity_status",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     file_id = Column(Integer, ForeignKey("uploaded_files.id"), nullable=False)
@@ -58,7 +72,7 @@ class ComplianceReport(Base):
     # ── 权威决策列（PolicyKernel v2） ─────────────────────────
     decision_action = Column(String(32), nullable=True)       # pass / warn / require_review / block
     decision_risk_level = Column(String(16), nullable=True)   # low / medium / high / critical
-    decision_requires_human_review = Column(Integer, nullable=True)  # 0 or 1
+    decision_requires_human_review = Column(Boolean, nullable=True)  # Boolean 语义
     decision_hash = Column(String(64), nullable=True)
     policy_schema_version = Column(String(16), nullable=True)
     decision_integrity_status = Column(String(32), nullable=True)  # verified / legacy_unverifiable / integrity_failed

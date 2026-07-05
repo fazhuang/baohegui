@@ -1,5 +1,6 @@
 """合规检查 API"""
 
+import json
 import logging
 import threading
 import time
@@ -13,11 +14,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.policy_kernel import (
     DecisionInput,
-    DecisionState,
     ParseQuality,
     PlanTier,
     PlatformPolicy,
-    PolicyKernel,
     RuleType,
     RiskLevel,
     RuleViolationInput,
@@ -29,14 +28,15 @@ from app.core.policy_kernel import (
     UxPolicy,
     derive_merge_fields,
     policy_kernel,
+    verify_trace,
 )
-from app.core.security import get_current_user, get_current_user_id, assert_resource_access
+from app.core.security import get_current_user, assert_resource_access
 from app.db.database import get_db
 from app.engine.fusion import fusion_engine, four_way_merger, validate_llm_evidence
 from app.engine.parameter_bias import ParameterBiasDetector
 from app.engine.routing import compliance_router
 from app.engine.llm_engine import llm_engine
-from app.engine.rule_engine import rule_engine
+from app.engine.rule_engine import rule_engine, normalize_section_name
 from app.engine.variable_marker import variable_marker
 from app.models.document import ComplianceReport, UploadedFile
 from app.services.parser import parser
@@ -327,11 +327,14 @@ async def run_compliance_check(
         )
 
         # ── PolicyKernel：系统唯一决策入口 ────────────────────
-        # 构建规范化 DecisionInput
         from app.services.quota_service import get_or_create_quota
         user_quota_record = get_or_create_quota(db, int(user["sub"]))
         plan = user_quota_record.plan if user_quota_record else "free"
         _plan_to_tier = {"enterprise": PlanTier.ENTERPRISE, "pro": PlanTier.PRO, "free": PlanTier.FREE}
+
+        # 构建文档真实章节集合（经规范化）
+        present_sections_raw = set(parsed.sections.keys()) if parsed.sections else set()
+        present_sections = {normalize_section_name(s) for s in present_sections_raw}
 
         # 从平台规则引擎派生平台策略（加载真实 required_sections）
         platform_policy = PlatformPolicy()
@@ -339,12 +342,17 @@ async def run_compliance_check(
             from app.engine.platform_rules import platform_rule_engine
             plat = platform_rule_engine.get_platform(platform)
             if plat:
+                plat_required_raw = set(plat.get("required_sections", []))
+                plat_required = {normalize_section_name(s) for s in plat_required_raw}
                 platform_policy = PlatformPolicy(
                     platform_id=platform,
-                    required_sections=set(plat.get("required_sections", [])),
+                    required_sections=plat_required,
                 )
             else:
-                logger.warning("platform=%s not found in platform_rule_engine, using empty policy", platform)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"未知平台: {platform}",
+                )
 
         decision_input = DecisionInput(
             schema_version="2.0.0",
@@ -382,6 +390,7 @@ async def run_compliance_check(
                 for lv in (llm_result.violations if llm_result else [])
             ],
             parse_quality=ParseQuality(parse_quality),
+            present_sections=present_sections,
             tenant_policy=TenantPolicy(
                 tenant_id=str(user["sub"]),
                 auto_fail_rule_types={RuleType.FORBIDDEN} if plan != "enterprise" else set(),
@@ -398,104 +407,103 @@ async def run_compliance_check(
         merge_compat = derive_merge_fields(policy_decision)
         t_fusion = time.monotonic() - t0
         t_total = time.monotonic() - t_check_start
-
-        # 保存报告
-        import json
         template_stats = marked_doc.stats if marked_doc else {}
-        diagnostics = {
-            "parser": {
-                "sections_found": len(parsed.sections),
-                "section_names": list(parsed.sections.keys()),
-                "section_content_lengths": {k: len(v) for k, v in parsed.sections.items()},
-                "full_text_length": len(parsed.full_text),
-                "page_count": parsed.page_count,
-                "headings_count": len(parsed.headings),
-            },
-            "variable_marker": template_stats,
-            "rule_engine": {
-                "rules_loaded": len(rule_engine.rules),
-                "section_violations": len(rule_result.violations),
-                "by_type": {
-                    "chapter_required": sum(
-                        1 for v in rule_result.violations if v.rule_type == "chapter_required"
-                    ),
-                    "keyword_required": sum(
-                        1 for v in rule_result.violations if v.rule_type == "keyword_required"
-                    ),
-                    "forbidden": sum(1 for v in rule_result.violations if v.rule_type == "forbidden"),
-                    "format_required": sum(
-                        1 for v in rule_result.violations if v.rule_type == "format_required"
-                    ),
+
+        # ── 单一载荷构造函数 ──
+        report_data = build_policy_audit_payload(
+            report=report,
+            decision_input=decision_input,
+            policy_decision=policy_decision,
+            diagnostics={
+                "parser": {
+                    "sections_found": len(parsed.sections),
+                    "section_names": list(parsed.sections.keys()),
+                    "section_content_lengths": {k: len(v) for k, v in parsed.sections.items()},
+                    "full_text_length": len(parsed.full_text),
+                    "page_count": parsed.page_count,
+                    "headings_count": len(parsed.headings),
+                },
+                "variable_marker": template_stats,
+                "rule_engine": {
+                    "rules_loaded": len(rule_engine.rules),
+                    "section_violations": len(rule_result.violations),
+                    "by_type": {
+                        "chapter_required": sum(
+                            1 for v in rule_result.violations if v.rule_type == "chapter_required"
+                        ),
+                        "keyword_required": sum(
+                            1 for v in rule_result.violations if v.rule_type == "keyword_required"
+                        ),
+                        "forbidden": sum(1 for v in rule_result.violations if v.rule_type == "forbidden"),
+                        "format_required": sum(
+                            1 for v in rule_result.violations if v.rule_type == "format_required"
+                        ),
+                    },
+                },
+                "llm_engine": {
+                    "provider": settings.llm_provider,
+                    "model": settings.llm_model,
+                    "mock_mode": settings.llm_mock_mode,
+                    "target_section_types": list(target_sections),
+                    "sections_analyzed": llm_result.sections_analyzed if llm_result else 0,
+                    "sections_skipped": llm_result.sections_skipped if llm_result else 0,
+                    "tokens_used": llm_result.tokens_used if llm_result else 0,
+                    "cost_yuan": llm_result.cost_yuan if llm_result else 0.0,
+                    "error": llm_result.error if llm_result else "skipped_by_routing",
+                },
+                "routing": {
+                    "traffic_light": routing_result.traffic_light.value,
+                    "skip_llm": routing_result.skip_llm,
+                    "reasoning": routing_result.reasoning,
+                },
+                "parameter_bias": {
+                    "findings_count": len(parameter_bias_result.findings),
+                    "risk_score": parameter_bias_result.risk_score,
+                    "critical_count": parameter_bias_result.critical_count,
+                    "high_count": parameter_bias_result.high_count,
+                },
+                "merge_result": {
+                    "risk_items_count": len(merge_result.risk_items),
+                    "confirmed_count": merge_result.confirmed_count,
+                    "high_risk_count": merge_result.high_risk_count,
+                    "needs_review_count": merge_result.needs_review_count,
+                    "advisory_count": merge_result.advisory_count,
+                    "final_passed": merge_compat["final_passed"],
+                    "risk_level": merge_compat["risk_level"],
+                    "review_status": merge_compat["review_status"],
+                    "requires_human_review": merge_compat["requires_human_review"],
+                },
+                "timing": {
+                    "total_seconds": round(t_total, 3),
+                    "routing_ms": round(t_routing * 1000, 1),
+                    "marker_ms": round(t_marker * 1000, 1),
+                    "rules_ms": round(t_rules * 1000, 1),
+                    "param_bias_ms": round(t_param_bias * 1000, 1),
+                    "llm_ms": round(t_llm * 1000, 1),
+                    "fusion_ms": round(t_fusion * 1000, 1),
+                },
+                "state_machine": {
+                    "upload_status": "uploaded",
+                    "check_flow": "uploaded → queued → checking → completed",
                 },
             },
-            "llm_engine": {
-                "provider": settings.llm_provider,
-                "model": settings.llm_model,
-                "mock_mode": settings.llm_mock_mode,
-                "target_section_types": list(target_sections),
-                "sections_analyzed": llm_result.sections_analyzed if llm_result else 0,
-                "sections_skipped": llm_result.sections_skipped if llm_result else 0,
-                "tokens_used": llm_result.tokens_used if llm_result else 0,
-                "cost_yuan": llm_result.cost_yuan if llm_result else 0.0,
-                "error": llm_result.error if llm_result else "skipped_by_routing",
-            },
-            "routing": {
-                "traffic_light": routing_result.traffic_light.value,
-                "skip_llm": routing_result.skip_llm,
-                "reasoning": routing_result.reasoning,
-            },
-            "parameter_bias": {
-                "findings_count": len(parameter_bias_result.findings),
-                "risk_score": parameter_bias_result.risk_score,
-                "critical_count": parameter_bias_result.critical_count,
-                "high_count": parameter_bias_result.high_count,
-            },
-            "merge_result": {
-                "risk_items_count": len(merge_result.risk_items),
-                "confirmed_count": merge_result.confirmed_count,
-                "high_risk_count": merge_result.high_risk_count,
-                "needs_review_count": merge_result.needs_review_count,
-                "advisory_count": merge_result.advisory_count,
-                # 兼容字段（由 PolicyDecision 单向派生）
-                "final_passed": merge_compat["final_passed"],
-                "risk_level": merge_compat["risk_level"],
-                "review_status": merge_compat["review_status"],
-                "requires_human_review": merge_compat["requires_human_review"],
-            },
-            "policy_decision": {
-                "final_action": policy_decision.final_action.value,
-                "final_risk_level": policy_decision.final_risk_level.value,
-                "requires_human_review": policy_decision.requires_human_review,
-                "overrides_applied": policy_decision.overrides_applied,
-                "decision_hash": policy_decision.decision_hash,
-                "trace_chain": [
-                    {
-                        "execution_index": t.execution_index,
-                        "priority_rank": t.priority_rank,
-                        "source": t.source.value,
-                        "reason_code": t.reason_code.value,
-                        "state_before": t.state_before.model_dump(mode="json"),
-                        "state_after": t.state_after.model_dump(mode="json"),
-                        "input_hash": t.input_hash,
-                        "output_hash": t.output_hash,
-                    }
-                    for t in policy_decision.trace_chain
-                ],
-            },
-            "state_machine": {
-                "upload_status": "uploaded",
-                "check_flow": "uploaded → queued → checking → completed",
-            },
-            "timing": {
-                "total_seconds": round(t_total, 3),
-                "routing_ms": round(t_routing * 1000, 1),
-                "marker_ms": round(t_marker * 1000, 1),
-                "rules_ms": round(t_rules * 1000, 1),
-                "param_bias_ms": round(t_param_bias * 1000, 1),
-                "llm_ms": round(t_llm * 1000, 1),
-                "fusion_ms": round(t_fusion * 1000, 1),
-            },
-        }
+        )
+
+        # ── 写入前验证 ──
+        verification = verify_trace(decision_input, policy_decision)
+        if not verification["valid"]:
+            logger.error(
+                "PolicyDecision 验证失败，拒绝写入 file_id=%d: %s",
+                file_id, verification["errors"],
+            )
+            db_file.status = "failed"
+            db_file.error_message = "内部决策一致性错误，请稍后重试"
+            db_file.failed_at = datetime.now(timezone.utc)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="内部决策一致性错误，请稍后重试",
+            )
 
         db_report = ComplianceReport(
             file_id=file_id,
@@ -505,65 +513,7 @@ async def run_compliance_check(
             forbidden_score=report.forbidden_score,
             semantic_score=report.semantic_score,
             violation_count=report.total_violations,
-            report_data=json.dumps(
-                {
-                    **report.model_dump(),
-                    "_diagnostics": diagnostics,
-                    "_decision_input": decision_input.model_dump(mode="json"),
-                    "_policy_decision": policy_decision.model_dump(mode="json"),
-                    "_merge_result": {
-                        "risk_items_count": len(merge_result.risk_items),
-                        "confirmed_count": merge_result.confirmed_count,
-                        "high_risk_count": merge_result.high_risk_count,
-                        "needs_review_count": merge_result.needs_review_count,
-                        "advisory_count": merge_result.advisory_count,
-                        # 兼容字段（由 PolicyDecision 派生）
-                        "final_passed": merge_compat["final_passed"],
-                        "risk_level": merge_compat["risk_level"],
-                        "review_status": merge_compat["review_status"],
-                        "requires_human_review": merge_compat["requires_human_review"],
-                        "risk_items": [
-                            {
-                                "source": ri.source,
-                                "risk_level": ri.risk_level,
-                                "category": ri.category,
-                                "title": ri.title,
-                                "description": ri.description,
-                                "evidence_text": ri.evidence_text,
-                                "suggestion": ri.suggestion,
-                                "law_ref": ri.law_ref,
-                                "confidence": ri.confidence,
-                                "validation_error": ri.validation_error,
-                                "requires_human_review": ri.requires_human_review,
-                            }
-                            for ri in merge_result.risk_items
-                        ],
-                    },
-                    "_policy_decision": {
-                        "final_action": policy_decision.final_action.value,
-                        "final_risk_level": policy_decision.final_risk_level.value,
-                        "requires_human_review": policy_decision.requires_human_review,
-                        "overrides_applied": policy_decision.overrides_applied,
-                        "decision_hash": policy_decision.decision_hash,
-                        "input_hash": policy_decision.input_hash,
-                        "schema_version": policy_decision.schema_version,
-                        "trace_chain": [
-                            {
-                                "execution_index": t.execution_index,
-                                "priority_rank": t.priority_rank,
-                                "source": t.source.value,
-                                "reason_code": t.reason_code.value,
-                                "state_before": t.state_before.model_dump(mode="json"),
-                                "state_after": t.state_after.model_dump(mode="json"),
-                                "input_hash": t.input_hash,
-                                "output_hash": t.output_hash,
-                            }
-                            for t in policy_decision.trace_chain
-                        ],
-                    },
-                },
-                ensure_ascii=False,
-            ),
+            report_data=json.dumps(report_data, ensure_ascii=False),
             checked_by=int(user["sub"]),
         )
         # ── 写入权威决策列 ──────────────────────────────────────
@@ -669,6 +619,25 @@ def _extract_budget_from_document(parsed) -> Optional[float]:
             except ValueError:
                 pass
     return None
+
+
+def build_policy_audit_payload(
+    report,
+    decision_input: DecisionInput,
+    policy_decision,
+    diagnostics: dict,
+) -> dict:
+    """单一报告决策载荷构造函数。
+
+    返回 dict 直接作为 report_data JSON — 所有字段来自两个 Pydantic 模型，
+    不手工拼装 PolicyDecision 字段。
+    """
+    return {
+        **report.model_dump(),
+        "_diagnostics": diagnostics,
+        "_decision_input": decision_input.model_dump(mode="json"),
+        "_policy_decision": policy_decision.model_dump(mode="json"),
+    }
 
 
 @router.get("/{file_id}/status")

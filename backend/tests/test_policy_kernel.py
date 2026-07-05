@@ -266,18 +266,22 @@ class TestPriorityMatrix:
         assert d.final_action in (DecisionAction.REQUIRE_REVIEW, DecisionAction.BLOCK)
 
     def test_platform_wins_over_tenant(self):
-        """PLATFORM missing section blocks even if tenant suppresses"""
+        """PLATFORM missing section blocks even if tenant suppresses — 基于 present_sections"""
         di = DecisionInput(
-            rule_violations=[_rv("R003", RuleType.CHAPTER_REQUIRED, RiskLevel.MEDIUM, location="招标公告")],
+            rule_violations=[_rv("R003", RuleType.CHAPTER_REQUIRED, RiskLevel.MEDIUM, desc="缺少章节")],
             platform_policy=PlatformPolicy(platform_id="guangdong", required_sections={"招标公告"}),
             tenant_policy=TenantPolicy(suppressed_rule_ids={"R003"}),
+            present_sections=set(),  # 文档不包含招标公告 → platform BLOCK
         )
         d = kernel.decide(di)
-        # TENANT 抑制 R003 → 不触发 auto_fail
-        # PLATFORM: chapter_required 违规 → location="招标公告" matches required "招标公告"，应通过
-        # 实际: PLANFORM 不触发因为 location 已匹配 required section
-        # HARD_RULE: chapter_required → REQUIRE_REVIEW
-        assert d.final_action == DecisionAction.REQUIRE_REVIEW
+        # present_sections 为空 → required 缺失 → PLATFORM BLOCK
+        assert d.final_action == DecisionAction.BLOCK
+        assert d.final_risk_level == RiskLevel.CRITICAL
+        assert d.requires_human_review is True
+        # platform trace must show missing
+        plat_trace = [t for t in d.trace_chain if t.source.value == "platform"][0]
+        assert plat_trace.reason_code == ReasonCode.PLATFORM_MISSING_SECTION
+        assert "招标公告" in plat_trace.reason_params["missing"]
 
     def test_execution_order_is_fixed(self):
         """所有决策执行顺序固定：LLM, UX, TENANT, PLATFORM, HARD_RULE"""

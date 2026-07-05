@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from app.core.permissions import Permission, PermissionService
 from app.core.security import get_current_user, get_current_user_id, assert_resource_access
 from app.db.database import get_db
-from app.engine.fusion import ComplianceReport
 from app.models.document import ComplianceReport as ReportModel, UploadedFile
 from app.services.excel_exporter import build_violation_rows, export_report_to_excel
 from app.services.clause_generator import clause_generator
@@ -20,6 +19,13 @@ from app.services.feedback_service import feedback_service
 from app.services.report_gen import report_generator
 
 router = APIRouter(prefix="/api/report", tags=["report"])
+
+
+_INTEGRITY_FAILED_409 = HTTPException(
+    status_code=status.HTTP_409_CONFLICT,
+    detail={"integrity_status": "integrity_failed",
+            "message": "决策完整性校验失败，本报告结论可能已被篡改。请重新执行合规审查。"},
+)
 
 
 def _load_report_violation_rows(db: Session, report_id: int, report_data: dict) -> list[dict]:
@@ -53,6 +59,87 @@ def _load_report_violation_rows(db: Session, report_id: int, report_data: dict) 
     return violations
 
 
+def _try_verify_report(db_report) -> dict | None:
+    """尝试对 schema v2+ 报告执行完整性校验。
+
+    返回 None 表示校验通过；
+    返回 dict 表示 _integrity 信息（status=integrity_failed 时调用方应拒绝返回结论）。
+    """
+    integrity_status = db_report.decision_integrity_status or "legacy_unverifiable"
+    result = {
+        "status": integrity_status,
+        "decision_action": db_report.decision_action,
+        "decision_risk_level": db_report.decision_risk_level,
+        "decision_hash": db_report.decision_hash,
+        "policy_schema_version": db_report.policy_schema_version,
+    }
+
+    if not (db_report.policy_schema_version or "").startswith("2"):
+        result["status"] = "legacy_unverifiable"
+        result["warning"] = (
+            "本报告为历史版本，缺少决策回放材料，无法执行完整性校验。"
+            "合规结论仅供参考，建议重新执行审查。"
+        )
+        result["final_action"] = "unknown"
+        result["final_risk_level"] = "unknown"
+        return result
+
+    report_data = json.loads(db_report.report_data) if db_report.report_data else {}
+    di_raw = report_data.get("_decision_input")
+    pd_raw = report_data.get("_policy_decision")
+
+    if not di_raw or not pd_raw:
+        result["status"] = "integrity_failed"
+        result["warning"] = "缺少 DecisionInput 或 PolicyDecision 回放材料。"
+        return result
+
+    try:
+        from app.core.policy_kernel import DecisionInput, PolicyDecision, verify_trace
+        di = DecisionInput.model_validate(di_raw)
+        pd = PolicyDecision.model_validate(pd_raw)
+    except Exception as e:
+        result["status"] = "integrity_failed"
+        result["warning"] = f"Pydantic 反序列化失败: {e}"
+        return result
+
+    # 数据库列一致性检查
+    if db_report.decision_hash and db_report.decision_hash != pd.decision_hash:
+        result["status"] = "integrity_failed"
+        result["warning"] = "数据库 decision_hash 与 PolicyDecision 不一致。"
+        return result
+    if db_report.decision_action and db_report.decision_action != pd.final_action.value:
+        result["status"] = "integrity_failed"
+        result["warning"] = "数据库 decision_action 与 PolicyDecision 不一致。"
+        return result
+    if db_report.decision_risk_level and db_report.decision_risk_level != pd.final_risk_level.value:
+        result["status"] = "integrity_failed"
+        result["warning"] = "数据库 decision_risk_level 与 PolicyDecision 不一致。"
+        return result
+
+    vr = verify_trace(di, pd)
+    result["verify_result"] = vr
+    if not vr["valid"]:
+        result["status"] = "integrity_failed"
+        result["warning"] = (
+            "决策完整性校验失败，本报告结论可能已被篡改。请重新执行合规审查。"
+        )
+        return result
+
+    # verified
+    result["status"] = "verified"
+    return None  # 校验通过
+
+
+def _build_legacy_report_dict(db_report, report_dict: dict, integrity: dict) -> dict:
+    """legacy_unverifiable 报告：返回元数据但不返回合规结论。"""
+    report_dict["_integrity"] = integrity
+    report_dict["_integrity"]["final_action"] = "unknown"
+    report_dict["_integrity"]["final_risk_level"] = "unknown"
+    report_dict["final_action"] = "unknown"
+    report_dict["final_risk_level"] = "unknown"
+    return report_dict
+
+
 @router.get("/{report_id}")
 async def get_report(
     report_id: int,
@@ -66,43 +153,23 @@ async def get_report(
     assert_resource_access(db, db_report, user, owner_attr="checked_by")
     report_dict = json.loads(db_report.report_data)
 
-    # ── 决策完整性校验 ───────────────────────────────────────
-    integrity_status = db_report.decision_integrity_status or "legacy_unverifiable"
-    report_dict["_integrity"] = {
-        "status": integrity_status,
-        "decision_action": db_report.decision_action or "unknown",
-        "decision_risk_level": db_report.decision_risk_level or "unknown",
-        "decision_hash": db_report.decision_hash,
-        "policy_schema_version": db_report.policy_schema_version,
-    }
-
-    # schema v2+: try verify_trace, fail closed if corrupted
-    _di_raw = report_dict.get("_decision_input")
-    _pd_raw = report_dict.get("_policy_decision")
-    if _di_raw and _pd_raw and (db_report.policy_schema_version or "").startswith("2"):
-        try:
-            from app.core.policy_kernel import (
-                DecisionInput, PolicyDecision, verify_trace,
-            )
-            di = DecisionInput.model_validate(_di_raw)
-            pd = PolicyDecision.model_validate(_pd_raw)
-            vr = verify_trace(di, pd)
-            report_dict["_integrity"]["verify_result"] = vr
-            if not vr["valid"]:
-                report_dict["_integrity"]["status"] = "integrity_failed"
-                report_dict["_integrity"]["warning"] = (
-                    "决策完整性校验失败，本报告结论可能已被篡改。请重新执行合规审查。"
-                )
-        except Exception as e:
-            report_dict["_integrity"]["verify_result"] = {"valid": False, "errors": [str(e)]}
-            if integrity_status == "verified":
-                report_dict["_integrity"]["status"] = "integrity_failed"
-    elif not _di_raw:
-        report_dict["_integrity"]["status"] = "legacy_unverifiable"
-        report_dict["_integrity"]["warning"] = (
-            "本报告为历史版本，缺少决策回放材料，无法执行完整性校验。"
-            "合规结论仅供参考，建议重新执行审查。"
-        )
+    integrity = _try_verify_report(db_report)
+    if integrity is not None:
+        # integrity_failed or legacy_unverifiable
+        report_dict["_integrity"] = integrity
+        if integrity["status"] == "integrity_failed":
+            raise _INTEGRITY_FAILED_409
+        # legacy_unverifiable
+        report_dict["final_action"] = "unknown"
+        report_dict["final_risk_level"] = "unknown"
+    else:
+        report_dict["_integrity"] = {
+            "status": "verified",
+            "decision_action": db_report.decision_action,
+            "decision_risk_level": db_report.decision_risk_level,
+            "decision_hash": db_report.decision_hash,
+            "policy_schema_version": db_report.policy_schema_version,
+        }
 
     # v3: 注入规则溯源元数据
     from app.engine.rule_engine import rule_engine
@@ -131,7 +198,13 @@ async def download_report_pdf(
     if not db_report:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="报告不存在")
     assert_resource_access(db, db_report, user, owner_attr="checked_by")
+
+    integrity = _try_verify_report(db_report)
+    if integrity is not None and integrity["status"] == "integrity_failed":
+        raise _INTEGRITY_FAILED_409
+
     report_data = json.loads(db_report.report_data)
+    from app.engine.fusion import ComplianceReport
     report = ComplianceReport(**report_data)
 
     pdf_path = report_generator.generate_pdf(report)
@@ -156,6 +229,10 @@ async def export_report_excel(
     if not db_report:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="报告不存在")
     assert_resource_access(db, db_report, user, owner_attr="checked_by")
+
+    integrity = _try_verify_report(db_report)
+    if integrity is not None and integrity["status"] == "integrity_failed":
+        raise _INTEGRITY_FAILED_409
 
     report_data = json.loads(db_report.report_data) if db_report.report_data else {}
     violations = _load_report_violation_rows(db, report_id, report_data)
