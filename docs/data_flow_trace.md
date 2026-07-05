@@ -62,7 +62,7 @@ flowchart TD
     C -->|超限| C1["429 Too Many Requests"]
     C -->|ok| D["db.query(UploadedFile).filter(id==file_id)"]
     D -->|不存在| D1["404"]
-    D -->|存在| E["assert_resource_access(db, db_file, user)"]
+    D -->|存在| E["assert_resource_access(db, db_file, user)<br/>仅本端点使用; upload status 和 check status<br/>使用内联 owner/admin 判断"]
     E -->|非所有者且非admin| E1["403"]
     E -->|ok| F["状态机检查: status in (uploaded,queued,failed,completed)?"]
     F -->|否| F1["409 Conflict"]
@@ -167,17 +167,17 @@ flowchart TD
         D1["/api/report/feedback/rules-needing-review"] --> S1["require_permission(Permission.RULES_READ)<br/>→ get_current_user → PermissionService.has_permission()"]
     end
 
-    subgraph "路径5: 显式 assert_resource_access"
+    subgraph "路径5: 显式 assert_resource_access (5处)"
         E1["/api/report/{id}"] --> T1["assert_resource_access(db, db_report, user, owner_attr='checked_by')"]
         E2["/api/report/{id}/pdf"] --> T1
         E3["/api/report/{id}/export"] --> T1
         E4["/api/check/{file_id}"] --> T2["assert_resource_access(db, db_file, user, owner_attr='user_id')"]
-        E5["/api/upload/{file_id}/status"] --> T2
+        E5["/api/report/{id}/feedback (POST)"] --> T1
     end
 
-    subgraph "路径6: 内联 role 判断 (无统一守卫)"
-        F1["/api/report/list/<br/>非admin: 仅查 checked_by==user_id"] --> U1["if user.get('role') != 'admin':<br/>query = query.filter(...)"]
-        F2["check.py 内多处"] --> U2["int(user['sub']) 直接访问"]
+    subgraph "路径6: 内联所有者/admin判断 (无 assert_resource_access)"
+        F1["/api/upload/{file_id}/status<br/>if db_file.user_id != int(user['sub']) and user.get('role') != 'admin' → 403"] --> U1["内联 owner/admin 检查"]
+        F2["/api/check/{file_id}/status<br/>if db_file.user_id != int(user['sub']) and user.get('role') != 'admin' → 403"] --> U1
     end
 ```
 
@@ -185,7 +185,7 @@ flowchart TD
 
 **`get_current_user_with_perms` 不是全局认证链**: 该函数仅在少数需要权限列表的端点上通过 `Depends` 使用。大多数端点直接使用 `get_current_user`。
 
-**`assert_resource_access` 不是全局中间件**: 仅在 5 个端点上显式调用（报告 3 个 + 检查 1 个 + 上传状态 1 个）。
+**`assert_resource_access` 不是全局中间件**: 仅在 5 个端点上显式调用（报告 GET /{id}, GET /{id}/pdf, GET /{id}/export, POST /{id}/feedback + 检查 POST /{file_id}）。upload status 和 check status 使用内联 `if db_file.user_id != int(user["sub"]) and user.get("role") != "admin"` 模式，不调用 `assert_resource_access`。
 
 **`AuditService` 不是全局审计中间件**: 审计日志仅在显式调用 `audit_service.log(...)` 的端点上记录。未记录的接口无审计轨迹。
 
@@ -216,15 +216,19 @@ flowchart TD
     K --> K1["最多5条违规, 每条最多2法规+2案例"]
     K1 --> K2["格式: '- [type] rule_id: title (content...) [来源: source, 节点#N, 可信度:X%]'"]
 
-    K2 -->|无结果 (kg_lines为空)| L["回退: knowledge_graph.find_similar_cases(db, desc, limit=3)"]
-    L --> L1["基于违规描述的模糊匹配"]
-    L1 --> L2["格式: '- [case] 相关案例: title (来源: source, 节点#N, 可信度:X%)'"]
+    K2 -->|无结果 (kg_lines为空)| L["回退: knowledge_graph.find_similar_cases(db, sample_desc, limit=3)"]
+    L --> L1["基于第一个违规描述的模糊匹配"]
+    L1 --> L2["将案例结果追加到 kg_lines"]
+    L2 --> M["kg_context = '\n'.join(kg_lines)"]
+    L -->|"回退也无结果"| L3["kg_context 保持 '' (空字符串)"]
 
-    K2 -->|有结果| M["kg_context 字符串 传入 LLMEngine.analyze()"]
-    M --> N["LLMEngine 内部: _build_section_prompt(kg_context=kg_context)<br/>追加到 prompt 中"]
+    K2 -->|有结果| M
+    M --> N["传入 LLMEngine.analyze(..., kg_context=kg_context or None)"]
+    N --> O["LLMEngine 内部: _build_section_prompt(kg_context=kg_context)<br/>追加到 prompt 中"]
+    L3 --> N
 
     style A fill:#f9f,stroke:#333
-    style N fill:#f9f,stroke:#333
+    style O fill:#f9f,stroke:#333
 ```
 
 ### 4.2 RAG 关键事实
@@ -272,7 +276,7 @@ flowchart LR
 |---|------|------|---------|
 | I1 | `core/config.py:9-47` | **导入时修改 `os.environ`** — 在 `class Settings` 定义前检测 Vercel/Railway 并改写环境变量 | 第 17-24 行 (Vercel → SQLite), 第 46-47 行 (Railway → MinIO 禁用) |
 | I2 | `core/config.py:17-24` | **Vercel 环境自动切换**: `VERCEL` 环境变量或 `/vercel` 路径存在 → `database_url=sqlite:////tmp/baohegui.db` | 第 17-24 行 |
-| I3 | `core/config.py:46-47` | **Railway 环境自动切换**: `RAILWAY_STATIC_URL` 存在 → `minio_endpoint=""` (本地模式) | 第 46-47 行 |
+| I3 | `core/config.py:46-48` | **Railway 环境自动切换**: `RAILWAY_SERVICE_ID` 或 `RAILWAY_ENVIRONMENT` 存在 → `minio_endpoint=""` (本地模式) | 第 46-48 行 |
 | I4 | `engine/rule_engine.py:1156-1162` | **全局可变单例 + 导入时启动热加载线程**: `rule_engine = RuleEngine()` (行 1156), `LiveRuleMonitor(...).start()` (行 1158-1162), 每 2 秒轮询文件 mtime | 第 1156-1162 行 |
 | I5 | `api/check.py:143-145` | **industries 请求参数修改全局规则集**: `rule_engine.set_active_industries(industry_list)` 改变模块级单例的内部状态 | 第 143-145 行 |
 | I6 | `main.py:33` + `api/check.py:30-66` | **内存速率限制，不跨进程**: `defaultdict(list)` 存储，无 Redis/共享存储 | main.py 第 33 行, check.py 第 30-66 行 |
@@ -280,10 +284,10 @@ flowchart LR
 | I8 | `services/minio_service.py:38-45` | **MinIO 本地模式由配置决定**: `_use_local` property 检查 `settings.minio_endpoint` 是否为空或 `0.0.0.0:1`，非连接失败自动回退 | 第 38-45 行 |
 | I9 | `core/audit.py:50-65` | **AuditService.log() 吞异常**: `try: ... except Exception as e: logger.error(...) return None` | 第 50-65 行 |
 | I10 | `core/audit.py:__init__` | **AuditService 使用独立引擎**: `create_engine(db_url)` 不等于主应用引擎 | `__init__` 方法 |
-| I11 | `api/report.py:85-107` | **报告读取时注入当前规则来源**: JSON 反序列化 → 重建 Pydantic 模型 → 生成 PDF/Excel | 第 85-132 行 |
+| I11 | `api/report.py:67-80` | **报告读取时注入当前规则来源**: GET报告详情时反序列化持久化的 `report_data` → 遍历当前 `rule_engine.rules` → 动态生成 `_rule_provenance` 字典 → 注入 `report_dict["_rule_provenance"]` 后返回。PDF/Excel 路径不是该注入行为的证据 | 第 67-80 行 |
 | I12 | `api/check.py:428,434` | **报告提交与 Token 配额消费非原子**: `db.commit()` 后调用 `consume_tokens()` | 第 428-434 行 |
 | I13 | `services/email_service.py:71-82` | **未配置 Resend 时邮件只写日志不上发**: `if settings.resend_api_key: ... else: _send_via_log()`。`_send_via_log` 仅 `logger.info` + `return True`。无 SMTP 发送路径 | 第 71-82 行, 第 115-126 行 |
-| I14 | `api/upload.py:166-167` + `api/check.py:120-126` | **上传阶段和检查阶段重复解析文件**: 上传阶段 `parser.parse(tmp_path)` 写入 DocumentSection；检查阶段 `parser.parse(local_path)` 忽略已有 DocumentSection | upload.py 第 166-167 行, check.py 第 120-126 行 |
+| I14 | `api/upload.py:205-249` + `api/check.py:119-126` | **上传阶段和检查阶段重复解析文件**: 上传阶段 `parser.parse(tmp_path)` 写入 DocumentSection；检查阶段 `parser.parse(local_path)` 忽略已有 DocumentSection | upload.py 第 205-249 行, check.py 第 119-126 行 |
 | I15 | `engine/routing.py:27` | **project_type 形参存在但不被使用**: `route()` 签名接受 `project_type`，方法体内从未引用 | 第 27 行 |
 | I16 | `api/check.py:141` | **industry_load_warnings 声明但从未消费**: `industry_load_warnings: list[str] = []` 初始化后无赋值或读取 | 第 141 行 |
 | I17 | `services/email_service.py:7-8` | **smtplib 和 MIMEText 被导入但从未使用**: import 存在但无调用路径 | 第 7-8 行 |
@@ -296,6 +300,7 @@ flowchart LR
 | "上传只校验扩展名" | 同时校验魔数: `_detect_file_type(head_bytes)` 检查 `%PDF` / `PK\x03\x04` / `[Content_Types].xml` |
 | "Resend 失败后回退 SMTP" | `email_service.py` 无 SMTP 发送路径；`_send_via_log` 仅写日志。smtplib 被 import 但从未使用 |
 | "MinIO 连接失败自动回退本地" | `_use_local` property 检查配置值，非 try/except 回退 |
+| "Railway 通过 RAILWAY_STATIC_URL 检测" | 真实条件: `RAILWAY_SERVICE_ID` 或 `RAILWAY_ENVIRONMENT` (`config.py:46`)，无 `RAILWAY_STATIC_URL` 引用 |
 | "规则加载失败统一静默返回空字典" | `RuleEngine._load_rules()` 内部调用 `_load_compliance_rules()`，该函数在找不到文件时尝试加载 `base_rules.json` 作为回退，最终在无文件时记录 warning 并设置空规则列表 |
 | "generate_report() 负责报告数据库持久化" | `report_gen.py` 的 `ReportGenerator` 仅提供 `generate_html()` 和 `generate_pdf()`。持久化在 `check.py` 中直接创建 `ComplianceReport` ORM 行 |
 | "PolicyKernel 存在于当前仓库" | `rg -n "PolicyKernel|policy_kernel" backend frontend` 精确匹配 0 结果 |
@@ -311,7 +316,7 @@ flowchart LR
 | B3 | **project_type 传入路由但未被使用** | `routing.py:27` 签名接受 `project_type` 参数，方法体内从未引用 |
 | B4 | **industry_load_warnings 声明但未消费** | `check.py:141` 声明变量，无后续赋值或读取 |
 | B5 | **reviewed_passed/reviewed_failed 无执行入口** | 仅作为 `review_status` 字段的 regex pattern 允许值出现。无 API 端点或服务函数将 `needs_review` 状态转换为这两个值 |
-| B6 | **parse_quality_adjustment 的 upgraded 路径不存在** | `rg` 搜索 `parse_quality_adjustment` / `upgraded` 精确匹配 0 结果 |
+| B6 | **parse_quality_adjustment 的 upgraded 路径存在但不可达** | `fusion.py:564` 定义字段默认值 `"none"`；`fusion.py:683` 初始化 `adjustment = "none"`；`fusion.py:708` 检查 `if adjustment == "upgraded"`；`fusion.py:715` 分支内赋值 `adjustment = "upgraded"`；`fusion.py:748` 输出 `parse_quality_adjustment=adjustment`。但 `adjustment` 初始值为 `"none"`，代码只有在 `if adjustment == "upgraded"` 分支内部才赋值为 `"upgraded"` — 该分支在当前代码流中永远不可达。这是"存在但不可达的执行路径"，不是"符号不存在" |
 | B7 | **DocumentSection 不是检查主链的数据来源** | 检查阶段独立调用 `parser.parse(local_path)`，不查询 `document_sections` 表 |
 | B8 | **Token 配额消费与报告持久化非原子** | `db.commit()` 与 `consume_tokens()` 分离 |
 | B9 | **审计日志与业务事务非原子** | AuditService 使用独立引擎和 Session |

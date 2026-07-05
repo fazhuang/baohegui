@@ -93,6 +93,7 @@ flowchart TD
 | "PDF 文本 offset 尚不能稳定映射到原始页面坐标" | `parser.py` 有 `PageLine.bbox`，`report_gen.py` 无证据高亮逻辑 | **确认** |
 | "OCR 只有质量状态字段" | `rg OCR\|tesseract` = 0，`ParsedDocument.parse_quality` 字段存在 | **确认** |
 | "合规检查仍在 HTTP 请求内同步执行" | `check.py:111-117` 同步 db commit，无 Worker | **确认** |
+| "parse_quality_adjustment 的 upgraded 分支不可达" | `fusion.py:564/683/708/715/748` — 符号和分支均存在，但 `adjustment = "none"` 初始值使 `if adjustment == "upgraded"` 永远为假，路径不可达 | **确认** |
 
 ---
 

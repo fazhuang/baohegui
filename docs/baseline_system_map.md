@@ -63,19 +63,19 @@
 | 文件 | 路由前缀 | 端点数量 | 认证依赖 |
 |------|---------|---------|---------|
 | `auth.py` | `/api/auth` | 7 (login, register, send-verification, verify-email, forgot-password, reset-password, me) | 公开(6) + `get_current_user`(1) |
-| `upload.py` | `/api/upload` | 2 (POST /, GET /{file_id}/status) | `get_current_user`(2) |
-| `check.py` | `/api/check` | 2 (POST /{file_id}, GET /{file_id}/status) | `get_current_user`(2) |
-| `report.py` | `/api/report` | 7 (GET /{id}, GET /{id}/pdf, GET /{id}/export, GET /list/, POST /feedback, GET /feedback/rules-needing-review, POST /generate-clause) | `get_current_user`(6) + `PermissionService.require_permission`(1) |
-| `rules.py` | `/api/rules` | 16 (CRUD + 同步 + 版本 + 批量操作) | `get_current_user` + `require_admin`(写) |
-| `admin.py` | `/api/admin` | 8 (用户 CRUD + 审计日志 + 文件对比 + 计费) | `get_current_user` + `require_admin` |
-| `announcements.py` | `/api/announcements` | 2 | `get_current_user` |
-| `categories.py` | `/api/categories` | 1 | `get_current_user` |
-| `knowledge_graph.py` | `/api/kg` | 12 (search, related, regulation, cases, similar-cases, rag-context, stats, seed, node CRUD, audit, delete, needing-review) | `get_current_user`(读) + `require_admin`(写) |
-| `crawler.py` | `/api/crawler` | 3 (trigger, status, history) | `get_current_user`(读) + `require_admin`(写) |
-| `stats.py` | `/api/stats` | 1 (GET /dashboard) | `get_current_user` |
+| `upload.py` | `/api/upload` | 2 (POST /, GET /{file_id}/status) | `get_current_user`(2); status 端点内联所有者/admin判断 |
+| `check.py` | `/api/check` | 2 (POST /{file_id}, GET /{file_id}/status) | `get_current_user`(2); status 端点内联所有者/admin判断; check 端点 `assert_resource_access` |
+| `report.py` | `/api/report` | 7 (GET /{id}, GET /{id}/pdf, GET /{id}/export, GET /list/, POST /feedback, GET /feedback/rules-needing-review, POST /generate-clause) | `get_current_user`(6) + `PermissionService.require_permission`(1, rules-needing-review) |
+| `rules.py` | `/api/rules` | 20 (CRUD + 同步 + 版本 + 批量操作) | `get_current_user`(11: engine-status, platforms, platform-rules, platform-rule, rules, rule, rule-versions, sync-status, sync-history, search, export) + `require_admin`(9: reload, create, update, delete, batch-enable, batch-disable, batch-delete, sync-trigger, promote-candidate) |
+| `admin.py` | `/api/admin` | 9 (users, user-detail, user-update, audit-logs, file-compare, file-text, billing-threshold get/put, billing-status) | `require_admin`(9) |
+| `announcements.py` | `/api/announcements` | 1 (GET /) | 公开，无认证依赖 |
+| `categories.py` | `/api/categories` | 3 (GET /, GET /groups, GET /groups/{group_id}/categories) | 公开，无认证依赖 |
+| `knowledge_graph.py` | `/api/kg` | 15 (search, suggest, related-nodes, get-node, get-relations, rag-context, stats, export, seed, create-node, update-node, delete-node, batch-create, review-node, delete-edges) | `get_current_user`(8, 读) + `require_admin`(7, 写) |
+| `crawler.py` | `/api/crawler` | 9 (POST /trigger, GET /source-health, GET /status, GET /jobs, GET /jobs/{job_id}, GET /cases, GET /cases/{case_id}, POST /analyze, GET /stats) | `require_admin`(4: trigger, jobs, jobs/{job_id}, analyze) + `get_current_user`(5: source-health, status, cases, case-detail, stats) |
+| `stats.py` | `/api/stats` | 1 (GET /dashboard) | `PermissionService.require_permission(Permission.STATS_DASHBOARD)` |
 | `member.py` | `/api/member` | 1 (GET /dashboard) | `get_current_user` |
-| `case_review.py` | `/api/admin/cases` | 8 (review-queue, stats, detail, update, review, dedup-check, public-list, public-detail) | `get_current_user` + `require_admin` |
-| `candidate_rules.py` | `/api/admin/candidate-rules` | 3 (list, stats, review) | `get_current_user` + `require_admin` |
+| `case_review.py` | `/api/admin/cases` | 9 (review-queue, review-queue/stats, case-detail, case-update, review, dedup-check, bulk-dedup, public-list, public-detail) | `require_admin`(7: 管理端点) + `get_current_user`(2: /public/*) |
+| `candidate_rules.py` | `/api/admin/candidate-rules` | 4 (list, stats, review, promote) | `require_admin`(4) |
 
 ### 1.4 models/ — 10 个模型文件
 
@@ -133,11 +133,12 @@ RuleEngine._load_rules(self, industry: str | None = None) -> None
 RuleEngine._load_compliance_rules(self) -> int
 ParameterBiasDetector.run(self, sections: dict[str, str]) -> ParameterBiasResult
 LLMEngine.analyze(self, sections: dict[str, str], rule_violations: list[Violation] | None = None, file_id: Optional[int] = None, user_id: Optional[int] = None, target_section_types: set[str] | None = None, marked_doc: Any | None = None, industry_descriptions: str = "", kg_context: Optional[str] = None) -> LLMEngineResult
-EvidenceMatcher.best_match(self, evidence: str, full_text: str, max_edit: int = 2, min_similarity: float = 0.85) -> dict  # @staticmethod
-EvidenceMatcher.exact_match(self, evidence: str, full_text: str) -> Optional[dict]  # @staticmethod
-EvidenceMatcher.fuzzy_match(self, evidence: str, full_text: str, max_edit: int = 2, min_similarity: float = 0.85) -> Optional[dict]  # @staticmethod
-FusionEngine.merge(self, rule_result: RuleEngineResult, llm_result: Optional[LLMEngineResult] = None, bias_violations: Optional[list[Violation]] = None, file_name: str = "", check_time: str = "") -> ComplianceReport  # @staticmethod
-FusionEngine.deduplicate(self, rule_violations: list[Violation], llm_violations: list[LLMViolation]) -> tuple[list[Violation], list[LLMViolation]]  # @staticmethod
+EvidenceMatcher.best_match(evidence: str, full_text: str, max_edit: int = 2, min_similarity: float = 0.85) -> dict  # @staticmethod
+EvidenceMatcher.exact_match(evidence: str, full_text: str) -> Optional[dict]  # @staticmethod
+EvidenceMatcher.fuzzy_match(evidence: str, full_text: str, max_edit: int = 2, min_similarity: float = 0.85) -> Optional[dict]  # @staticmethod
+FusionEngine.merge(rule_result: RuleEngineResult, llm_result: Optional[LLMEngineResult] = None, bias_violations: Optional[list[Violation]] = None, file_name: str = "", check_time: str = "") -> ComplianceReport  # @staticmethod
+FusionEngine.deduplicate(rule_violations: list[Violation], llm_violations: list[LLMViolation]) -> tuple[list[Violation], list[LLMViolation]]  # @staticmethod
+FusionEngine.calculate_total_score(rule_result: RuleEngineResult, llm_result: Optional[LLMEngineResult] = None) -> dict  # @staticmethod
 FourWayRiskMerger.merge(self, routing_result: Optional[RoutingResult] = None, rule_engine_result: Optional[RuleEngineResult] = None, parameter_bias_result: Optional[ParameterBiasResult] = None, llm_result: Optional[LLMEngineResult] = None, parse_quality: str = "ok") -> MergeResult
 ```
 
@@ -209,7 +210,7 @@ mine_to_candidates(db: Session, case_ids: Optional[list[int]] = None, auto_write
 
 - **测试文件数**: 42
 - **测试函数/方法数**: 845
-- **测试分组**: `tests/` (27 文件), `tests/security/` (13 文件), `tests/eval/` (1 测试文件 + 5 辅助文件), `tests/fixtures/` (1 辅助文件)
+- **测试分组**: `tests/` (27 文件), `tests/security/` (14 文件), `tests/eval/` (1 文件)
 
 ---
 
@@ -219,9 +220,9 @@ mine_to_candidates(db: Session, case_ids: Optional[list[int]] = None, auto_write
 
 | # | 文件 | 变量名 |
 |---|------|--------|
-| 1 | `backend/app/models/document.py:15` | `Base` |
-| 2 | `backend/app/models/rule.py:9` | `Base` |
-| 3 | `backend/app/models/candidate_rule.py:8` | `Base` |
+| 1 | `backend/app/models/document.py:9` | `Base` |
+| 2 | `backend/app/models/rule.py:8` | `Base` |
+| 3 | `backend/app/models/candidate_rule.py:15` | `Base` |
 | 4 | `backend/app/models/crawl_job.py:16` | `Base` |
 | 5 | `backend/app/core/audit.py:15` | `AuditBase` |
 
@@ -231,16 +232,16 @@ mine_to_candidates(db: Session, case_ids: Optional[list[int]] = None, auto_write
 
 ## 7. 前端基线
 
-### 路由: 32 条定义 (单一源 `routes/routeConfig.tsx`)
-- 3 公开路由, 29 受保护路由, 4 重定向
-- 6 条路由指向 `ComingSoonPage`
+### 路由: 35 条定义 (单一源 `routes/routeConfig.tsx`，sed 统计首 330 行中 `path:` 数量)
+- 3 公开路由 (login, forgot-password, reset-password), 28 受保护路由, 4 重定向 (upload, history, admin/rules, admin/panel)
+- 6 条路由指向 `ComingSoonPage` (reports/feedback, announcements 2条, account 2条, rules/industry)
 
 ### 状态: 3 个 Zustand store
 - `authStore` — user, loading, error; login/register/restoreSession/logout/hasPerm/isAdmin/role
 - `menuStore` — items, groups; 从 routeConfig 派生
 - `permissionStore` — permissions: string[]; hasPermission/hasAnyPermission
 
-### API: 48 个函数 (services/api.ts)
+### API: 69 个函数 (services/api.ts，计数口径: `rg -c '^export async function '`)
 - HTTP 客户端: baseURL `/api`, timeout 300s, localStorage Bearer token 注入
 - 401 拦截器: 清除 localStorage token → `window.location.href = '/login'` (硬重定向)
 - 无 token 刷新机制
