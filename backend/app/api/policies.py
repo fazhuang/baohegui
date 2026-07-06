@@ -1,16 +1,15 @@
 """动态策略管理 API — 管理员专用
 
 所有策略状态变更只能通过以下端点完成，禁止直接赋值 DynamicPolicy.status。
-写操作 require_admin + 审计日志。
+写操作 require_admin。
+审计日志已在 policy_repository 中与策略状态变更原子写入。
+API 仅负责认证、参数绑定和错误映射。
 """
-
-import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.audit import audit_service
 from app.core.security import get_current_user, require_admin
 from app.db.database import get_db
 from app.services.policy_repository import (
@@ -66,30 +65,6 @@ def _to_response(p: DynamicPolicy) -> dict:
     ).model_dump()
 
 
-def _audit(user_id: int, action: str, resource_id: int, policy: DynamicPolicy,
-           from_status: str = "", to_status: str = "", note: str = ""):
-    """统一审计写入 — 包含可见字段但不包含完整 policy_data。"""
-    policy_fields_hash = hashlib.sha256(
-        policy.policy_data.encode("utf-8")
-    ).hexdigest()[:16] if policy.policy_data else "none"
-    audit_service.log(
-        user_id=user_id,
-        action=action,
-        resource="dynamic_policy",
-        resource_id=str(resource_id),
-        detail={
-            "policy_key": policy.policy_key,
-            "policy_type": policy.policy_type,
-            "scope_type": policy.scope_type,
-            "scope_id": policy.scope_id,
-            "from_status": from_status,
-            "to_status": to_status,
-            "note": note,
-            "policy_data_hash": policy_fields_hash,
-        },
-    )
-
-
 @router.get("/")
 def list_policies(
     status_filter: str | None = Query(default=None, alias="status"),
@@ -116,7 +91,7 @@ def create_policy(
     db: Session = Depends(get_db),
     user: dict = Depends(require_admin),
 ):
-    """创建 draft 策略（管理员）。"""
+    """创建 draft 策略（管理员）。审计在 repository 中原子写入。"""
     try:
         policy = create_draft(
             db=db,
@@ -128,7 +103,6 @@ def create_policy(
             created_by=int(user["sub"]),
             description=req.description,
         )
-        _audit(int(user["sub"]), "policy_create", policy.id, policy, to_status="draft")
         return _to_response(policy)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -140,13 +114,9 @@ def submit_policy(
     db: Session = Depends(get_db),
     user: dict = Depends(require_admin),
 ):
-    """提交审批: draft → review。"""
+    """提交审批: draft → review。审计在 repository 中原子写入。"""
     try:
-        policy = db.query(DynamicPolicy).filter(DynamicPolicy.id == policy_id).first()
-        from_status = policy.status if policy else "draft"
         policy = submit_for_review(db, policy_id, admin_id=int(user["sub"]))
-        _audit(int(user["sub"]), "policy_submit", policy.id, policy,
-               from_status=from_status, to_status="review")
         return _to_response(policy)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -159,13 +129,9 @@ def approve_policy(
     db: Session = Depends(get_db),
     user: dict = Depends(require_admin),
 ):
-    """审批通过: review → approved。"""
+    """审批通过: review → approved。审计在 repository 中原子写入。"""
     try:
-        policy = db.query(DynamicPolicy).filter(DynamicPolicy.id == policy_id).first()
-        from_status = policy.status if policy else "review"
         policy = approve(db, policy_id, admin_id=int(user["sub"]), note=note)
-        _audit(int(user["sub"]), "policy_approve", policy.id, policy,
-               from_status=from_status, to_status="approved", note=note)
         return _to_response(policy)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -178,13 +144,9 @@ def reject_policy(
     db: Session = Depends(get_db),
     user: dict = Depends(require_admin),
 ):
-    """审批拒绝: review → rejected。"""
+    """审批拒绝: review → rejected。审计在 repository 中原子写入。"""
     try:
-        policy = db.query(DynamicPolicy).filter(DynamicPolicy.id == policy_id).first()
-        from_status = policy.status if policy else "review"
         policy = reject(db, policy_id, admin_id=int(user["sub"]), reason=reason)
-        _audit(int(user["sub"]), "policy_reject", policy.id, policy,
-               from_status=from_status, to_status="rejected", note=reason)
         return _to_response(policy)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -196,13 +158,9 @@ def apply_policy(
     db: Session = Depends(get_db),
     user: dict = Depends(require_admin),
 ):
-    """应用策略: approved → applied（此后影响执行链）。"""
+    """应用策略: approved → applied（此后影响执行链）。审计在 repository 中原子写入。"""
     try:
-        policy = db.query(DynamicPolicy).filter(DynamicPolicy.id == policy_id).first()
-        from_status = policy.status if policy else "approved"
         policy = apply(db, policy_id, admin_id=int(user["sub"]))
-        _audit(int(user["sub"]), "policy_apply", policy.id, policy,
-               from_status=from_status, to_status="applied")
         return _to_response(policy)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -215,13 +173,9 @@ def rollback_policy(
     db: Session = Depends(get_db),
     user: dict = Depends(require_admin),
 ):
-    """紧急回滚: applied → rolled_back。"""
+    """紧急回滚: applied → rolled_back。审计在 repository 中原子写入。"""
     try:
-        policy = db.query(DynamicPolicy).filter(DynamicPolicy.id == policy_id).first()
-        from_status = policy.status if policy else "applied"
         policy = rollback(db, policy_id, admin_id=int(user["sub"]), reason=reason)
-        _audit(int(user["sub"]), "policy_rollback", policy.id, policy,
-               from_status=from_status, to_status="rolled_back", note=reason)
         return _to_response(policy)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -233,13 +187,9 @@ def revise_policy(
     db: Session = Depends(get_db),
     user: dict = Depends(require_admin),
 ):
-    """修订: rejected → draft。"""
+    """修订: rejected → draft。审计在 repository 中原子写入。"""
     try:
-        policy = db.query(DynamicPolicy).filter(DynamicPolicy.id == policy_id).first()
-        from_status = policy.status if policy else "rejected"
-        policy = revise(db, policy_id)
-        _audit(int(user["sub"]), "policy_revise", policy.id, policy,
-               from_status=from_status, to_status="draft")
+        policy = revise(db, policy_id, admin_id=int(user["sub"]))
         return _to_response(policy)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

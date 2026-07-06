@@ -26,7 +26,7 @@ _CHECK_DEFS = [
     ("ck_decision_integrity_status",
      "decision_integrity_status IN ('verified', 'legacy_unverifiable', 'integrity_failed') OR decision_integrity_status IS NULL"),
     ("ck_decision_requires_human_review",
-     "decision_requires_human_review IN (0, 1) OR decision_requires_human_review IS NULL"),
+     "decision_requires_human_review IN (false, true) OR decision_requires_human_review IS NULL"),
 ]
 
 # Columns this migration may add to an existing table. We list them so the

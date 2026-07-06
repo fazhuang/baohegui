@@ -344,11 +344,10 @@ class TestFreshMigration:
                         "policy_schema_version", "decision_integrity_status"]:
                 assert col in cols, f"missing column {col} in compliance_reports, got {cols}"
 
-            # 验证当前 revision 为 head
+            # verify current revision is the latest migration head
             rev_row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
             assert rev_row is not None, "no alembic_version row"
-            # head revision should be 20260705_1000_decision_columns
-            assert rev_row[0] == "20260705_1000_decision_columns", f"expected head, got {rev_row[0]}"
+            assert rev_row[0] == "20260707_1300_policy_scope_fix", f"expected head, got {rev_row[0]}"
         finally:
             conn.close()
             os.remove(db_path)

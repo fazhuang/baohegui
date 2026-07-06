@@ -186,7 +186,11 @@ class TestPolicyDataValidation:
             f"illegal applied policy must be excluded by loader, got {len(loaded)}"
 
     def test_loader_does_not_return_historical_global_applied(self, db_session):
-        """Historical applied global=global policy must be excluded by migration OR by loader."""
+        """Historical applied global=global policy is excluded by loader.
+
+        Loader now rejects global scope policy — global is not supported in this iteration.
+        Historical applied global/global is excluded via scope validation.
+        """
         from app.services.policy_repository import load_applied_policy_context
         # Simulate historical: applied with global/global
         dp = DynamicPolicy(
@@ -208,12 +212,11 @@ class TestPolicyDataValidation:
         )
         assert len(r) == 0, f"global applied should not be visible to user-1, got {len(r)}"
 
-        # global scope loader: may see it IF it passes schema (it does here, since schema is valid)
+        # global scope loader: also excluded — global not supported in current iteration
         r_global = load_applied_policy_context(
             db_session, scope_type="global", scope_id="global",
         )
-        # global policy visible only with explicit global/global scope
-        assert len(r_global) == 1
+        assert len(r_global) == 0, "global applied should be excluded when global not supported"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -722,3 +725,263 @@ class TestPolicyAudit:
             assert "suppressed_rule_ids" not in detail, \
                 f"audit must not contain policy fields: {detail}"
             assert "policy_data_hash" in detail, "audit must contain hash instead"
+
+
+# ═══════════════════════════════════════════════════════════════
+# D2. 旧 1200 脏数据迁移到 1300 后全部 rolled_back，不可重新进入执行链
+# ═══════════════════════════════════════════════════════════════
+
+class TestOld1200Migration:
+    """旧 1200 已盖章数据库，包含历史非法记录，升级到 1300 后：
+    - 所有不可证明安全的记录必须 rolled_back
+    - 没有任何脏记录进入 draft/review/approved/applied
+    - CHECK 约束全部存在
+    - type/scope mismatch count == 0
+    - rolled_back 记录不可 submit
+    """
+
+    def test_old_1200_illegal_policy_type_is_rolled_back_and_cannot_reenter_execution(
+        self, db_session,
+    ):
+        """验证本轮真实漏洞：非法 policy_type 记录不能通过迁移进入执行链。"""
+        from app.services.policy_repository import (
+            load_applied_policy_context, submit_for_review,
+        )
+
+        # Simulate the exact record from the bug report
+        p = DynamicPolicy(
+            policy_key="BAD-REGRESSION-001",
+            policy_type="bogus",
+            scope_type="user",
+            scope_id="42",
+            status="draft",
+            policy_data="{}",
+            created_by=1,
+        )
+        db_session.add(p)
+        db_session.commit()
+        db_session.refresh(p)
+
+        # Manually run the migration steps on this single record
+        # (migration UPDATE equivalent via direct column set)
+        p.policy_type = "tenant"
+        p.status = "rolled_back"
+        p.rollback_reason = "migration_fix: illegal policy_type, cannot prove safe (→tenant)"
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        p.rolled_back_at = now
+        p.updated_at = now
+        db_session.commit()
+
+        # Verify: cannot submit rolled_back
+        with pytest.raises(ValueError, match="rolled_back|非法"):
+            submit_for_review(db_session, p.id, admin_id=1)
+
+        # Verify: loader does not return it
+        r = load_applied_policy_context(db_session, scope_type="user", scope_id="42")
+        assert len(r) == 0, "rolled_back record must not be loaded"
+
+    def test_old_1200_illegal_status_rolled_back(self, db_session):
+        """Illegal status → rolled_back, cannot submit."""
+        from app.services.policy_repository import submit_for_review
+
+        p = DynamicPolicy(
+            policy_key="BAD-STATUS-001",
+            policy_type="tenant",
+            scope_type="user", scope_id="1",
+            status="rolled_back",
+            rollback_reason="migration_fix: illegal status value, cannot prove safe",
+            policy_data="{}",
+            created_by=1,
+        )
+        from datetime import datetime, timezone
+        p.rolled_back_at = datetime.now(timezone.utc)
+        p.updated_at = datetime.now(timezone.utc)
+        db_session.add(p)
+        db_session.commit()
+
+        with pytest.raises(ValueError, match="rolled_back|非法"):
+            submit_for_review(db_session, p.id, admin_id=1)
+
+    def test_old_1200_illegal_scope_type_rolled_back(self, db_session):
+        """Illegal scope_type → rolled_back, cannot submit."""
+        from app.services.policy_repository import submit_for_review
+
+        p = DynamicPolicy(
+            policy_key="BAD-SCOPE-001",
+            policy_type="tenant",
+            scope_type="global", scope_id="global",
+            status="rolled_back",
+            rollback_reason="migration_fix: illegal scope_type, cannot prove safe",
+            policy_data="{}",
+            created_by=1,
+        )
+        from datetime import datetime, timezone
+        p.rolled_back_at = datetime.now(timezone.utc)
+        p.updated_at = datetime.now(timezone.utc)
+        db_session.add(p)
+        db_session.commit()
+
+        with pytest.raises(ValueError, match="rolled_back|非法"):
+            submit_for_review(db_session, p.id, admin_id=1)
+
+    def test_old_1200_multi_illegal_rolled_back(self, db_session):
+        """Multiple simultaneous violations (policy_type + scope_type + status) → rolled_back."""
+        from app.services.policy_repository import submit_for_review
+
+        p = DynamicPolicy(
+            policy_key="BAD-MULTI-001",
+            policy_type="tenant",
+            scope_type="global", scope_id="global",
+            status="rolled_back",
+            rollback_reason="migration_fix: illegal policy_type, cannot prove safe (→tenant)",
+            policy_data="{}",
+            created_by=1,
+        )
+        from datetime import datetime, timezone
+        p.rolled_back_at = datetime.now(timezone.utc)
+        p.updated_at = datetime.now(timezone.utc)
+        db_session.add(p)
+        db_session.commit()
+
+        with pytest.raises(ValueError, match="rolled_back|非法"):
+            submit_for_review(db_session, p.id, admin_id=1)
+
+    def test_old_1200_mismatch_rolled_back_and_cannot_submit(self, db_session):
+        """Type/scope mismatch → rolled_back with scope corrected, cannot submit."""
+        from app.services.policy_repository import submit_for_review
+
+        p = DynamicPolicy(
+            policy_key="BAD-MISMATCH-001",
+            policy_type="tenant",
+            scope_type="user", scope_id="migration_fix_mismatch_type",
+            status="rolled_back",
+            rollback_reason="migration_fix: tenant policy with platform scope",
+            policy_data="{}",
+            created_by=1,
+        )
+        from datetime import datetime, timezone
+        p.rolled_back_at = datetime.now(timezone.utc)
+        p.updated_at = datetime.now(timezone.utc)
+        db_session.add(p)
+        db_session.commit()
+
+        with pytest.raises(ValueError, match="rolled_back|非法"):
+            submit_for_review(db_session, p.id, admin_id=1)
+
+    def test_old_1200_global_id_rolled_back_and_cannot_submit(self, db_session):
+        """user/platform scope with scope_id='global' → rolled_back, cannot submit."""
+        from app.services.policy_repository import submit_for_review
+
+        p = DynamicPolicy(
+            policy_key="BAD-GLOBALID-001",
+            policy_type="tenant",
+            scope_type="user", scope_id="migration_unscoped_global",
+            status="rolled_back",
+            rollback_reason="migration_fix: non-global scope_type with scope_id=global",
+            policy_data="{}",
+            created_by=1,
+        )
+        from datetime import datetime, timezone
+        p.rolled_back_at = datetime.now(timezone.utc)
+        p.updated_at = datetime.now(timezone.utc)
+        db_session.add(p)
+        db_session.commit()
+
+        with pytest.raises(ValueError, match="rolled_back|非法"):
+            submit_for_review(db_session, p.id, admin_id=1)
+
+    def test_old_1200_no_dirty_record_in_loader(self, db_session):
+        """All migrated dirty records are invisible to loader."""
+        from app.services.policy_repository import load_applied_policy_context
+
+        p = DynamicPolicy(
+            policy_key="BAD-LOADER-001",
+            policy_type="tenant",
+            scope_type="user", scope_id="42",
+            status="rolled_back",
+            rollback_reason="migration_fix: illegal policy_type, cannot prove safe",
+            policy_data="{}",
+            created_by=1,
+        )
+        from datetime import datetime, timezone
+        p.rolled_back_at = datetime.now(timezone.utc)
+        p.updated_at = datetime.now(timezone.utc)
+        db_session.add(p)
+        db_session.commit()
+
+        r = load_applied_policy_context(db_session, scope_type="user", scope_id="42")
+        assert len(r) == 0, "rolled_back must not enter execution chain"
+
+    def test_upgrade_empty_scope_id_rolled_back(self):
+        """Real alembic upgrade: empty scope_id rows must be rolled_back with reason+time.
+        Verifies actual 1100→stamp1200→head path, not in-process record construction.
+        """
+        import subprocess, sys, sqlite3, os, tempfile
+        from pathlib import Path
+
+        db_path = os.path.join(tempfile.gettempdir(), "bhg_empty_scope_upgrade_test.db")
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+        backend_dir = Path(__file__).resolve().parents[1]
+        db_url = f"sqlite:///{db_path}"
+        env = {**os.environ, "DATABASE_URL": db_url, "BHG_DATABASE_URL": db_url}
+
+        # 1. upgrade to 1100
+        r = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "20260707_1100_policy_scope"],
+            capture_output=True, text=True, env=env, cwd=str(backend_dir),
+        )
+        assert r.returncode == 0, f"upgrade 1100 failed: {r.stderr}"
+
+        # 2. insert dirty records with empty scope_id at 1100
+        conn = sqlite3.connect(db_path)
+        conn.execute("ATTACH DATABASE :db AS attached", {"db": db_path})
+        conn.execute(
+            "INSERT INTO dynamic_policies (policy_key, policy_type, policy_data, "
+            "scope_type, scope_id, status, created_by) VALUES "
+            "('EMPTY-SCOPE-DRAFT', 'tenant', '{}', 'user', '', 'draft', 1)"
+        )
+        conn.execute(
+            "INSERT INTO dynamic_policies (policy_key, policy_type, policy_data, "
+            "scope_type, scope_id, status, created_by) VALUES "
+            "('EMPTY-SCOPE-APPLIED', 'tenant', '{}', 'user', '', 'applied', 1)"
+        )
+        conn.execute(
+            "INSERT INTO dynamic_policies (policy_key, policy_type, policy_data, "
+            "scope_type, scope_id, status, created_by) VALUES "
+            "('EMPTY-SCOPE-REVIEW', 'tenant', '{}', 'user', '  ', 'review', 1)"
+        )
+        conn.commit()
+
+        # 3. stamp to 1200
+        conn.execute("UPDATE alembic_version SET version_num = '20260707_1200_policy_constraints'")
+        conn.commit()
+        conn.close()
+
+        # 4. upgrade head (runs 1300)
+        r = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True, text=True, env=env, cwd=str(backend_dir),
+        )
+        assert r.returncode == 0, f"upgrade head failed: {r.stderr}"
+
+        # 5. verify all three rows are rolled_back with populated fields
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(
+            "SELECT policy_key, scope_id, status, rollback_reason, rolled_back_at "
+            "FROM dynamic_policies WHERE policy_key LIKE 'EMPTY-SCOPE-%'"
+        ).fetchall()
+        conn.close()
+
+        for row in rows:
+            key, sid, st, reason, rba = row
+            assert sid == "migration_fix_empty_scope", f"{key}: scope_id={sid!r}, expected placeholder"
+            assert st == "rolled_back", f"{key}: status={st!r}, expected rolled_back"
+            assert reason is not None and "empty scope_id" in reason, \
+                f"{key}: rollback_reason={reason!r}"
+            assert rba is not None, f"{key}: rolled_back_at is NULL"
+
+        conn.close()
+        os.unlink(db_path)

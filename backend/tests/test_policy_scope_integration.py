@@ -31,15 +31,18 @@ import pytest
 # ═══════════════════════════════════════════════════════════════
 
 def _make_policy_record(db, **kw):
-    """Create a real DynamicPolicy record directly in test DB."""
+    """Create a real DynamicPolicy record directly in test DB.
+
+    Must provide explicit scope_type and scope_id — no ORM defaults.
+    """
     from app.services.policy_repository import DynamicPolicy
     p = DynamicPolicy(
         policy_key=kw.get("policy_key", f"PK-{kw.get('id', 'test')}"),
         policy_type=kw.get("policy_type", "tenant"),
         policy_data=kw.get("policy_data", '{"suppressed_rule_ids": ["R999"]}'),
         status=kw.get("status", "draft"),
-        scope_type=kw.get("scope_type", "user"),
-        scope_id=kw.get("scope_id", "1"),
+        scope_type=kw["scope_type"],
+        scope_id=kw["scope_id"],
         approved_by=kw.get("approved_by"),
         approved_at=kw.get("approved_at"),
         created_by=kw.get("created_by", 1),
@@ -497,29 +500,48 @@ class TestPolicyAdminAccess:
 
 class TestGlobalScope:
 
-    def test_global_policy_loaded_with_explicit_scope(self, db_session):
-        """global scope policy must use explicit scope_type='global', scope_id='global'."""
-        from app.services.policy_repository import (
-            load_applied_policy_context, submit_for_review, approve, apply,
-        )
+    def test_global_policy_create_rejected(self, db_session):
+        """Global scope policy creation must be rejected — not supported."""
+        import pytest
+        from app.services.policy_repository import create_draft
+
+        with pytest.raises(ValueError, match="global scope"):
+            create_draft(
+                db_session, policy_key="PK-GLOBAL-1", policy_type="tenant",
+                policy_data='{"suppressed_rule_ids": ["R_GLOBAL"]}',
+                scope_type="global", scope_id="global",
+                created_by=1,
+            )
+
+    def test_global_policy_apply_rejected(self, db_session):
+        """Global scope policy cannot be applied — scope validation in apply() rejects it."""
+        import pytest
+        from app.services.policy_repository import submit_for_review, approve, apply
 
         p = _make_policy_record(
-            db_session, policy_key="PK-GLOBAL-1", status="draft",
+            db_session, policy_key="PK-GLOBAL-2", status="draft",
             policy_type="tenant",
             scope_type="global", scope_id="global",
-            policy_data='{"suppressed_rule_ids": ["R_GLOBAL"]}',
+            policy_data='{"suppressed_rule_ids": ["R_GLOBAL2"]}',
             created_by=1,
         )
         submit_for_review(db_session, p.id, admin_id=1)
         approve(db_session, p.id, admin_id=1)
-        apply(db_session, p.id, admin_id=1)
 
+        with pytest.raises(ValueError, match="global scope"):
+            apply(db_session, p.id, admin_id=1)
+
+    def test_global_loader_returns_empty(self, db_session):
+        """loader rejects global scope — fail-closed."""
+        from app.services.policy_repository import load_applied_policy_context
         r = load_applied_policy_context(
             db_session, scope_type="global", scope_id="global",
         )
-        assert len(r) == 1
+        assert len(r) == 0
 
-        # user scope does NOT match global
+    def test_user_scope_does_not_return_global(self, db_session):
+        """User scope does not match global — independent of global support."""
+        from app.services.policy_repository import load_applied_policy_context
         r_user = load_applied_policy_context(
             db_session, scope_type="user", scope_id="1",
         )

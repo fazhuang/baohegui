@@ -56,7 +56,7 @@ def _ensure_ownership_table(conn):
         sa.Column("revision", sa.String(64), nullable=False),
         sa.Column("object_type", sa.String(32), nullable=False),
         sa.Column("object_name", sa.String(256), nullable=False),
-        sa.Column("created_by_migration", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("created_by_migration", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime, server_default=sa.func.now()),
     )
     # Index for fast lookups by revision
@@ -75,7 +75,7 @@ def _compute_drop_order(conn) -> list[str]:
     rows = conn.execute(
         sa.text(
             f"SELECT object_name FROM {_OWNERSHIP_TABLE} "
-            f"WHERE revision = :rev AND object_type = 'table' AND created_by_migration = 1"
+            f"WHERE revision = :rev AND object_type = 'table' AND created_by_migration = true"
         ),
         {"rev": revision},
     ).fetchall()
@@ -96,9 +96,9 @@ def _record_ownership(conn, object_type: str, object_name: str):
     conn.execute(
         sa.text(
             f"INSERT INTO {_OWNERSHIP_TABLE} (revision, object_type, object_name, created_by_migration) "
-            f"VALUES (:rev, :otype, :oname, 1)"
+            f"VALUES (:rev, :otype, :oname, :flag)"
         ),
-        {"rev": revision, "otype": object_type, "oname": object_name},
+        {"rev": revision, "otype": object_type, "oname": object_name, "flag": True},
     )
 
 
@@ -254,7 +254,7 @@ def downgrade() -> None:
         owns_ownership_table = 0 < conn.execute(
             sa.text(
                 f"SELECT COUNT(*) FROM {_OWNERSHIP_TABLE} "
-                f"WHERE object_type = 'table' AND object_name = :otname AND created_by_migration = 1"
+                f"WHERE object_type = 'table' AND object_name = :otname AND created_by_migration = true"
             ),
             {"otname": _OWNERSHIP_TABLE},
         ).scalar()
