@@ -50,13 +50,26 @@ def _create_file(db, user: User) -> UploadedFile:
 
 
 def _create_report(db, file: UploadedFile, user: User) -> ComplianceReport:
+    from app.core.policy_kernel import DecisionInput, policy_kernel
+    di = DecisionInput()
+    pd = policy_kernel.decide(di)
+
     r = ComplianceReport(
         file_id=file.id,
         total_score=85.0,
         section_score=90.0,
         violation_count=2,
-        report_data=json.dumps({"test": True, "rule_violations": [], "llm_violations": []},
-                               ensure_ascii=False),
+        policy_schema_version=pd.schema_version,
+        decision_action=pd.final_action.value,
+        decision_risk_level=pd.final_risk_level.value,
+        decision_requires_human_review=pd.requires_human_review,
+        decision_hash=pd.decision_hash,
+        decision_integrity_status="verified",
+        report_data=json.dumps({
+            "test": True, "rule_violations": [], "llm_violations": [],
+            "_decision_input": di.model_dump(mode="json"),
+            "_policy_decision": pd.model_dump(mode="json"),
+        }, ensure_ascii=False),
         checked_by=user.id,
     )
     db.add(r)
@@ -114,5 +127,8 @@ class TestExportAuthorization:
         admin = _create_user(db_session, "admin_pdf", role="admin")
 
         resp = client.get(f"/api/report/{report.id}/pdf", headers=_headers(admin))
-        # Admin can access, but PDF generation may fail if report_data is not valid full report
-        assert resp.status_code in (200, 500), f"Admin should get access (200) or internal error (500), got {resp.status_code}"
+        # Admin can access verified reports (200), but PDF generation may fail
+        # if report_data lacks full risk data (500).  Legacy unverifiable reports
+        # now return 409 — covered by _create_report producing a verified v2 report.
+        assert resp.status_code in (200, 500), \
+            f"Admin should get 200 or internal error 500, got {resp.status_code}"

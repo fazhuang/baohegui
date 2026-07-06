@@ -340,12 +340,14 @@ class TestReportExportHumanReviewFields:
         assert rows[0]["requires_human_review"] == "是"
 
     def test_report_data_saves_merge_result(self):
-        """check.py 保存的 report_data 应包含 _merge_result.risk_items"""
+        """check.py 保存的 report_data 应将 merge_result 证据持久化到 _diagnostics"""
         check_path = Path(__file__).resolve().parent.parent / "app" / "api" / "check.py"
         source = check_path.read_text(encoding="utf-8")
-        assert "_merge_result" in source, "report_data 应包含 _merge_result"
-        assert "validation_error" in source, "risk_items 应包含 validation_error"
-        assert "requires_human_review" in source, "risk_items 应包含 requires_human_review"
+        assert "merge_result" in source, "report_data 应在 _diagnostics 中持久化 merge_result"
+        assert "risk_items_count" in source, "merge_result 应包含 risk_items 计数"
+        assert "confirmed_count" in source, "merge_result 应包含 confirmed_count"
+        assert "validation_error" in source, "check.py 应保留 validation_error 字段"
+        assert "requires_human_review" in source, "check.py 应保留 requires_human_review 字段"
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -84,14 +84,27 @@ def b_report(db_session, user_b):
     db_session.add(f)
     db_session.commit()
 
+    # 使用 PolicyKernel 生成真实的、可验证的 PolicyDecision
+    from app.core.policy_kernel import DecisionInput, policy_kernel
+    di = DecisionInput()
+    pd = policy_kernel.decide(di)
+
     report = ComplianceReport(
         file_id=f.id,
         checked_by=user_b.id,
         total_score=85.0,
         violation_count=3,
+        policy_schema_version=pd.schema_version,
+        decision_action=pd.final_action.value,
+        decision_risk_level=pd.final_risk_level.value,
+        decision_requires_human_review=pd.requires_human_review,
+        decision_hash=pd.decision_hash,
+        decision_integrity_status="verified",
         report_data=json.dumps({
             "total_score": 85.0, "risk_level": "medium",
             "risks": [], "sections": [],
+            "_decision_input": di.model_dump(mode="json"),
+            "_policy_decision": pd.model_dump(mode="json"),
         }),
     )
     db_session.add(report)
