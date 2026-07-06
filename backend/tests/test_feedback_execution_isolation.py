@@ -28,14 +28,14 @@ class TestFeedbackIdempotency:
         from app.services.feedback_service import feedback_service, FeedbackEvent
 
         # 第一次提交
-        r1 = feedback_service.submit_feedback(
+        r1 = feedback_service._persist_feedback_event(
             db=db_session, report_id=1, rule_id="R001",
             user_id=1, feedback_type="confirm",
         )
         assert r1["status"] == "submitted"
 
         # 第二次提交相同组合
-        r2 = feedback_service.submit_feedback(
+        r2 = feedback_service._persist_feedback_event(
             db=db_session, report_id=1, rule_id="R001",
             user_id=1, feedback_type="false_positive",
         )
@@ -54,17 +54,17 @@ class TestFeedbackIdempotency:
         """反馈提交不应修改 RuleConfidence 表"""
         from app.services.feedback_service import feedback_service, RuleConfidence
 
-        feedback_service.submit_feedback(
+        feedback_service._persist_feedback_event(
             db=db_session, report_id=2, rule_id="R_TEST",
             user_id=1, feedback_type="false_positive",
         )
 
-        # RuleConfidence 表不应受 submit_feedback 影响
+        # RuleConfidence 表不应受 _persist_feedback_event 影响
         conf = db_session.query(RuleConfidence).filter(
             RuleConfidence.rule_id == "R_TEST"
         ).first()
-        # 要么不存在，要么存在但未被 submit_feedback 更新
-        # submit_feedback 不再写入 RuleConfidence
+        # 要么不存在，要么存在但未被 _persist_feedback_event 更新
+        # _persist_feedback_event 不再写入 RuleConfidence
         assert True  # 无异常即通过
 
     def test_feedback_is_immutable_event_log(self, db_session):
@@ -75,7 +75,7 @@ class TestFeedbackIdempotency:
             "app.services.feedback_service", fromlist=["feedback_service"]
         ).feedback_service
 
-        result = feedback_service.submit_feedback(
+        result = feedback_service._persist_feedback_event(
             db=db_session, report_id=3, rule_id="R_IMMUTABLE",
             user_id=1, feedback_type="confirm",
         )

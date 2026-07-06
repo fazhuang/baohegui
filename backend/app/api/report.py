@@ -16,6 +16,7 @@ from app.models.document import ComplianceReport as ReportModel, UploadedFile
 from app.services.excel_exporter import build_violation_rows, export_report_to_excel
 from app.services.clause_generator import clause_generator
 from app.services.feedback_service import feedback_service
+from app.services.feedback_service import _extract_rule_ids_from_report
 from app.services.report_gen import report_generator
 
 router = APIRouter(prefix="/api/report", tags=["report"])
@@ -472,12 +473,13 @@ async def submit_feedback(
         )
 
     try:
-        result = feedback_service.submit_feedback(
+        result = feedback_service.submit_feedback_with_validation(
             db=db,
             report_id=req.report_id,
             rule_id=req.rule_id,
             user_id=user_id,
             feedback_type=req.feedback_type,
+            report_data=report_data,
             comment=req.comment,
         )
         if result.get("status") == "duplicate":
@@ -485,41 +487,6 @@ async def submit_feedback(
         return result
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-
-
-def _extract_rule_ids_from_report(report_data: dict) -> set[str]:
-    """从 report_data 中提取所有合法的 rule_id — fail-closed: 无数据返回空集合。
-
-    支持的权威格式：
-    - _decision_input.rule_violations[].rule_id
-    - _decision_input.bias_findings[].pattern_id → BIAS-{pattern_id}
-    - violations[].rule_id (兼容旧格式)
-    """
-    ids: set[str] = set()
-    di = report_data.get("_decision_input", {}) if isinstance(report_data, dict) else {}
-
-    # 新格式: decision_input
-    for rv in di.get("rule_violations", []):
-        if isinstance(rv, dict):
-            rid = rv.get("rule_id")
-            if rid:
-                ids.add(rid)
-    for bf in di.get("bias_findings", []):
-        if isinstance(bf, dict):
-            pid = bf.get("pattern_id")
-            if pid:
-                ids.add(f"BIAS-{pid}")
-
-    # 旧格式: 顶层 violations
-    violations = report_data.get("violations", [])
-    if isinstance(violations, list):
-        for v in violations:
-            if isinstance(v, dict):
-                rid = v.get("rule_id")
-                if rid:
-                    ids.add(rid)
-
-    return ids
 
 
 @router.post("/feedback/{feedback_id}/transition")

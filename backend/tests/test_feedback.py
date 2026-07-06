@@ -35,7 +35,7 @@ class TestFeedbackService:
         # 提交前：无事件
         before_count = db_session.query(FeedbackEvent).count()
 
-        result = feedback_service.submit_feedback(
+        result = feedback_service._persist_feedback_event(
             db=db_session, report_id=1, rule_id="R001",
             user_id=1, feedback_type="confirm",
             comment="此规则判断正确",
@@ -61,7 +61,7 @@ class TestFeedbackService:
         """误报反馈写入事件，不修改置信度"""
         from app.services.feedback_service import feedback_service, FeedbackEvent
 
-        result = feedback_service.submit_feedback(
+        result = feedback_service._persist_feedback_event(
             db=db_session, report_id=1, rule_id="R002",
             user_id=1, feedback_type="false_positive",
         )
@@ -78,7 +78,7 @@ class TestFeedbackService:
         """遗漏反馈写入事件"""
         from app.services.feedback_service import feedback_service, FeedbackEvent
 
-        result = feedback_service.submit_feedback(
+        result = feedback_service._persist_feedback_event(
             db=db_session, report_id=1, rule_id="R003",
             user_id=1, feedback_type="missed",
             comment="漏检了这条",
@@ -102,7 +102,7 @@ class TestFeedbackService:
         ).first()
 
         for i in range(3):
-            feedback_service.submit_feedback(
+            feedback_service._persist_feedback_event(
                 db=db_session, report_id=i + 1, rule_id="R004",
                 user_id=1, feedback_type="false_positive",
             )
@@ -121,7 +121,7 @@ class TestFeedbackService:
         """同一 (user, report, rule) 重复提交返回 duplicate"""
         from app.services.feedback_service import feedback_service, FeedbackEvent
 
-        r1 = feedback_service.submit_feedback(
+        r1 = feedback_service._persist_feedback_event(
             db=db_session, report_id=10, rule_id="R005",
             user_id=1, feedback_type="confirm",
         )
@@ -129,7 +129,7 @@ class TestFeedbackService:
 
         before_count = db_session.query(FeedbackEvent).count()
 
-        r2 = feedback_service.submit_feedback(
+        r2 = feedback_service._persist_feedback_event(
             db=db_session, report_id=10, rule_id="R005",
             user_id=1, feedback_type="false_positive",
         )
@@ -144,7 +144,7 @@ class TestFeedbackService:
         """无效的反馈类型应抛出异常"""
         from app.services.feedback_service import feedback_service
         with pytest.raises(ValueError, match="无效的反馈类型"):
-            feedback_service.submit_feedback(
+            feedback_service._persist_feedback_event(
                 db=db_session, report_id=1, rule_id="R009",
                 user_id=1, feedback_type="invalid_type",
             )
@@ -154,11 +154,11 @@ class TestFeedbackService:
         from app.services.feedback_service import feedback_service, FeedbackEvent
 
         # 写入多条事件
-        feedback_service.submit_feedback(
+        feedback_service._persist_feedback_event(
             db=db_session, report_id=21, rule_id="R007",
             user_id=1, feedback_type="confirm",
         )
-        feedback_service.submit_feedback(
+        feedback_service._persist_feedback_event(
             db=db_session, report_id=22, rule_id="R007",
             user_id=2, feedback_type="confirm",
         )
@@ -183,7 +183,7 @@ class TestFeedbackService:
 
         # 给 R008 累积误报（不同用户/报告绕过幂等）
         for i in range(3):
-            feedback_service.submit_feedback(
+            feedback_service._persist_feedback_event(
                 db=db_session, report_id=30 + i, rule_id="R008",
                 user_id=10 + i, feedback_type="false_positive",
             )
@@ -193,7 +193,7 @@ class TestFeedbackService:
         assert any(r["rule_id"] == "R008" for r in rules)
 
     # ponytail: confidence floor/ceiling tests removed —
-    # RuleConfidence is no longer modified by submit_feedback
+    # RuleConfidence is no longer modified by _persist_feedback_event
 
 
 class TestFeedbackAPI:

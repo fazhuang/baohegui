@@ -379,8 +379,11 @@ async def run_compliance_check(
             requires_human_review_if_llm_only=(plan != "enterprise"),
             plan_tier=_plan_to_tier.get(plan, PlanTier.FREE),
         )
-        # 应用动态 tenant 策略覆盖（仅 applied 状态）
-        for dp in load_applied_policy_context(db, policy_type="tenant"):
+        # 应用动态 tenant 策略覆盖（仅 applied 状态，仅当前 user scope）
+        for dp in load_applied_policy_context(
+            db, policy_type="tenant",
+            scope_type="user", scope_id=str(user["sub"]),
+        ):
             try:
                 dp_data = json.loads(dp.policy_data)
                 if "suppressed_rule_ids" in dp_data:
@@ -428,12 +431,7 @@ async def run_compliance_check(
             ],
             parse_quality=ParseQuality(parse_quality),
             present_sections=present_sections,
-            tenant_policy=TenantPolicy(
-                tenant_id=str(user["sub"]),
-                auto_fail_rule_types={RuleType.FORBIDDEN} if plan != "enterprise" else set(),
-                requires_human_review_if_llm_only=(plan != "enterprise"),
-                plan_tier=_plan_to_tier.get(plan, PlanTier.FREE),
-            ),
+            tenant_policy=tenant_policy,
             platform_policy=platform_policy,
             ux_policy=UxPolicy(),
         )

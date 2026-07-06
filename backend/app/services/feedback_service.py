@@ -113,7 +113,7 @@ class FeedbackService:
     """
 
     @staticmethod
-    def submit_feedback(
+    def _persist_feedback_event(
         db: Session,
         report_id: int,
         rule_id: str,
@@ -121,13 +121,13 @@ class FeedbackService:
         feedback_type: str,
         comment: Optional[str] = None,
     ) -> dict:
-        """提交反馈事件 — 只写不可变记录
+        """私有持久化函数 — 不验证 report/rule 绑定。
 
         幂等：同一 (user_id, report_id, rule_id) 已存在时返回 duplicate。
         不修改 RuleConfidence。
 
-        警告：此低层入口不验证 report/rule 绑定。
-        生产代码应使用 submit_feedback_with_validation。
+        **仅可由 FeedbackService.submit_feedback_with_validation 调用。**
+        禁止从 API、其他 service 或测试直接调用。
         """
         if feedback_type not in ("confirm", "false_positive", "missed"):
             raise ValueError(f"无效的反馈类型: {feedback_type}")
@@ -200,7 +200,7 @@ class FeedbackService:
         if rule_id not in valid_rule_ids:
             raise ValueError(f"rule_id '{rule_id}' 不存在于此报告的审查结果中")
 
-        return FeedbackService.submit_feedback(
+        return FeedbackService._persist_feedback_event(
             db=db,
             report_id=report_id,
             rule_id=rule_id,
