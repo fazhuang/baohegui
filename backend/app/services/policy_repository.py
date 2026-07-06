@@ -118,11 +118,26 @@ def load_applied_policy_context(
         )
         .all()
     )
+
+    # Enforce: applied policy must pass schema validation at load time.
+    # Historical illegal applied policies are logged and excluded from execution.
+    valid_policies = []
+    for dp in policies:
+        try:
+            _validate_policy_data_strict(dp.policy_type, dp.policy_data)
+            valid_policies.append(dp)
+        except ValueError as e:
+            logger.error(
+                "非法 applied policy 被拒绝进入执行链: id=%d key=%s error=%s. "
+                "请回滚并修订此策略。",
+                dp.id, dp.policy_key, e,
+            )
+
     logger.debug(
-        "加载 applied 策略: type=%s scope=%s/%s count=%d",
-        policy_type, scope_type, scope_id, len(policies),
+        "加载 applied 策略: type=%s scope=%s/%s total=%d valid=%d",
+        policy_type, scope_type, scope_id, len(policies), len(valid_policies),
     )
-    return policies
+    return valid_policies
 
 
 def load_applied_policy_context_all(db: Session) -> dict[str, list[DynamicPolicy]]:
@@ -141,18 +156,16 @@ def load_applied_policy_context_all(db: Session) -> dict[str, list[DynamicPolicy
 # 禁止直接赋值 DynamicPolicy.status = ... 或 db.commit()。
 # ═══════════════════════════════════════════════════════════════
 
-import json as _json
+def _validate_policy_data_strict(policy_type: str, policy_data_str: str) -> str:
+    """使用严格 Pydantic schema 验证 policy_data，返回规范化 JSON 字符串。
 
-
-def _validate_policy_schema(policy_data_str: str) -> tuple[bool, str]:
-    """验证 policy_data 是否为合法 JSON。返回 (ok, error_message)。"""
-    try:
-        parsed = _json.loads(policy_data_str)
-        if not isinstance(parsed, dict):
-            return False, "policy_data 必须是 JSON 对象"
-        return True, ""
-    except (_json.JSONDecodeError, TypeError) as e:
-        return False, f"policy_data JSON 解析失败: {e}"
+    严禁仅检查"是否为 JSON 对象"。
+    所有阶段 (create_draft, apply, loader) 均调用此验证。
+    """
+    from app.services.policy_schema import validate_policy_data, normalize_policy_data
+    # 验证通过后规范化为确定性 JSON
+    validate_policy_data(policy_type, policy_data_str)
+    return normalize_policy_data(policy_type, policy_data_str)
 
 
 def _validate_scope(scope_type: str, scope_id: str) -> tuple[bool, str]:
@@ -178,9 +191,16 @@ def create_draft(
     ok, err = _validate_scope(scope_type, scope_id)
     if not ok:
         raise ValueError(err)
-    ok, err = _validate_policy_schema(policy_data)
-    if not ok:
-        raise ValueError(err)
+    from app.services.policy_schema import is_supported_policy_type
+    if not is_supported_policy_type(policy_type):
+        raise ValueError(
+            f"不支持的 policy_type: {policy_type!r}。当前仅支持 tenant 和 platform。"
+        )
+    # 严格 Pydantic schema 验证 + 规范化为确定性 JSON
+    try:
+        normalized_data = _validate_policy_data_strict(policy_type, policy_data)
+    except ValueError as e:
+        raise ValueError(f"policy_data 验证失败: {e}")
 
     # 唯一键冲突保护
     existing = db.query(DynamicPolicy).filter(
@@ -192,7 +212,7 @@ def create_draft(
     policy = DynamicPolicy(
         policy_key=policy_key,
         policy_type=policy_type,
-        policy_data=policy_data,
+        policy_data=normalized_data,
         status="draft",
         scope_type=scope_type,
         scope_id=scope_id,
@@ -271,9 +291,10 @@ def apply(db: Session, policy_id: int, admin_id: int) -> DynamicPolicy:
         raise ValueError(
             "策略缺少 approved_by / approved_at，审批记录不完整，拒绝应用。"
         )
-    ok, err = _validate_policy_schema(policy.policy_data)
-    if not ok:
-        raise ValueError(f"策略数据 schema 不合法: {err}")
+    try:
+        _validate_policy_data_strict(policy.policy_type, policy.policy_data)
+    except ValueError as e:
+        raise ValueError(f"策略数据 schema 不合法: {e}")
     ok, err = _validate_scope(policy.scope_type, policy.scope_id)
     if not ok:
         raise ValueError(f"策略 scope 不完整: {err}")

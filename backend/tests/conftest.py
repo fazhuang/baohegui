@@ -181,6 +181,7 @@ def _apply_migration_upgrades(engine):
         "app.db.migrations.versions.20260706_1000_feedback_isolation",
         "app.db.migrations.versions.20260707_1000_dynamic_policies",
         "app.db.migrations.versions.20260707_1100_policy_scope",
+        "app.db.migrations.versions.20260707_1200_policy_constraints",
     ]
 
     for mod_name in _MIGRATION_MODULES:

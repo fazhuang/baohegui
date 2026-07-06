@@ -279,7 +279,7 @@ class TestPlatformScopeIsolation:
             db_session, policy_key="PK-PLAT-GD", status="draft",
             policy_type="platform",
             scope_type="platform", scope_id="guangdong",
-            policy_data='{"suppressed_rule_ids": ["R_GD"]}',
+            policy_data='{"required_sections": ["R_GD"]}',
             created_by=1,
         )
         submit_for_review(db_session, p.id, admin_id=1)

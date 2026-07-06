@@ -372,30 +372,31 @@ async def run_compliance_check(
 
         # 加载动态 applied 策略（单一入口，不绕过审批）
         from app.services.policy_repository import load_applied_policy_context
+        from app.services.policy_schema import (
+            build_effective_tenant_policy,
+            build_effective_platform_policy,
+        )
 
+        # Tenant: base + dynamic applied (仅当前 user scope)
         tenant_policy = TenantPolicy(
             tenant_id=str(user["sub"]),
             auto_fail_rule_types={RuleType.FORBIDDEN} if plan != "enterprise" else set(),
             requires_human_review_if_llm_only=(plan != "enterprise"),
             plan_tier=_plan_to_tier.get(plan, PlanTier.FREE),
         )
-        # 应用动态 tenant 策略覆盖（仅 applied 状态，仅当前 user scope）
-        for dp in load_applied_policy_context(
+        tenant_applied = load_applied_policy_context(
             db, policy_type="tenant",
             scope_type="user", scope_id=str(user["sub"]),
-        ):
-            try:
-                dp_data = json.loads(dp.policy_data)
-                if "suppressed_rule_ids" in dp_data:
-                    tenant_policy.suppressed_rule_ids.update(dp_data["suppressed_rule_ids"])
-                if "auto_fail_rule_types" in dp_data:
-                    for rt in dp_data["auto_fail_rule_types"]:
-                        try:
-                            tenant_policy.auto_fail_rule_types.add(RuleType(rt))
-                        except ValueError:
-                            pass
-            except Exception:
-                logger.warning("跳过无效动态策略: id=%d key=%s", dp.id, dp.policy_key)
+        )
+        tenant_policy = build_effective_tenant_policy(tenant_policy, tenant_applied)
+
+        # Platform: base + dynamic applied (仅当前 platform scope)
+        if platform:
+            platform_applied = load_applied_policy_context(
+                db, policy_type="platform",
+                scope_type="platform", scope_id=platform,
+            )
+            platform_policy = build_effective_platform_policy(platform_policy, platform_applied)
 
         import json as _json
 
