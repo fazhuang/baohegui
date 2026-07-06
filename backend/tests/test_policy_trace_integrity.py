@@ -587,3 +587,115 @@ class TestVersionMismatch:
         d = make()
         assert d.decision_hash == expected_hash, \
             f"cross-process mismatch: in-process={d.decision_hash}, subprocess={expected_hash}"
+
+
+class TestSchemaVersionTamper:
+    """篡改 PolicyDecision.schema_version 必须使 verify_trace 失败"""
+
+    def test_tamper_schema_version_only(self):
+        """仅修改 schema_version，保留旧 hash → terminal_dh + sv_match 均失败"""
+        from app.core.policy_kernel import DecisionInput, PolicyKernel, verify_trace, RiskLevel, RuleType, RuleViolationInput
+        di = DecisionInput(rule_violations=[RuleViolationInput(rule_id="R001", rule_type=RuleType.FORBIDDEN, risk_level=RiskLevel.HIGH)])
+        d = PolicyKernel().decide(di)
+        original_sv = d.schema_version
+        original_dh = d.decision_hash
+        d.schema_version = "2.0.0"
+        vr = verify_trace(di, d)
+        assert not vr["valid"]
+        assert not vr["checks"]["schema_version_match"]
+        assert not vr["checks"]["terminal_decision_hash"]
+        assert vr["integrity_status"] != "verified"
+        assert f"input='{original_sv}'" in vr["errors"][0] or f"input='2.1.0'" in vr["errors"][0]
+
+    def test_tamper_schema_version_with_recalc_hash(self):
+        """修改 schema_version 并重算 hash → sv_match 仍失败"""
+        from app.core.policy_kernel import (
+            DecisionInput, PolicyKernel, verify_trace, RiskLevel, RuleType, RuleViolationInput,
+            sha256_hex, _canonical_json,
+        )
+        di = DecisionInput(rule_violations=[RuleViolationInput(rule_id="R001", rule_type=RuleType.FORBIDDEN, risk_level=RiskLevel.HIGH)])
+        d = PolicyKernel().decide(di)
+        d.schema_version = "2.0.0"
+        # 攻击者同步重算 hash
+        terminal_trace_hash = d.trace_chain[-1].output_hash
+        final_data = _canonical_json({
+            "final_action": d.final_action.value,
+            "final_risk_level": d.final_risk_level.value,
+            "requires_human_review": d.requires_human_review,
+            "schema_version": d.schema_version,
+            "input_hash": d.input_hash,
+        })
+        d.decision_hash = sha256_hex(terminal_trace_hash.encode() + final_data)
+        vr = verify_trace(di, d)
+        assert not vr["valid"]
+        assert not vr["checks"]["schema_version_match"]
+        # terminal_dh 可能匹配（hash 被同步更新），但 sv_match 必须失败
+
+    def test_tamper_final_action(self):
+        """篡改 final_action → terminal_dh 失败"""
+        from app.core.policy_kernel import DecisionInput, PolicyKernel, verify_trace, DecisionAction
+        di = DecisionInput()
+        d = PolicyKernel().decide(di)
+        assert d.final_action == DecisionAction.PASS
+        d.final_action = DecisionAction.BLOCK
+        vr = verify_trace(di, d)
+        assert not vr["valid"]
+        assert not vr["checks"]["terminal_decision_hash"]
+
+    def test_tamper_final_risk_level(self):
+        """篡改 final_risk_level → terminal_dh 失败"""
+        from app.core.policy_kernel import DecisionInput, PolicyKernel, verify_trace, RiskLevel, RuleType, RuleViolationInput
+        di = DecisionInput(rule_violations=[RuleViolationInput(rule_id="R001", rule_type=RuleType.FORBIDDEN, risk_level=RiskLevel.MEDIUM)])
+        d = PolicyKernel().decide(di)
+        d.final_risk_level = RiskLevel.LOW
+        vr = verify_trace(di, d)
+        assert not vr["valid"]
+        assert not vr["checks"]["terminal_decision_hash"]
+
+    def test_tamper_requires_human_review(self):
+        """篡改 requires_human_review → terminal_dh 失败"""
+        from app.core.policy_kernel import DecisionInput, PolicyKernel, verify_trace
+        di = DecisionInput()
+        d = PolicyKernel().decide(di)
+        d.requires_human_review = not d.requires_human_review
+        vr = verify_trace(di, d)
+        assert not vr["valid"]
+        assert not vr["checks"]["terminal_decision_hash"]
+
+    def test_tamper_input_hash_field(self):
+        """篡改 PolicyDecision.input_hash → terminal_dh 失败"""
+        from app.core.policy_kernel import DecisionInput, PolicyKernel, verify_trace
+        di = DecisionInput()
+        d = PolicyKernel().decide(di)
+        d.input_hash = "0" * 64
+        vr = verify_trace(di, d)
+        assert not vr["valid"]
+        assert not vr["checks"]["terminal_decision_hash"]
+
+    def test_unknown_policy_decision_version_rejected(self):
+        """PolicyDecision(schema_version='3.0.0') 构造失败"""
+        import pydantic
+        from app.core.policy_kernel import PolicyDecision
+        import pytest
+        with pytest.raises(pydantic.ValidationError):
+            PolicyDecision(
+                final_action="pass", final_risk_level="low",
+                requires_human_review=False, schema_version="3.0.0",
+            )
+
+    def test_json_roundtrip_preserves_hash(self):
+        """JSON 序列化/反序列化后 hash 不变"""
+        from app.core.policy_kernel import DecisionInput, PolicyKernel, verify_trace, RiskLevel, RuleType, RuleViolationInput
+        import json as _json_mod
+        di = DecisionInput(rule_violations=[RuleViolationInput(rule_id="R001", rule_type=RuleType.FORBIDDEN, risk_level=RiskLevel.HIGH)])
+        d = PolicyKernel().decide(di)
+        original_dh = d.decision_hash
+        original_sv = d.schema_version
+        payload = d.model_dump(mode="json")
+        rehydrated = PolicyDecision.model_validate(_json_mod.loads(_json_mod.dumps(payload)))
+        assert rehydrated.decision_hash == original_dh
+        assert rehydrated.schema_version == original_sv
+        vr = verify_trace(di, rehydrated)
+        assert vr["valid"]
+        assert vr["checks"]["terminal_decision_hash"]
+        assert vr["checks"]["schema_version_match"]

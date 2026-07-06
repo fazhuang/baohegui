@@ -318,7 +318,7 @@ class PolicyDecision(BaseModel):
     final_action: DecisionAction
     final_risk_level: RiskLevel
     requires_human_review: bool
-    schema_version: str = POLICY_SCHEMA_VERSION
+    schema_version: Literal["2.0.0", "2.1.0"] = "2.1.0"
     input_hash: str = ""
     decision_hash: str = ""
     trace_chain: list[TraceStep] = Field(default_factory=list)
@@ -897,6 +897,11 @@ def _verify_trace_core(kernel, decision_input, decision: PolicyDecision, replay_
     if not checks["root_hash"]:
         errors.append("input_hash mismatch")
 
+    # ── 2b. Schema version match ──
+    checks["schema_version_match"] = decision_input.schema_version == decision.schema_version
+    if not checks["schema_version_match"]:
+        errors.append(f"schema_version mismatch: input={decision_input.schema_version!r}, decision={decision.schema_version!r}")
+
     # ── 3. Full structural diff against replay output ──
     for field in ["final_action", "final_risk_level", "requires_human_review", "overrides_applied"]:
         expected_val = getattr(expected, field)
@@ -956,6 +961,22 @@ def _verify_trace_core(kernel, decision_input, decision: PolicyDecision, replay_
             checks[f"trace[{i}].no_downgrade"] = False
         else:
             checks[f"trace[{i}].no_downgrade"] = True
+
+    # ── 8. Terminal decision hash — recompute from current fields ──
+    trace = decision.trace_chain
+    if trace:
+        terminal_trace_hash = trace[-1].output_hash
+        final_data = _canonical_json({
+            "final_action": decision.final_action.value,
+            "final_risk_level": decision.final_risk_level.value,
+            "requires_human_review": decision.requires_human_review,
+            "schema_version": decision.schema_version,
+            "input_hash": decision.input_hash,
+        })
+        recomputed = sha256_hex(terminal_trace_hash.encode() + final_data)
+        checks["terminal_decision_hash"] = decision.decision_hash == recomputed
+        if not checks["terminal_decision_hash"]:
+            errors.append(f"terminal decision_hash mismatch: expected {recomputed[:16]}..., got {decision.decision_hash[:16]}...")
 
     valid = len(errors) == 0
 
