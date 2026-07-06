@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class FeedbackRecord(Base):
-    """反馈记录表"""
+    """反馈记录表 — 状态由 FeedbackStateMachine 管理"""
 
     __tablename__ = "feedback_records"
 
@@ -28,6 +28,13 @@ class FeedbackRecord(Base):
     user_id = Column(Integer, nullable=False)
     feedback_type = Column(String(16), nullable=False)  # confirm / false_positive / missed
     comment = Column(Text, nullable=True)
+    # 状态机字段
+    status = Column(String(16), default="submitted")  # submitted/acknowledged/resolved/closed
+    acknowledged_by = Column(Integer, nullable=True)
+    acknowledged_at = Column(DateTime, nullable=True)
+    resolved_by = Column(Integer, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    resolution_note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
