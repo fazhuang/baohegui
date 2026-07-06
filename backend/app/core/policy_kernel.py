@@ -70,6 +70,7 @@ class ReasonCode(str, Enum):
     LLM_NO_ISSUES = "llm_no_issues"
     LLM_HIGH_RISK = "llm_high_risk"
     LLM_UNVERIFIED = "llm_unverified"
+    LLM_REQUIRES_HUMAN_REVIEW = "llm_requires_human_review"
     # UX — 仅展示，不改变判定
     UX_PASSTHROUGH = "ux_passthrough"
     # TENANT
@@ -198,6 +199,7 @@ class LLMViolationInput(BaseModel):
     risk_level: RiskLevel = RiskLevel.MEDIUM
     reason: str = ""
     validation_error: Optional[str] = None
+    requires_human_review: bool = False
 
 
 class BiasFindingInput(BaseModel):
@@ -470,16 +472,27 @@ class PolicyKernel:
             )
         has_high = any(v.risk_level == RiskLevel.HIGH for v in di.llm_violations)
         has_unverified = any(v.validation_error for v in di.llm_violations)
+        has_explicit_review = any(v.requires_human_review for v in di.llm_violations)
+
+        # 1. high risk → REQUIRE_REVIEW + HIGH + human_review
         if has_high:
             return (
                 DecisionState(action=DecisionAction.REQUIRE_REVIEW, risk_level=RiskLevel.HIGH, requires_human_review=True),
                 ReasonCode.LLM_HIGH_RISK, {"count": len(di.llm_violations)},
             )
+        # 2. validation_error → WARN + MEDIUM + human_review
         if has_unverified:
             return (
                 DecisionState(action=DecisionAction.WARN, risk_level=RiskLevel.MEDIUM, requires_human_review=True),
                 ReasonCode.LLM_UNVERIFIED, {"count": len(di.llm_violations)},
             )
+        # 3. explicit requires_human_review → WARN + MEDIUM + human_review
+        if has_explicit_review:
+            return (
+                DecisionState(action=DecisionAction.WARN, risk_level=RiskLevel.MEDIUM, requires_human_review=True),
+                ReasonCode.LLM_REQUIRES_HUMAN_REVIEW, {"count": len(di.llm_violations)},
+            )
+        # 4. other medium/low risk → compatible legacy behavior
         return (
             DecisionState(action=DecisionAction.WARN, risk_level=RiskLevel.MEDIUM, requires_human_review=False),
             ReasonCode.LLM_HIGH_RISK, {"count": len(di.llm_violations)},

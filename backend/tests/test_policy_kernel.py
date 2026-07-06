@@ -9,6 +9,8 @@ from app.core.policy_kernel import (
     ParseQuality,
     PlatformPolicy,
     PolicyKernel,
+    PolicySource,
+    PolicyDecision,
     ReasonCode,
     RiskLevel,
     RuleType,
@@ -408,3 +410,177 @@ class TestNoOldBypass:
         assert "requires_human_review" not in fields
         # risk_items 仍然存在
         assert "risk_items" in fields
+
+
+# ═══════════════════════════════════════════════════════════════
+# 7. LLM requires_human_review — explicit field trace
+# ═══════════════════════════════════════════════════════════════
+
+class TestLLMHumanReviewSignal:
+    """LLMViolationInput.requires_human_review 完整进入 trace + hash"""
+
+    kernel = PolicyKernel()
+
+    def test_default_false(self):
+        """LLMViolationInput 默认 requires_human_review=False"""
+        lv = LLMViolationInput()
+        assert lv.requires_human_review is False
+
+    def test_upstream_adapter_preserves_true(self):
+        """上游 LLMViolation(requires_human_review=True) 经生产适配后仍为 True"""
+        from app.api.check import _to_llm_violation_input
+
+        class FakeLV:
+            type = "证据不足"
+            risk_level = "medium"
+            reason = "test"
+            validation_error = None
+            requires_human_review = True
+
+        lvi = _to_llm_violation_input(FakeLV())
+        assert lvi.requires_human_review is True
+
+    def test_enterprise_adversarial_human_review_true(self):
+        """企业租户对抗场景：MEDIUM + requires_human_review=True → WARN + MEDIUM + human_review=True"""
+        di = DecisionInput(
+            tenant_policy=TenantPolicy(
+                plan_tier=PlanTier.ENTERPRISE,
+                requires_human_review_if_llm_only=False,
+            ),
+            llm_violations=[
+                LLMViolationInput(
+                    type="证据不足",
+                    risk_level=RiskLevel.MEDIUM,
+                    validation_error=None,
+                    requires_human_review=True,
+                ),
+            ],
+        )
+        d = self.kernel.decide(di)
+        assert d.final_action == DecisionAction.WARN
+        assert d.final_risk_level == RiskLevel.MEDIUM
+        assert d.requires_human_review is True
+        llm_steps = [t for t in d.trace_chain if t.source == PolicySource.LLM]
+        assert len(llm_steps) == 1
+        step = llm_steps[0]
+        assert step.reason_code == ReasonCode.LLM_REQUIRES_HUMAN_REVIEW
+        assert step.proposed_transition.requires_human_review is True
+        assert step.state_after.requires_human_review is True
+
+    def test_false_vs_true_changes_hashes(self):
+        """False/True 切换改变 input_hash 和 decision_hash"""
+        di_false = DecisionInput(
+            tenant_policy=TenantPolicy(
+                plan_tier=PlanTier.ENTERPRISE,
+                requires_human_review_if_llm_only=False,
+            ),
+            llm_violations=[
+                LLMViolationInput(
+                    type="证据不足",
+                    risk_level=RiskLevel.MEDIUM,
+                    requires_human_review=False,
+                ),
+            ],
+        )
+        di_true = DecisionInput(
+            tenant_policy=TenantPolicy(
+                plan_tier=PlanTier.ENTERPRISE,
+                requires_human_review_if_llm_only=False,
+            ),
+            llm_violations=[
+                LLMViolationInput(
+                    type="证据不足",
+                    risk_level=RiskLevel.MEDIUM,
+                    requires_human_review=True,
+                ),
+            ],
+        )
+        d_false = self.kernel.decide(di_false)
+        d_true = self.kernel.decide(di_true)
+
+        assert d_false.input_hash != d_true.input_hash, "input_hash must differ"
+        assert d_false.decision_hash != d_true.decision_hash, "decision_hash must differ"
+        # LLM trace output_hash also differs
+        llm_f = [t for t in d_false.trace_chain if t.source == PolicySource.LLM][0]
+        llm_t = [t for t in d_true.trace_chain if t.source == PolicySource.LLM][0]
+        assert llm_f.output_hash != llm_t.output_hash, "LLM trace output_hash must differ"
+
+    def test_json_roundtrip_preserves_field(self):
+        """JSON 序列化/反序列化后 requires_human_review 字段存在，verify_trace 通过"""
+        di = DecisionInput(
+            tenant_policy=TenantPolicy(
+                plan_tier=PlanTier.ENTERPRISE,
+                requires_human_review_if_llm_only=False,
+            ),
+            llm_violations=[
+                LLMViolationInput(
+                    type="证据不足",
+                    risk_level=RiskLevel.MEDIUM,
+                    requires_human_review=True,
+                ),
+            ],
+        )
+        d = self.kernel.decide(di)
+        import json
+        payload = d.model_dump(mode="json")
+        json_str = json.dumps(payload, ensure_ascii=False)
+        rehydrated = PolicyDecision.model_validate(json.loads(json_str))
+        assert rehydrated.requires_human_review is True
+        vr = verify_trace(di, rehydrated)
+        assert vr["valid"], f"verify_trace failed after roundtrip: {vr['errors']}"
+
+    def test_tampered_field_old_hash_fails_verify(self):
+        """篡改 requires_human_review 后保留旧 hash → verify_trace 失败"""
+        di = DecisionInput(
+            tenant_policy=TenantPolicy(
+                plan_tier=PlanTier.ENTERPRISE,
+                requires_human_review_if_llm_only=False,
+            ),
+            llm_violations=[
+                LLMViolationInput(
+                    type="证据不足",
+                    risk_level=RiskLevel.MEDIUM,
+                    requires_human_review=False,
+                ),
+            ],
+        )
+        d = self.kernel.decide(di)
+        # 篡改 requires_human_review 但保留旧 hash
+        tampered = d.model_copy(deep=True)
+        tampered.requires_human_review = True
+        # hash unchanged — verify must fail
+        vr = verify_trace(di, tampered)
+        assert not vr["valid"], "verify_trace must fail for tampered human_review with old hash"
+
+    def test_payload_contains_requires_human_review(self):
+        """build_policy_audit_payload 中 _decision_input 包含 requires_human_review=True"""
+        from app.api.check import build_policy_audit_payload
+        from app.engine.fusion import ComplianceReport
+        di = DecisionInput(
+            tenant_policy=TenantPolicy(
+                plan_tier=PlanTier.ENTERPRISE,
+                requires_human_review_if_llm_only=False,
+            ),
+            llm_violations=[
+                LLMViolationInput(
+                    type="证据不足",
+                    risk_level=RiskLevel.MEDIUM,
+                    requires_human_review=True,
+                ),
+            ],
+        )
+        d = self.kernel.decide(di)
+        report = ComplianceReport(total_score=85.0)
+        payload = build_policy_audit_payload(
+            report=report,
+            decision_input=di,
+            policy_decision=d,
+            diagnostics={},
+        )
+        # _decision_input.llm_violations[0] 包含 requires_human_review
+        di_payload = payload["_decision_input"]
+        llm_vis = di_payload["llm_violations"]
+        assert len(llm_vis) == 1
+        assert llm_vis[0]["requires_human_review"] is True
+        # _policy_decision.requires_human_review is consistent
+        assert payload["_policy_decision"]["requires_human_review"] is True

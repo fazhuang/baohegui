@@ -45,6 +45,21 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/check", tags=["check"])
 
+
+def _to_llm_violation_input(lv) -> LLMViolationInput:
+    """将上游 LLM 违规对象映射为 PolicyKernel 的 LLMViolationInput。
+
+    此函数是生产代码与测试共享的单一映射源。禁止生产与测试各写一套映射。
+    """
+    return LLMViolationInput(
+        type=lv.type,
+        risk_level=RiskLevel(lv.risk_level),
+        reason=getattr(lv, "reason", ""),
+        validation_error=getattr(lv, "validation_error", None),
+        requires_human_review=getattr(lv, "requires_human_review", False),
+    )
+
+
 # ── Simple in-memory rate limiter ────────────────────────────
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)
 _RATE_LIMIT_WINDOW = 60  # seconds
@@ -381,12 +396,7 @@ async def run_compliance_check(
                 for f in (parameter_bias_result.findings if parameter_bias_result else [])
             ],
             llm_violations=[
-                LLMViolationInput(
-                    type=lv.type,
-                    risk_level=RiskLevel(lv.risk_level),
-                    reason=getattr(lv, "reason", ""),
-                    validation_error=getattr(lv, "validation_error", None),
-                )
+                _to_llm_violation_input(lv)
                 for lv in (llm_result.violations if llm_result else [])
             ],
             parse_quality=ParseQuality(parse_quality),
