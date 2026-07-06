@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -136,7 +136,48 @@ def _max_risk(a: RiskLevel, b: RiskLevel) -> RiskLevel:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 策略模型 — 所有字段结构化
+# 共享输入模型 — 所有版本共用
+
+class RuleViolationInput(BaseModel):
+    """单条规则引擎违规"""
+    rule_id: str = ""
+    rule_type: RuleType = RuleType.FORBIDDEN
+    risk_level: RiskLevel = RiskLevel.MEDIUM
+    description: str = ""
+    location: str = ""
+
+
+class BiasFindingInput(BaseModel):
+    """单条参数倾向性发现"""
+    pattern_id: str = ""
+    severity: RiskLevel = RiskLevel.MEDIUM
+    description: str = ""
+    matched_text: str = ""
+    matched_field: str = ""
+
+
+class TrafficLight(str, Enum):
+    GREEN = "green"
+    YELLOW = "yellow"
+    RED = "red"
+
+
+class RoutingInput(BaseModel):
+    """路由审查结果"""
+    traffic_light: TrafficLight = TrafficLight.GREEN
+    skip_llm: bool = False
+
+
+class ParseQuality(str, Enum):
+    OK = "ok"
+    TEXT_LAYER = "text_layer"
+    OCR = "ocr"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 策略类型
 # ═══════════════════════════════════════════════════════════════
 
 class TenantPolicy(BaseModel):
@@ -178,23 +219,49 @@ class UxPolicy(BaseModel):
 
 
 # ═══════════════════════════════════════════════════════════════
-# DecisionInput — 完整决策输入
+# Policy Schema Version — 一经发布不可变
 # ═══════════════════════════════════════════════════════════════
 
-POLICY_SCHEMA_VERSION = "2.0.0"
+class PolicySchemaVersion(str, Enum):
+    """结构化版本标识 — 禁止使用裸字符串 startswith 放行"""
+    V2_0_0 = "2.0.0"
+    V2_1_0 = "2.1.0"
 
 
-class RuleViolationInput(BaseModel):
-    """单条规则引擎违规"""
-    rule_id: str = ""
-    rule_type: RuleType = RuleType.FORBIDDEN
+POLICY_SCHEMA_VERSION = PolicySchemaVersion.V2_1_0.value  # 当前活跃 schema
+
+# ── v2.0.0 frozen input models（hash schema 不可变）──
+
+class LLMViolationInputV2_0(BaseModel, extra="forbid"):
+    """LLM 违规 — v2.0.0 无 requires_human_review 字段"""
+    type: str = ""
     risk_level: RiskLevel = RiskLevel.MEDIUM
-    description: str = ""
-    location: str = ""
+    reason: str = ""
+    validation_error: Optional[str] = None
 
+
+class DecisionInputV2_0(BaseModel, extra="forbid"):
+    """v2.0.0 决策输入 — frozen schema，禁止额外字段"""
+    schema_version: Literal["2.0.0"] = "2.0.0"
+
+    routing: RoutingInput = Field(default_factory=RoutingInput)
+    rule_violations: list[RuleViolationInput] = Field(default_factory=list)
+    bias_findings: list[BiasFindingInput] = Field(default_factory=list)
+    llm_violations: list[LLMViolationInputV2_0] = Field(default_factory=list)
+    parse_quality: ParseQuality = ParseQuality.OK
+    present_sections: set[str] = Field(default_factory=set)
+
+    tenant_policy: TenantPolicy = Field(default_factory=TenantPolicy)
+    platform_policy: PlatformPolicy = Field(default_factory=PlatformPolicy)
+    ux_policy: UxPolicy = Field(default_factory=UxPolicy)
+
+
+# ── 当前活跃模型 (2.1.0) ──
+
+# RuleViolationInput / BiasFindingInput / RoutingInput / ParseQuality 见上方共享定义
 
 class LLMViolationInput(BaseModel):
-    """单条 LLM 违规"""
+    """单条 LLM 违规 — v2.1.0 含 requires_human_review"""
     type: str = ""
     risk_level: RiskLevel = RiskLevel.MEDIUM
     reason: str = ""
@@ -202,38 +269,9 @@ class LLMViolationInput(BaseModel):
     requires_human_review: bool = False
 
 
-class BiasFindingInput(BaseModel):
-    """单条参数倾向性发现"""
-    pattern_id: str = ""
-    severity: RiskLevel = RiskLevel.MEDIUM
-    description: str = ""
-    matched_text: str = ""
-    matched_field: str = ""
-
-
-class TrafficLight(str, Enum):
-    GREEN = "green"
-    YELLOW = "yellow"
-    RED = "red"
-
-
-class RoutingInput(BaseModel):
-    """路由审查结果"""
-    traffic_light: TrafficLight = TrafficLight.GREEN
-    skip_llm: bool = False
-
-
-class ParseQuality(str, Enum):
-    OK = "ok"
-    TEXT_LAYER = "text_layer"
-    OCR = "ocr"
-    PARTIAL = "partial"
-    FAILED = "failed"
-
-
 class DecisionInput(BaseModel):
     """系统唯一决策输入 — 所有影响决策的字段必须在此"""
-    schema_version: str = POLICY_SCHEMA_VERSION
+    schema_version: Literal["2.1.0"] = "2.1.0"
 
     # 证据
     routing: RoutingInput = Field(default_factory=RoutingInput)
@@ -346,16 +384,28 @@ def sha256_hex(data: bytes) -> str:
 class PolicyKernel:
     """系统唯一决策入口。
 
-    输入 DecisionInput，输出 PolicyDecision。
+    输入 DecisionInputV2_0 | DecisionInput，输出 PolicyDecision。
     强制执行优先级 HARD_RULE > PLATFORM > TENANT > UX > LLM。
     每层只能升级，不能降级。
 
     trace_chain[-1].state_after == PolicyDecision final state（刚性不变量）
+
+    版本路由由 Pydantic Literal 强约束：
+    - DecisionInputV2_0 (Literal["2.0.0"]) → _eval_llm_v2_0（旧 LLM 语义，3 分支）
+    - DecisionInput (Literal["2.1.0"]) → _eval_llm_v2_1（新 LLM 语义，4 分支含 requires_human_review）
+    - 其他类型 → TypeError / ValueError fail-closed
     """
 
-    def decide(self, decision_input: DecisionInput) -> PolicyDecision:
-        """唯一决策入口"""
-        di = decision_input
+    def decide(self, decision_input: DecisionInput | DecisionInputV2_0) -> PolicyDecision:
+        """单一公开决策入口 — 根据输入模型类型分派 evaluator。"""
+        if isinstance(decision_input, DecisionInputV2_0):
+            return self._decide_core(decision_input, eval_llm=self._eval_llm_v2_0)
+        if isinstance(decision_input, DecisionInput):
+            return self._decide_core(decision_input, eval_llm=self._eval_llm_v2_1)
+        raise TypeError(f"Unsupported decision input type: {type(decision_input).__name__}")
+
+    def _decide_core(self, di, *, eval_llm) -> PolicyDecision:
+        """共享决策执行链 — 版本化 LLM evaluator 通过参数注入"""
         root_hash = sha256_hex(_canonical_json(di))
 
         trace: list[TraceStep] = []
@@ -373,7 +423,7 @@ class PolicyKernel:
             priority = _PRIORITY_RANK[source]
             state_before = state.model_copy(deep=True)
 
-            proposed, code, params = self._evaluate_layer(source, di, state)
+            proposed, code, params = self._evaluate_layer(source, di, state, eval_llm=eval_llm)
 
             # 升级规则：只能向更严格的方向
             new_action = _max_action(state.action, proposed.action)
@@ -450,11 +500,12 @@ class PolicyKernel:
     # ── 各层评估 ────────────────────────────────────────────
 
     def _evaluate_layer(
-        self, source: PolicySource, di: DecisionInput, current: DecisionState,
+        self, source: PolicySource, di, current: DecisionState,
+        eval_llm,
     ) -> tuple[DecisionState, ReasonCode, dict[str, Any]]:
         """评估单层策略，返回 (提案, 原因码, 原因参数)"""
         handlers = {
-            PolicySource.LLM: self._eval_llm,
+            PolicySource.LLM: lambda di, cur: eval_llm(di, cur),
             PolicySource.UX: self._eval_ux,
             PolicySource.TENANT: self._eval_tenant,
             PolicySource.PLATFORM: self._eval_platform,
@@ -462,9 +513,12 @@ class PolicyKernel:
         }
         return handlers[source](di, current)
 
-    def _eval_llm(
-        self, di: DecisionInput, _current: DecisionState,
+    # ── LLM evaluators — 版本化 ──────────────────────────
+
+    def _eval_llm_v2_0(
+        self, di, _current: DecisionState,
     ) -> tuple[DecisionState, ReasonCode, dict]:
+        """v2.0.0 LLM 评估：3 分支（无 requires_human_review）"""
         if not di.llm_violations:
             return (
                 DecisionState(action=DecisionAction.PASS, risk_level=RiskLevel.LOW, requires_human_review=False),
@@ -472,7 +526,33 @@ class PolicyKernel:
             )
         has_high = any(v.risk_level == RiskLevel.HIGH for v in di.llm_violations)
         has_unverified = any(v.validation_error for v in di.llm_violations)
-        has_explicit_review = any(v.requires_human_review for v in di.llm_violations)
+        if has_high:
+            return (
+                DecisionState(action=DecisionAction.REQUIRE_REVIEW, risk_level=RiskLevel.HIGH, requires_human_review=True),
+                ReasonCode.LLM_HIGH_RISK, {"count": len(di.llm_violations)},
+            )
+        if has_unverified:
+            return (
+                DecisionState(action=DecisionAction.WARN, risk_level=RiskLevel.MEDIUM, requires_human_review=True),
+                ReasonCode.LLM_UNVERIFIED, {"count": len(di.llm_violations)},
+            )
+        return (
+            DecisionState(action=DecisionAction.WARN, risk_level=RiskLevel.MEDIUM, requires_human_review=False),
+            ReasonCode.LLM_HIGH_RISK, {"count": len(di.llm_violations)},
+        )
+
+    def _eval_llm_v2_1(
+        self, di: DecisionInput, _current: DecisionState,
+    ) -> tuple[DecisionState, ReasonCode, dict]:
+        """v2.1.0 LLM 评估：4 分支（含 requires_human_review）"""
+        if not di.llm_violations:
+            return (
+                DecisionState(action=DecisionAction.PASS, risk_level=RiskLevel.LOW, requires_human_review=False),
+                ReasonCode.LLM_NO_ISSUES, {},
+            )
+        has_high = any(v.risk_level == RiskLevel.HIGH for v in di.llm_violations)
+        has_unverified = any(v.validation_error for v in di.llm_violations)
+        has_explicit_review = any(getattr(v, "requires_human_review", False) for v in di.llm_violations)
 
         # 1. high risk → REQUIRE_REVIEW + HIGH + human_review
         if has_high:
@@ -693,7 +773,82 @@ class PolicyKernel:
 # Trace 验证
 # ═══════════════════════════════════════════════════════════════
 
-def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dict:
+# ═══════════════════════════════════════════════════════════════
+# Version routing — 集中式版本分发
+# ═══════════════════════════════════════════════════════════════
+
+_V2_KNOWN = frozenset({PolicySchemaVersion.V2_0_0.value, PolicySchemaVersion.V2_1_0.value})
+
+
+def parse_decision_input_for_version(raw: dict):
+    """根据原始 payload 的 schema_version 选择对应的输入模型。
+
+    - 2.0.0 → DecisionInputV2_0 (extra="forbid")
+    - 2.1.0 → DecisionInput
+    返回 (DecisionInput | DecisionInputV2_0)。
+    未知版本 → ValueError fail-closed。
+    """
+    sv = raw.get("schema_version", "")
+    if sv not in _V2_KNOWN:
+        raise ValueError(f"Unsupported policy schema version: {sv!r}")
+    if sv == PolicySchemaVersion.V2_0_0.value:
+        return DecisionInputV2_0.model_validate(raw)
+    return DecisionInput.model_validate(raw)
+
+
+def verify_trace_for_version(raw_input: dict, raw_decision: dict) -> dict:
+    """版本化 trace 验证 — 解析版本化输入后委托统一 verify_trace。
+
+    - 2.0.0 → DecisionInputV2_0 → verify_trace
+    - 2.1.0 → DecisionInput → verify_trace
+    未知版本 → fail-closed。
+    """
+    di_sv = raw_input.get("schema_version", "")
+    pd_sv = raw_decision.get("schema_version", "")
+
+    if di_sv not in _V2_KNOWN or pd_sv not in _V2_KNOWN:
+        return {
+            "valid": False,
+            "integrity_status": "unsupported_version",
+            "errors": [f"Unsupported schema version: input={di_sv!r}, decision={pd_sv!r}"],
+            "checks": {},
+        }
+    if di_sv != pd_sv:
+        return {
+            "valid": False,
+            "integrity_status": "version_mismatch",
+            "errors": [f"Schema version mismatch: input={di_sv!r}, decision={pd_sv!r}"],
+            "checks": {},
+        }
+
+    kernel = PolicyKernel()
+    if di_sv == PolicySchemaVersion.V2_0_0.value:
+        try:
+            di = DecisionInputV2_0.model_validate(raw_input)
+        except Exception as e:
+            return {"valid": False, "integrity_status": "parse_error",
+                    "errors": [f"2.0.0 parse failed: {e}"], "checks": {}}
+    else:
+        # 2.1.0
+        try:
+            di = DecisionInput.model_validate(raw_input)
+        except Exception as e:
+            return {"valid": False, "integrity_status": "parse_error",
+                    "errors": [f"2.1.0 parse failed: {e}"], "checks": {}}
+
+    pd = PolicyDecision.model_validate(raw_decision)
+    return verify_trace(di, pd)
+
+
+def verify_trace(decision_input: DecisionInput | DecisionInputV2_0, decision: PolicyDecision) -> dict:
+    """验证 PolicyDecision 的完整性 — 语义回放 + SHA-256 链。
+
+    接受 DecisionInputV2_0 或 DecisionInput，统一路由到 kernel.decide()。
+    """
+    return _verify_trace_core(PolicyKernel(), decision_input, decision, PolicyKernel().decide)
+
+
+def _verify_trace_core(kernel, decision_input, decision: PolicyDecision, replay_fn) -> dict:
     """验证 PolicyDecision 的完整性 — 语义回放 + SHA-256 链。
 
     给定 DecisionInput 和当前 policy schema，判断这个 PolicyDecision
@@ -725,7 +880,7 @@ def verify_trace(decision_input: DecisionInput, decision: PolicyDecision) -> dic
 
     # ── 1. Semantic replay ──
     try:
-        expected = PolicyKernel().decide(decision_input)
+        expected = replay_fn(decision_input)
     except Exception as e:
         errors.append(f"replay failed: {e}")
         return {"valid": False, "integrity_status": "replay_error", "errors": errors, "checks": checks}

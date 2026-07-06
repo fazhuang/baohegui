@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.core.policy_kernel import (
     DecisionInput,
+    DecisionInputV2_0,
     DecisionAction,
     DecisionState,
     ParseQuality,
@@ -59,10 +60,9 @@ BACKEND_DIR = str(Path(__file__).resolve().parent.parent)
 class TestPersistencePayloadIntegrity:
     """report_data 中只有一个 _policy_decision，反序列化完整，verify_trace 通过"""
 
-    def _make_payload(self) -> tuple[dict, DecisionInput, PolicyDecision]:
+    def _make_payload(self) -> tuple[dict, DecisionInputV2_0, PolicyDecision]:
         """通过真实 payload 构造函数生成 report_data。"""
-        di = DecisionInput(
-            schema_version="2.0.0",
+        di = DecisionInputV2_0(
             rule_violations=[
                 RuleViolationInput(
                     rule_id="R001", rule_type=RuleType.FORBIDDEN,
@@ -119,7 +119,9 @@ class TestPersistencePayloadIntegrity:
     def test_verify_trace_passes(self):
         """payload 中的 DecisionInput + PolicyDecision 通过 verify_trace"""
         payload, di, pd = self._make_payload()
-        di_reconstructed = DecisionInput.model_validate(payload["_decision_input"])
+        # 版本化解析
+        from app.core.policy_kernel import parse_decision_input_for_version
+        di_reconstructed = parse_decision_input_for_version(payload["_decision_input"])
         pd_reconstructed = PolicyDecision.model_validate(payload["_policy_decision"])
         vr = verify_trace(di_reconstructed, pd_reconstructed)
         assert vr["valid"], f"verify_trace failed: {vr['errors']}"

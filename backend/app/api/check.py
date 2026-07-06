@@ -28,7 +28,8 @@ from app.core.policy_kernel import (
     UxPolicy,
     derive_merge_fields,
     policy_kernel,
-    verify_trace,
+    POLICY_SCHEMA_VERSION,
+    verify_trace as _verify_trace,
 )
 from app.core.security import get_current_user, assert_resource_access
 from app.db.database import get_db
@@ -370,7 +371,7 @@ async def run_compliance_check(
                 )
 
         decision_input = DecisionInput(
-            schema_version="2.0.0",
+            schema_version=POLICY_SCHEMA_VERSION,
             routing=RoutingInput(
                 traffic_light=TrafficLight(routing_result.traffic_light.value),
                 skip_llm=routing_result.skip_llm,
@@ -500,7 +501,7 @@ async def run_compliance_check(
         )
 
         # ── 写入前验证 ──
-        verification = verify_trace(decision_input, policy_decision)
+        verification = _verify_trace(decision_input, policy_decision)
         if not verification["valid"]:
             logger.error(
                 "PolicyDecision 验证失败，拒绝写入 file_id=%d: %s",

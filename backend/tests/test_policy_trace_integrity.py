@@ -341,3 +341,249 @@ class TestSemanticReplay:
         fake.trace_chain[0], fake.trace_chain[4] = fake.trace_chain[4], fake.trace_chain[0]
         result = verify_trace(di, fake)
         assert not result["valid"]
+
+
+# ═══════════════════════════════════════════════════════════════
+# Policy Schema Version — 2.0.0 固定制品回放
+# ═══════════════════════════════════════════════════════════════
+
+import json as _json_mod
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
+
+
+class TestV2_0_FixtureReplay:
+    """固定 2.0.0 制品在当前代码下验证成功"""
+
+    def _load_fixture(self, name):
+        path = FIXTURE_DIR / name
+        with open(path, encoding="utf-8") as f:
+            return _json_mod.load(f)
+
+    def test_fixture_v2_0_verified(self):
+        """固定 2.0.0 制品 → valid True, status verified, hash 与 fixture 完全一致"""
+        fx = self._load_fixture("v2_0_0_verified.json")
+        assert fx["schema_version"] == "2.0.0"
+        assert fx["input_hash"] == fx["_policy_decision"]["input_hash"]
+
+        from app.core.policy_kernel import (
+            DecisionInputV2_0, PolicyDecision,
+            verify_trace_for_version, _V2_KNOWN,
+        )
+        di_raw = fx["_decision_input"]
+        pd_raw = fx["_policy_decision"]
+
+        # 三端版本一致
+        assert di_raw["schema_version"] == "2.0.0"
+        assert pd_raw["schema_version"] == "2.0.0"
+
+        # 版本解析成功（no requires_human_review field）
+        di = DecisionInputV2_0.model_validate(di_raw)
+        pd = PolicyDecision.model_validate(pd_raw)
+        assert di.schema_version == "2.0.0"
+        assert pd.schema_version == "2.0.0"
+
+        # llm_violations 不含 requires_human_review
+        for lv in di.llm_violations:
+            assert not hasattr(lv, "requires_human_review")
+
+        # 版本化验证成功
+        vr = verify_trace_for_version(di_raw, pd_raw)
+        assert vr["valid"], f"verify_trace_for_version failed: {vr['errors']}"
+        assert vr["integrity_status"] == "verified"
+
+        # hash 与 fixture 完全一致
+        assert pd.input_hash == fx["input_hash"]
+        assert pd.decision_hash == fx["decision_hash"]
+
+    def test_v2_0_with_extra_field_fails(self):
+        """2.0.0 输入加入 requires_human_review 字段 → parse 失败 (extra='forbid')"""
+        fx = self._load_fixture("v2_0_0_verified.json")
+        di_raw = fx["_decision_input"].copy()
+        # 注入 requires_human_review
+        di_raw["llm_violations"] = [dict(lv, requires_human_review=True) for lv in di_raw["llm_violations"]]
+
+        from app.core.policy_kernel import DecisionInputV2_0
+        import pytest
+        with pytest.raises(Exception):
+            DecisionInputV2_0.model_validate(di_raw)
+
+    def test_tampered_hash_fails(self):
+        """篡改旧制品 decision_hash → verify_trace_for_version 失败"""
+        fx = self._load_fixture("v2_0_0_verified.json")
+        pd_raw = fx["_policy_decision"].copy()
+        pd_raw["decision_hash"] = "0" * 64
+
+        from app.core.policy_kernel import verify_trace_for_version
+        vr = verify_trace_for_version(fx["_decision_input"], pd_raw)
+        assert not vr["valid"]
+
+    def test_tampered_input_hash_fails(self):
+        """篡改旧制品 input_hash → verify_trace_for_version 失败"""
+        fx = self._load_fixture("v2_0_0_verified.json")
+        pd_raw = fx["_policy_decision"].copy()
+        pd_raw["input_hash"] = "0" * 64
+
+        from app.core.policy_kernel import verify_trace_for_version
+        vr = verify_trace_for_version(fx["_decision_input"], pd_raw)
+        assert not vr["valid"]
+
+    def test_tampered_trace_fails(self):
+        """篡改旧制品 trace → verify_trace_for_version 失败"""
+        fx = self._load_fixture("v2_0_0_verified.json")
+        pd_raw = _json_mod.loads(_json_mod.dumps(fx["_policy_decision"]))
+        if pd_raw.get("trace_chain"):
+            pd_raw["trace_chain"][0]["source"] = "hard_rule"
+
+        from app.core.policy_kernel import verify_trace_for_version
+        vr = verify_trace_for_version(fx["_decision_input"], pd_raw)
+        assert not vr["valid"]
+
+    def test_v2_0_report_passes_verify_report(self):
+        """2.0.0 fixture 经 report.py _try_verify_report 返回 verified"""
+        fx = self._load_fixture("v2_0_0_verified.json")
+
+        # Simulate a DB report object
+        class FakeDBReport:
+            decision_integrity_status = "verified"
+            policy_schema_version = "2.0.0"
+            decision_action = fx["_policy_decision"]["final_action"]
+            decision_risk_level = fx["_policy_decision"]["final_risk_level"]
+            decision_hash = fx["_policy_decision"]["decision_hash"]
+            report_data = _json_mod.dumps({
+                "_decision_input": fx["_decision_input"],
+                "_policy_decision": fx["_policy_decision"],
+            })
+
+        from app.api.report import _try_verify_report
+        result = _try_verify_report(FakeDBReport())
+        assert result is None, f"expected verified (None), got: {result}"
+
+    def test_v2_0_report_passes_export_gate(self):
+        """2.0.0 fixture 通过 verified 导出门禁"""
+        fx = self._load_fixture("v2_0_0_verified.json")
+
+        class FakeDBReport:
+            decision_integrity_status = "verified"
+            policy_schema_version = "2.0.0"
+            decision_action = fx["_policy_decision"]["final_action"]
+            decision_risk_level = fx["_policy_decision"]["final_risk_level"]
+            decision_hash = fx["_policy_decision"]["decision_hash"]
+            report_data = _json_mod.dumps({
+                "_decision_input": fx["_decision_input"],
+                "_policy_decision": fx["_policy_decision"],
+            })
+
+        from app.api.report import require_exportable_verified_report
+        # Should not raise
+        require_exportable_verified_report(FakeDBReport())
+
+
+class TestVersionMismatch:
+    """版本不一致 / 未知版本 → fail-closed"""
+
+    def test_version_mismatch_db_input_decision(self):
+        """DB=2.0.0, input=2.1.0, decision=2.1.0 → integrity_failed"""
+        class FakeDBReport:
+            decision_integrity_status = "verified"
+            policy_schema_version = "2.0.0"
+            decision_action = "pass"
+            decision_risk_level = "low"
+            decision_hash = "0" * 64
+            report_data = _json_mod.dumps({
+                "_decision_input": {"schema_version": "2.1.0", "llm_violations": []},
+                "_policy_decision": {"schema_version": "2.1.0", "final_action": "pass",
+                                     "final_risk_level": "low", "requires_human_review": False,
+                                     "trace_chain": []},
+            })
+
+        from app.api.report import _try_verify_report
+        result = _try_verify_report(FakeDBReport())
+        assert result is not None
+        assert result["status"] == "integrity_failed"
+
+    def test_version_mismatch_db_input_decision_2(self):
+        """DB=2.1.0, input=2.0.0, decision=2.0.0 → integrity_failed"""
+        class FakeDBReport:
+            decision_integrity_status = "verified"
+            policy_schema_version = "2.1.0"
+            decision_action = "pass"
+            decision_risk_level = "low"
+            decision_hash = "0" * 64
+            report_data = _json_mod.dumps({
+                "_decision_input": {"schema_version": "2.0.0"},
+                "_policy_decision": {"schema_version": "2.0.0", "final_action": "pass",
+                                     "final_risk_level": "low", "requires_human_review": False,
+                                     "trace_chain": []},
+            })
+
+        from app.api.report import _try_verify_report
+        result = _try_verify_report(FakeDBReport())
+        assert result is not None
+        assert result["status"] == "integrity_failed"
+
+    def test_input_decision_version_mismatch(self):
+        """input 与 decision 版本不同 → version_mismatch"""
+        from app.core.policy_kernel import verify_trace_for_version
+        vr = verify_trace_for_version(
+            {"schema_version": "2.0.0", "llm_violations": []},
+            {"schema_version": "2.1.0", "final_action": "pass",
+             "final_risk_level": "low", "requires_human_review": False, "trace_chain": []},
+        )
+        assert not vr["valid"]
+        assert vr["integrity_status"] == "version_mismatch"
+
+    def test_unknown_version_fail_closed(self):
+        """未知版本 3.0.0 → unsupported_version"""
+        from app.core.policy_kernel import verify_trace_for_version
+        for sv in ["2.2.0", "3.0.0", "unknown"]:
+            vr = verify_trace_for_version(
+                {"schema_version": sv, "llm_violations": []},
+                {"schema_version": sv, "final_action": "pass",
+                 "final_risk_level": "low", "requires_human_review": False, "trace_chain": []},
+            )
+            assert not vr["valid"], f"expected fail for {sv}"
+            assert vr["integrity_status"] == "unsupported_version", \
+                f"expected unsupported_version for {sv}, got {vr['integrity_status']}"
+
+    def test_new_decision_is_v2_1(self):
+        """新生成决策 schema_version 必须为 2.1.0"""
+        from app.core.policy_kernel import DecisionInput, PolicyKernel
+        d = PolicyKernel().decide(DecisionInput())
+        assert d.schema_version == "2.1.0"
+
+    def test_v2_1_cross_process_hash_determinism(self):
+        """相同 2.1.0 输入 → 跨进程 hash 一致"""
+        from app.core.policy_kernel import DecisionInput, LLMViolationInput, TenantPolicy, PlanTier, PolicyKernel, RiskLevel
+
+        def make():
+            di = DecisionInput(
+                tenant_policy=TenantPolicy(plan_tier=PlanTier.ENTERPRISE,
+                                           requires_human_review_if_llm_only=False),
+                llm_violations=[LLMViolationInput(type="证据不足", risk_level=RiskLevel.MEDIUM,
+                                                  requires_human_review=True)],
+            )
+            return PolicyKernel().decide(di)
+
+        import subprocess, sys, textwrap
+        backend_dir = str(Path(__file__).resolve().parent.parent)
+        code = textwrap.dedent("""
+            from app.core.policy_kernel import DecisionInput, LLMViolationInput, TenantPolicy, PlanTier, PolicyKernel, RiskLevel
+            di = DecisionInput(
+                tenant_policy=TenantPolicy(plan_tier=PlanTier.ENTERPRISE, requires_human_review_if_llm_only=False),
+                llm_violations=[LLMViolationInput(type="证据不足", risk_level=RiskLevel.MEDIUM, requires_human_review=True)],
+            )
+            d = PolicyKernel().decide(di)
+            print(d.decision_hash)
+        """)
+        r = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True, cwd=backend_dir,
+        )
+        assert r.returncode == 0, f"subprocess failed: {r.stderr}"
+        expected_hash = r.stdout.strip()
+        assert expected_hash, "subprocess produced empty hash"
+
+        # In-process must match
+        d = make()
+        assert d.decision_hash == expected_hash, \
+            f"cross-process mismatch: in-process={d.decision_hash}, subprocess={expected_hash}"

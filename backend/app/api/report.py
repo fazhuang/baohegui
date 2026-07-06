@@ -68,13 +68,22 @@ def _load_report_violation_rows(db: Session, report_id: int, report_data: dict) 
 
 
 def _try_verify_report(db_report) -> dict | None:
-    """尝试对 schema v2+ 报告执行完整性校验。
+    """尝试对 schema v2+ 报告执行版本化完整性校验。
 
     返回 None 表示校验通过（verified）；
     返回 dict 表示 non-verified 状态：
       - status = "legacy_unverifiable" → 历史报告，无法校验
       - status = "integrity_failed" → v2 报告但校验失败
     """
+    from app.core.policy_kernel import (
+        PolicySchemaVersion,
+        PolicyDecision,
+        parse_decision_input_for_version,
+        verify_trace_for_version,
+        _V2_KNOWN,
+    )
+
+    db_sv = db_report.policy_schema_version or ""
     integrity_status = db_report.decision_integrity_status or "legacy_unverifiable"
     result = {
         "status": integrity_status,
@@ -84,11 +93,23 @@ def _try_verify_report(db_report) -> dict | None:
         "policy_schema_version": db_report.policy_schema_version,
     }
 
-    if not (db_report.policy_schema_version or "").startswith("2"):
+    # None / 空字符串 → true legacy（从未写 schema version）
+    if not db_sv:
         result["status"] = "legacy_unverifiable"
         result["warning"] = (
-            "本报告为历史版本，缺少决策回放材料，无法执行完整性校验。"
+            "本报告为历史版本，缺少可验证决策链。"
             "合规结论仅供参考，建议重新执行审查。"
+        )
+        result["final_action"] = "unknown"
+        result["final_risk_level"] = "unknown"
+        return result
+
+    # 非已知 v2.x 版本 → integrity_failed（不得伪装成 legacy_unverifiable）
+    if db_sv not in _V2_KNOWN:
+        result["status"] = "integrity_failed"
+        result["warning"] = (
+            f"未知 schema 版本 {db_sv!r}，决策完整性不可验证。"
+            "请重新执行合规审查。"
         )
         result["final_action"] = "unknown"
         result["final_risk_level"] = "unknown"
@@ -103,9 +124,20 @@ def _try_verify_report(db_report) -> dict | None:
         result["warning"] = "缺少 DecisionInput 或 PolicyDecision 回放材料。"
         return result
 
+    # ── 三端版本一致性 ──
+    di_sv = di_raw.get("schema_version", "")
+    pd_sv = pd_raw.get("schema_version", "")
+    if db_sv != di_sv or di_sv != pd_sv:
+        result["status"] = "integrity_failed"
+        result["warning"] = (
+            f"Schema version mismatch: db={db_sv!r}, "
+            f"input={di_sv!r}, decision={pd_sv!r}"
+        )
+        return result
+
+    # ── 版本化解析 ──
     try:
-        from app.core.policy_kernel import DecisionInput, PolicyDecision, verify_trace
-        di = DecisionInput.model_validate(di_raw)
+        di = parse_decision_input_for_version(di_raw)
         pd = PolicyDecision.model_validate(pd_raw)
     except Exception as e:
         result["status"] = "integrity_failed"
@@ -126,7 +158,7 @@ def _try_verify_report(db_report) -> dict | None:
         result["warning"] = "数据库 decision_risk_level 与 PolicyDecision 不一致。"
         return result
 
-    vr = verify_trace(di, pd)
+    vr = verify_trace_for_version(di_raw, pd_raw)
     result["verify_result"] = vr
     if not vr["valid"]:
         result["status"] = "integrity_failed"
