@@ -7,6 +7,9 @@ Create Date: 2026-07-05 16:00:00
 桥接迁移：显式创建 Policy 决策链所依赖的基础表。
 这些表此前由应用运行时 Base.metadata.create_all 隐式创建，
 本迁移使全新数据库仅通过 Alembic 即可完整建库。
+
+迁移所有权：本迁移使用 _bhg_migration_objects 表记录自己创建的表。
+downgrade 只删除登记了所有权的表，不会删除升级前已存在的用户数据表。
 """
 from typing import Sequence, Union
 
@@ -22,16 +25,92 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+_OWNERSHIP_TABLE = "_bhg_migration_objects"
+
+# FK-safe drop order: children before parents.
+# downgrade must iterate this list in order so FK dependencies are respected.
+_DROP_ORDER = (
+    "compliance_reports",
+    "document_sections",
+    "uploaded_files",
+)
+
+
 def _table_exists(conn, table_name: str) -> bool:
     insp = Inspector.from_engine(conn)
     return table_name in insp.get_table_names()
+
+
+def _ensure_ownership_table(conn):
+    """Create the ownership tracking table if it doesn't exist.
+
+    Returns True when this call actually created the table (so the caller
+    knows this migration owns it).  Returns False when the table already
+    existed.
+    """
+    if _table_exists(conn, _OWNERSHIP_TABLE):
+        return False
+    op.create_table(
+        _OWNERSHIP_TABLE,
+        sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+        sa.Column("revision", sa.String(64), nullable=False),
+        sa.Column("object_type", sa.String(32), nullable=False),
+        sa.Column("object_name", sa.String(256), nullable=False),
+        sa.Column("created_by_migration", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("created_at", sa.DateTime, server_default=sa.func.now()),
+    )
+    # Index for fast lookups by revision
+    op.create_index(f"ix_{_OWNERSHIP_TABLE}_revision", _OWNERSHIP_TABLE, ["revision"])
+    return True
+
+
+def _compute_drop_order(conn) -> list[str]:
+    """Return the FK-safe ordered list of tables owned by this migration.
+
+    Reads the ownership table and returns only entries that appear in
+    _DROP_ORDER, in the fixed _DROP_ORDER sequence.  Unknown owned
+    objects (tables not in _DROP_ORDER) are logged and skipped — they
+    should not be silently dropped.
+    """
+    rows = conn.execute(
+        sa.text(
+            f"SELECT object_name FROM {_OWNERSHIP_TABLE} "
+            f"WHERE revision = :rev AND object_type = 'table' AND created_by_migration = 1"
+        ),
+        {"rev": revision},
+    ).fetchall()
+
+    owned = {row[0] for row in rows}
+    ordered = [t for t in _DROP_ORDER if t in owned]
+    unknown = owned - set(_DROP_ORDER)
+    if unknown:
+        import warnings
+        warnings.warn(
+            f"Migration {revision}: unknown owned objects not in drop order, skipping: {sorted(unknown)}"
+        )
+    return ordered
+
+
+def _record_ownership(conn, object_type: str, object_name: str):
+    """Record that this migration created an object."""
+    conn.execute(
+        sa.text(
+            f"INSERT INTO {_OWNERSHIP_TABLE} (revision, object_type, object_name, created_by_migration) "
+            f"VALUES (:rev, :otype, :oname, 1)"
+        ),
+        {"rev": revision, "otype": object_type, "oname": object_name},
+    )
 
 
 def upgrade() -> None:
     conn = op.get_bind()
     dialect = conn.dialect.name
 
+    # Ensure ownership tracking table exists first
+    created_ownership_table = _ensure_ownership_table(conn)
+
     # ── uploaded_files ──
+    created_uploaded = False
     if not _table_exists(conn, "uploaded_files"):
         op.create_table(
             "uploaded_files",
@@ -50,8 +129,10 @@ def upgrade() -> None:
             sa.Column("failed_at", sa.DateTime, nullable=True),
             sa.Column("created_at", sa.DateTime, server_default=sa.func.now()),
         )
+        created_uploaded = True
 
     # ── document_sections ──
+    created_sections = False
     if not _table_exists(conn, "document_sections"):
         op.create_table(
             "document_sections",
@@ -65,8 +146,10 @@ def upgrade() -> None:
             sa.Column("page_end", sa.Integer, nullable=True),
             sa.Column("created_at", sa.DateTime, server_default=sa.func.now()),
         )
+        created_sections = True
 
     # ── compliance_reports ──
+    created_reports = False
     if not _table_exists(conn, "compliance_reports"):
         if dialect == "sqlite":
             # SQLite: raw DDL with inline CHECK constraints
@@ -103,7 +186,7 @@ def upgrade() -> None:
                 )
             """))
         else:
-            # PostgreSQL: use Alembic API with CheckConstraint in the column definitions
+            # PostgreSQL: use Alembic API
             op.create_table(
                 "compliance_reports",
                 sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
@@ -126,7 +209,7 @@ def upgrade() -> None:
                 sa.Column("created_at", sa.DateTime, server_default=sa.func.now()),
                 sa.Column("checked_by", sa.Integer, nullable=True),
             )
-            # Postgres: add CHECK after creation
+            # Postgres: add CHECK constraints after creation (cannot fail silently)
             for ck_name, ck_cond in [
                 ("ck_decision_action",
                  "decision_action IN ('pass', 'warn', 'require_review', 'block') OR decision_action IS NULL"),
@@ -135,14 +218,60 @@ def upgrade() -> None:
                 ("ck_decision_integrity_status",
                  "decision_integrity_status IN ('verified', 'legacy_unverifiable', 'integrity_failed') OR decision_integrity_status IS NULL"),
             ]:
-                try:
-                    op.create_check_constraint(ck_name, "compliance_reports", ck_cond)
-                except Exception:
-                    pass
+                op.create_check_constraint(ck_name, "compliance_reports", ck_cond)
+        created_reports = True
+
+    # ── Record ownership for tables this migration actually created ──
+    # Record in FK-dependency order (children first, parents last) so
+    # downgrade can iterate in order without FK violations.
+    if created_reports:
+        _record_ownership(conn, "table", "compliance_reports")
+    if created_sections:
+        _record_ownership(conn, "table", "document_sections")
+    if created_uploaded:
+        _record_ownership(conn, "table", "uploaded_files")
+    # Record self-ownership: only if this migration created the ownership table
+    if created_ownership_table:
+        _record_ownership(conn, "table", _OWNERSHIP_TABLE)
 
 
 def downgrade() -> None:
     conn = op.get_bind()
-    for table in ["compliance_reports", "document_sections", "uploaded_files"]:
-        if _table_exists(conn, table):
-            op.drop_table(table)
+
+    # Only drop tables that this migration actually created.
+    # Tables that existed before the upgrade have no ownership record
+    # and must not be touched.
+    if _table_exists(conn, _OWNERSHIP_TABLE):
+        owned = _compute_drop_order(conn)
+
+        for table_name in owned:
+            if _table_exists(conn, table_name):
+                op.drop_table(table_name)
+
+        # Check whether this migration owns the ownership table *before*
+        # deleting the ownership records — once the records are gone we
+        # can't tell anymore.
+        owns_ownership_table = 0 < conn.execute(
+            sa.text(
+                f"SELECT COUNT(*) FROM {_OWNERSHIP_TABLE} "
+                f"WHERE object_type = 'table' AND object_name = :otname AND created_by_migration = 1"
+            ),
+            {"otname": _OWNERSHIP_TABLE},
+        ).scalar()
+
+        # Clean up ownership records for this revision
+        conn.execute(
+            sa.text(
+                f"DELETE FROM {_OWNERSHIP_TABLE} WHERE revision = :rev"
+            ),
+            {"rev": revision},
+        )
+
+        # Clean up the ownership table itself only if this migration created it
+        # *and* no rows remain after cleanup.
+        if owns_ownership_table and _table_exists(conn, _OWNERSHIP_TABLE):
+            remaining = conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {_OWNERSHIP_TABLE}")
+            ).scalar()
+            if remaining == 0:
+                op.drop_table(_OWNERSHIP_TABLE)

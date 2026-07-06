@@ -138,17 +138,26 @@ class TestCorruptedReportFailClosed:
 
     @staticmethod
     def _register_and_login(client):
-        import secrets
+        import secrets, time
+        from app.main import _rate_limits
+        _rate_limits.clear()
         email = f"test-corr-{secrets.token_hex(4)}@example.com"
         pw = "Test123456!"
-        resp = client.post("/api/auth/register", json={"username": email, "password": pw, "email": email})
-        if resp.status_code not in (200, 201, 409):
-            raise RuntimeError(f"register failed: {resp.status_code} {resp.text}")
-        # 如果 409（已存在），直接登录
-        if resp.status_code == 409:
-            resp = client.post("/api/auth/login", json={"username": email, "password": pw})
-        token = resp.json()["access_token"]
-        return {"Authorization": f"Bearer {token}"}
+        for _retry in range(5):
+            resp = client.post("/api/auth/register", json={"username": email, "password": pw, "email": email})
+            if resp.status_code == 429:
+                time.sleep(5.0)
+                _rate_limits.clear()
+                continue
+            if resp.status_code not in (200, 201, 409):
+                raise RuntimeError(f"register failed: {resp.status_code} {resp.text}")
+            if resp.status_code == 409:
+                resp = client.post("/api/auth/login", json={"username": email, "password": pw})
+            if resp.status_code != 429:
+                token = resp.json()["access_token"]
+                return {"Authorization": f"Bearer {token}"}
+            time.sleep(5.0)
+        raise RuntimeError("register/login failed after 5 retries")
 
     def _create_docx_file(self):
         doc = Document()
@@ -487,6 +496,537 @@ class TestDatabaseConstraints:
 # 7. 平台章节矩阵 — present_sections 精确断言
 # ═══════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════
+# 8. 老库升级约束 — legacy DB → upgrade head → 非法值被拒绝
+# ═══════════════════════════════════════════════════════════════
+
+class TestLegacyUpgradeConstraints:
+    """旧 SQLite 数据库（无决策列，有历史数据）升级后约束生效"""
+
+    def _create_legacy_db(self, db_path: str) -> None:
+        """创建带历史数据的旧数据库，stamp 为 d4e5f6a7b8c9。"""
+        try:
+            os.remove(db_path)
+        except FileNotFoundError:
+            pass
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE uploaded_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    filename TEXT NOT NULL,
+                    file_size INTEGER NOT NULL,
+                    file_hash TEXT NOT NULL,
+                    page_count INTEGER,
+                    storage_path TEXT NOT NULL,
+                    status TEXT DEFAULT 'uploaded',
+                    error_message TEXT,
+                    failed_at TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE document_sections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES uploaded_files(id),
+                    section_type TEXT NOT NULL,
+                    section_number TEXT,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    page_start INTEGER,
+                    page_end INTEGER,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE compliance_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES uploaded_files(id),
+                    total_score REAL NOT NULL DEFAULT 0,
+                    section_score REAL,
+                    keyword_score REAL,
+                    forbidden_score REAL,
+                    semantic_score REAL,
+                    violation_count INTEGER DEFAULT 0,
+                    report_data TEXT,
+                    report_pdf_path TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    checked_by INTEGER
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE alembic_version (version_num VARCHAR(32))
+            """)
+            conn.execute("INSERT INTO alembic_version VALUES ('d4e5f6a7b8c9')")
+            # 历史数据
+            conn.execute("INSERT INTO uploaded_files (id, user_id, filename, file_size, file_hash, storage_path) VALUES (1, 1, 'legacy.pdf', 2048, 'abc123', '/tmp/legacy.pdf')")
+            conn.execute("INSERT INTO compliance_reports (id, file_id, total_score) VALUES (1, 1, 85.5)")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _run_upgrade(self, db_path: str) -> bool:
+        db_url = f"sqlite:///{db_path}"
+        env = {**os.environ, "DATABASE_URL": db_url, "BHG_DATABASE_URL": db_url}
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True, text=True, env=env, cwd=BACKEND_DIR,
+        )
+        return result.returncode == 0
+
+    def test_legacy_invalid_action_rejected(self):
+        """旧库升级后 decision_action='anything' → IntegrityError"""
+        db_path = "/private/tmp/bhg_r4_legacy_action.db"
+        self._create_legacy_db(db_path)
+        assert self._run_upgrade(db_path), "upgrade failed"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute("INSERT INTO compliance_reports (file_id, total_score, decision_action) VALUES (1, 100, 'anything')")
+        finally:
+            conn.close()
+            os.remove(db_path)
+
+    def test_legacy_invalid_risk_level_rejected(self):
+        """旧库升级后 decision_risk_level='super_high' → IntegrityError"""
+        db_path = "/private/tmp/bhg_r4_legacy_risk.db"
+        self._create_legacy_db(db_path)
+        assert self._run_upgrade(db_path), "upgrade failed"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute("INSERT INTO compliance_reports (file_id, total_score, decision_risk_level) VALUES (1, 100, 'super_high')")
+        finally:
+            conn.close()
+            os.remove(db_path)
+
+    def test_legacy_invalid_integrity_status_rejected(self):
+        """旧库升级后 integrity_status='trusted' → IntegrityError"""
+        db_path = "/private/tmp/bhg_r4_legacy_istatus.db"
+        self._create_legacy_db(db_path)
+        assert self._run_upgrade(db_path), "upgrade failed"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute("INSERT INTO compliance_reports (file_id, total_score, decision_integrity_status) VALUES (1, 100, 'trusted')")
+        finally:
+            conn.close()
+            os.remove(db_path)
+
+    def test_legacy_invalid_requires_human_review_rejected(self):
+        """旧库升级后 decision_requires_human_review=2 → IntegrityError（SQLite Boolean 语义）"""
+        db_path = "/private/tmp/bhg_r4_legacy_bool.db"
+        self._create_legacy_db(db_path)
+        assert self._run_upgrade(db_path), "upgrade failed"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute("INSERT INTO compliance_reports (file_id, total_score, decision_requires_human_review) VALUES (1, 100, 2)")
+        finally:
+            conn.close()
+            os.remove(db_path)
+
+    def test_legacy_historical_data_preserved(self):
+        """旧库升级后历史行未丢失。"""
+        db_path = "/private/tmp/bhg_r4_legacy_hist.db"
+        self._create_legacy_db(db_path)
+        assert self._run_upgrade(db_path), "upgrade failed"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute("SELECT id, total_score, decision_action, decision_risk_level, decision_integrity_status FROM compliance_reports WHERE id=1").fetchone()
+            assert row is not None, "historical row lost"
+            assert row[0] == 1
+            assert row[1] == 85.5
+            assert row[2] is None, f"decision_action backfilled: {row[2]}"
+            assert row[3] is None, f"decision_risk_level backfilled: {row[3]}"
+            assert row[4] == "legacy_unverifiable", f"expected legacy_unverifiable, got {row[4]}"
+        finally:
+            conn.close()
+            os.remove(db_path)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 9. 老库 downgrade 保护 — 核心表不被删除
+# ═══════════════════════════════════════════════════════════════
+
+class TestLegacyDowngradeProtection:
+    """升级前已存在的表，downgrade 后仍存在且数据完好"""
+
+    def _create_legacy_db(self, db_path: str) -> None:
+        try:
+            os.remove(db_path)
+        except FileNotFoundError:
+            pass
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE uploaded_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL, filename TEXT NOT NULL,
+                    file_size INTEGER NOT NULL, file_hash TEXT NOT NULL,
+                    page_count INTEGER, storage_path TEXT NOT NULL,
+                    status TEXT DEFAULT 'uploaded', error_message TEXT,
+                    failed_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE document_sections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES uploaded_files(id),
+                    section_type TEXT NOT NULL, section_number TEXT,
+                    title TEXT NOT NULL, content TEXT NOT NULL,
+                    page_start INTEGER, page_end INTEGER,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE compliance_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES uploaded_files(id),
+                    total_score REAL NOT NULL DEFAULT 0,
+                    section_score REAL, keyword_score REAL,
+                    forbidden_score REAL, semantic_score REAL,
+                    violation_count INTEGER DEFAULT 0,
+                    report_data TEXT, report_pdf_path TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    checked_by INTEGER
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE alembic_version (version_num VARCHAR(32))
+            """)
+            conn.execute("INSERT INTO alembic_version VALUES ('d4e5f6a7b8c9')")
+            conn.execute("INSERT INTO uploaded_files (id, user_id, filename, file_size, file_hash, storage_path) VALUES (1, 1, 'original.pdf', 4096, 'orig_hash', '/tmp/orig.pdf')")
+            conn.execute("INSERT INTO document_sections (id, file_id, section_type, title, content) VALUES (1, 1, 'spec', '技术要求', 'section content')")
+            conn.execute("INSERT INTO compliance_reports (id, file_id, total_score) VALUES (1, 1, 92.0)")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_downgrade_preserves_preexisting_tables(self):
+        """旧库 upgrade head → downgrade d4e5f6a7b8c9 → 原表和数据都在"""
+        db_path = "/private/tmp/bhg_r4_downgrade_protect.db"
+        self._create_legacy_db(db_path)
+
+        db_url = f"sqlite:///{db_path}"
+        env = {**os.environ, "DATABASE_URL": db_url, "BHG_DATABASE_URL": db_url}
+
+        # upgrade head
+        r = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True, text=True, env=env, cwd=BACKEND_DIR,
+        )
+        assert r.returncode == 0, f"upgrade failed: {r.stderr}"
+
+        # downgrade back
+        r = subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "d4e5f6a7b8c9"],
+            capture_output=True, text=True, env=env, cwd=BACKEND_DIR,
+        )
+        assert r.returncode == 0, f"downgrade failed: {r.stderr}"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+
+            assert "uploaded_files" in tables, "uploaded_files was dropped by downgrade!"
+            assert "document_sections" in tables, "document_sections was dropped by downgrade!"
+            assert "compliance_reports" in tables, "compliance_reports was dropped by downgrade!"
+
+            # 原始行完全保留
+            uf = conn.execute("SELECT id, filename, file_size FROM uploaded_files WHERE id=1").fetchone()
+            assert uf is not None
+            assert uf[1] == "original.pdf"
+            assert uf[2] == 4096
+
+            ds = conn.execute("SELECT id, title, content FROM document_sections WHERE id=1").fetchone()
+            assert ds is not None
+            assert ds[1] == "技术要求"
+
+            cr = conn.execute("SELECT id, total_score FROM compliance_reports WHERE id=1").fetchone()
+            assert cr is not None
+            assert cr[1] == 92.0
+
+            # alembic_version 正确回退
+            rev = conn.execute("SELECT version_num FROM alembic_version").fetchone()
+            assert rev[0] == "d4e5f6a7b8c9", f"expected d4e5f6a7b8c9, got {rev[0]}"
+        finally:
+            conn.close()
+            os.remove(db_path)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 10. 空库 downgrade — 所有权表生效，只删除迁移创建的表
+# ═══════════════════════════════════════════════════════════════
+
+class TestFreshDowngrade:
+    """空库 upgrade head → downgrade → 只删除有所有权的表"""
+
+    def test_fresh_downgrade_drops_owned_tables(self):
+        """空库 upgrade head 后 downgrade 到 d4e5f6a7b8c9，核心表被删除"""
+        db_path = "/private/tmp/bhg_r4_fresh_downgrade.db"
+        try:
+            os.remove(db_path)
+        except FileNotFoundError:
+            pass
+
+        db_url = f"sqlite:///{db_path}"
+        env = {**os.environ, "DATABASE_URL": db_url, "BHG_DATABASE_URL": db_url}
+
+        # upgrade head
+        r = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True, text=True, env=env, cwd=BACKEND_DIR,
+        )
+        assert r.returncode == 0, f"upgrade failed: {r.stderr}"
+
+        # downgrade to d4e5f6a7b8c9
+        r = subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "d4e5f6a7b8c9"],
+            capture_output=True, text=True, env=env, cwd=BACKEND_DIR,
+        )
+        assert r.returncode == 0, f"downgrade failed: {r.stderr}"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+
+            # 桥接迁移创建的表被删除
+            assert "uploaded_files" not in tables, "uploaded_files should be dropped"
+            assert "document_sections" not in tables, "document_sections should be dropped"
+            assert "compliance_reports" not in tables, "compliance_reports should be dropped"
+
+            # 所有权表也被清理
+            assert "_bhg_migration_objects" not in tables, "ownership table should be cleaned up"
+
+            # alembic_version 正确
+            rev = conn.execute("SELECT version_num FROM alembic_version").fetchone()
+            assert rev[0] == "d4e5f6a7b8c9", f"wrong revision: {rev[0]}"
+        finally:
+            conn.close()
+            os.remove(db_path)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 11. legacy detail 白名单 — 不含 score/violations/merge
+# ═══════════════════════════════════════════════════════════════
+
+class TestLegacyDetailWhitelist:
+    """legacy_unverifiable 报告 detail 只返回白名单元数据"""
+
+    @pytest.fixture
+    def client(self):
+        return TestClient(app)
+
+    @staticmethod
+    def _register_and_login(client):
+        import base64, json as _j, secrets, time
+        # Clear rate limiter from prior test classes
+        from app.main import _rate_limits
+        _rate_limits.clear()
+        email = f"test-legacy-{secrets.token_hex(4)}@example.com"
+        pw = "Test123456!"
+        for _retry in range(5):
+            resp = client.post("/api/auth/register", json={"username": email, "password": pw, "email": email})
+            if resp.status_code == 429:
+                time.sleep(5.0)
+                _rate_limits.clear()
+                continue
+            if resp.status_code == 409:
+                resp = client.post("/api/auth/login", json={"username": email, "password": pw})
+            data = resp.json()
+            if "access_token" in data:
+                token = data["access_token"]
+                payload_b64 = token.split(".")[1]
+                payload_b64 += "=" * (4 - len(payload_b64) % 4)
+                payload = _j.loads(base64.urlsafe_b64decode(payload_b64))
+                return {"Authorization": f"Bearer {token}"}, payload["sub"]
+            time.sleep(5.0)
+        raise RuntimeError("register/login failed after 5 retries")
+
+    def test_legacy_detail_whitelist_no_scores(self, client):
+        """legacy 报告 detail 不含 total_score/section_scores/规则/merge"""
+        h, user_id = self._register_and_login(client)
+
+        from app.db.database import SessionLocal
+        from app.models.document import ComplianceReport
+        db = SessionLocal()
+        try:
+            # 手工插入 legacy 报告
+            report = ComplianceReport(
+                file_id=1,
+                total_score=99.0,
+                section_score=95.0,
+                keyword_score=90.0,
+                forbidden_score=85.0,
+                semantic_score=80.0,
+                violation_count=5,
+                report_data=_json.dumps({
+                    "total_score": 99.0,
+                    "section_score": 95.0,
+                    "rule_violations": [{"rule_id": "R001", "description": "bad"}],
+                    "llm_violations": [{"rule_id": "L001", "description": "semantic"}],
+                    "_merge_result": {"merged": True},
+                    "final_action": "pass",
+                    "final_risk_level": "low",
+                    "high_risk_count": 3,
+                    "medium_risk_count": 2,
+                    "low_risk_count": 1,
+                }),
+                decision_integrity_status="legacy_unverifiable",
+                decision_action=None,
+                decision_risk_level=None,
+                decision_hash=None,
+                policy_schema_version=None,
+                checked_by=int(user_id),  # actual user id from JWT
+            )
+            db.add(report)
+            db.commit()
+            report_id = report.id
+        finally:
+            db.close()
+
+        resp = client.get(f"/api/report/{report_id}", headers=h)
+        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+
+        # 白名单字段存在
+        assert "report_id" in data
+        assert "file_id" in data
+
+        # 黑名单字段不存在
+        assert "total_score" not in data, f"total_score leaked: {data.get('total_score')}"
+        assert "section_score" not in data, f"section_score leaked"
+        assert "keyword_score" not in data, f"keyword_score leaked"
+        assert "forbidden_score" not in data, f"forbidden_score leaked"
+        assert "semantic_score" not in data, f"semantic_score leaked"
+        assert "rule_violations" not in data, f"rule_violations leaked"
+        assert "llm_violations" not in data, f"llm_violations leaked"
+        assert "_merge_result" not in data, f"_merge_result leaked"
+        assert "high_risk_count" not in data, f"high_risk_count leaked"
+        assert "medium_risk_count" not in data, f"medium_risk_count leaked"
+
+        # integrity 元数据
+        assert data.get("final_action") == "unknown"
+        assert data.get("final_risk_level") == "unknown"
+        assert data["_integrity"]["status"] == "legacy_unverifiable"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 12. legacy PDF/Excel 409
+# ═══════════════════════════════════════════════════════════════
+
+class TestLegacyExport409:
+    """legacy_unverifiable 报告 PDF/Excel 均返回 409"""
+
+    @pytest.fixture
+    def auth(self):
+        """Fixture: register/login once, shared across both test methods."""
+        from app.main import _rate_limits
+        # Clear rate limits from prior test classes
+        _rate_limits.clear()
+        import json as _j, base64, secrets, time
+        client = TestClient(app)
+        email = f"test-legacy-exp-{secrets.token_hex(4)}@example.com"
+        pw = "Test123456!"
+        for _retry in range(5):
+            resp = client.post("/api/auth/register", json={"username": email, "password": pw, "email": email})
+            if resp.status_code == 429:
+                time.sleep(5.0)
+                _rate_limits.clear()
+                continue
+            if resp.status_code == 409:
+                resp = client.post("/api/auth/login", json={"username": email, "password": pw})
+            data = resp.json()
+            if "access_token" in data:
+                token = data["access_token"]
+                payload_b64 = token.split(".")[1]
+                payload_b64 += "=" * (4 - len(payload_b64) % 4)
+                payload = _j.loads(base64.urlsafe_b64decode(payload_b64))
+                return {"client": client, "headers": {"Authorization": f"Bearer {token}"}, "user_id": payload["sub"]}
+            time.sleep(5.0)
+        raise RuntimeError("register/login failed after 5 retries")
+
+    def _create_legacy_report(self, db, user_id):
+        from app.models.document import ComplianceReport, UploadedFile
+        # Ensure a minimal uploaded_files row exists for FK
+        uf = db.query(UploadedFile).filter(UploadedFile.id == 1).first()
+        if not uf:
+            uf = UploadedFile(
+                id=1, user_id=int(user_id), filename="dummy.pdf",
+                file_size=100, file_hash="dummy_hash", storage_path="/tmp/dummy.pdf",
+            )
+            db.add(uf)
+            db.flush()
+        report = ComplianceReport(
+            file_id=1,
+            total_score=99.0,
+            section_score=95.0,
+            report_data=_json.dumps({"total_score": 99, "rule_violations": [{"id": "R001"}]}),
+            decision_integrity_status="legacy_unverifiable",
+            decision_action=None,
+            decision_risk_level=None,
+            decision_hash=None,
+            policy_schema_version=None,
+            checked_by=int(user_id),
+        )
+        db.add(report)
+        db.commit()
+        return report.id
+
+    def test_legacy_pdf_409(self, auth):
+        """legacy → PDF 409"""
+        client = auth["client"]
+        h = auth["headers"]
+        user_id = auth["user_id"]
+
+        from app.db.database import SessionLocal
+        db = SessionLocal()
+        try:
+            report_id = self._create_legacy_report(db, user_id)
+        finally:
+            db.close()
+
+        resp = client.get(f"/api/report/{report_id}/pdf", headers=h)
+        assert resp.status_code == 409, f"expected 409 for legacy PDF, got {resp.status_code}: {resp.text}"
+        detail = resp.json()["detail"]
+        assert detail["integrity_status"] == "legacy_unverifiable"
+
+    def test_legacy_excel_409(self, auth):
+        """legacy → Excel 409"""
+        client = auth["client"]
+        h = auth["headers"]
+        user_id = auth["user_id"]
+
+        from app.db.database import SessionLocal
+        db = SessionLocal()
+        try:
+            report_id = self._create_legacy_report(db, user_id)
+        finally:
+            db.close()
+
+        resp = client.get(f"/api/report/{report_id}/export", headers=h)
+        assert resp.status_code == 409, f"expected 409 for legacy Excel, got {resp.status_code}: {resp.text}"
+        detail = resp.json()["detail"]
+        assert detail["integrity_status"] == "legacy_unverifiable"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 7. 平台章节矩阵 — present_sections 精确断言
+# ═══════════════════════════════════════════════════════════════
+
 class TestPlatformSectionMatrix:
     """required_sections 与 present_sections 的精确矩阵"""
 
@@ -564,3 +1104,298 @@ class TestPlatformSectionMatrix:
         d = self.kernel.decide(di)
         plat = [t for t in d.trace_chain if t.source.value == "platform"][0]
         assert plat.reason_code == ReasonCode.PLATFORM_PASSTHROUGH
+
+
+# ═══════════════════════════════════════════════════════════════
+# 13. 老库合法默认值 — 省略 integrity_status 的 INSERT 成功
+# ═══════════════════════════════════════════════════════════════
+
+class TestLegacyDefaultValue:
+    """老库升级后省略 decision_integrity_status 列的 INSERT 必须成功"""
+
+    def test_legacy_omit_integrity_insert_success(self):
+        """老库 upgrade head 后省略 integrity_status INSERT → 成功 → SELECT = legacy_unverifiable"""
+        db_path = "/private/tmp/bhg_r5_legacy_default.db"
+        try:
+            os.remove(db_path)
+        except FileNotFoundError:
+            pass
+
+        # 创建旧库
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE uploaded_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL, filename TEXT NOT NULL,
+                    file_size INTEGER NOT NULL, file_hash TEXT NOT NULL,
+                    page_count INTEGER, storage_path TEXT NOT NULL,
+                    status TEXT DEFAULT 'uploaded', error_message TEXT,
+                    failed_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE document_sections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES uploaded_files(id),
+                    section_type TEXT NOT NULL, section_number TEXT,
+                    title TEXT NOT NULL, content TEXT NOT NULL,
+                    page_start INTEGER, page_end INTEGER,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE compliance_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES uploaded_files(id),
+                    total_score REAL NOT NULL DEFAULT 0,
+                    section_score REAL, keyword_score REAL,
+                    forbidden_score REAL, semantic_score REAL,
+                    violation_count INTEGER DEFAULT 0,
+                    report_data TEXT, report_pdf_path TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    checked_by INTEGER
+                )
+            """)
+            conn.execute("CREATE TABLE alembic_version (version_num VARCHAR(32))")
+            conn.execute("INSERT INTO alembic_version VALUES ('d4e5f6a7b8c9')")
+            conn.execute("INSERT INTO uploaded_files (id, user_id, filename, file_size, file_hash, storage_path) VALUES (1, 1, 'test.pdf', 1024, 'abc', '/tmp/test.pdf')")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # upgrade head
+        db_url = f"sqlite:///{db_path}"
+        env = {**os.environ, "DATABASE_URL": db_url, "BHG_DATABASE_URL": db_url}
+        r = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True, text=True, env=env, cwd=BACKEND_DIR,
+        )
+        assert r.returncode == 0, f"upgrade failed: {r.stderr}"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            # 验证 DDL 不含三重引号
+            schema = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='compliance_reports'"
+            ).fetchone()[0]
+            assert "DEFAULT '''legacy_unverifiable'''" not in schema, (
+                f"triple-quoted default in DDL: {schema}"
+            )
+
+            # 合法 INSERT 省略 decision_integrity_status → 必须成功
+            conn.execute(
+                "INSERT INTO compliance_reports (file_id, total_score, decision_action, "
+                "decision_risk_level, decision_requires_human_review) "
+                "VALUES (1, 100, 'pass', 'low', 0)"
+            )
+            conn.commit()
+
+            # SELECT 值严格等于 legacy_unverifiable（不含引号字符）
+            row = conn.execute(
+                "SELECT decision_integrity_status FROM compliance_reports WHERE total_score=100"
+            ).fetchone()
+            assert row is not None, "row not found after INSERT"
+            assert row[0] == "legacy_unverifiable", (
+                f"expected 'legacy_unverifiable', got {row[0]!r}"
+            )
+            # 确认不含引号字符
+            assert "'" not in row[0], f"value contains quote char: {row[0]!r}"
+        finally:
+            conn.close()
+            os.remove(db_path)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 14. 删除顺序单元测试
+# ═══════════════════════════════════════════════════════════════
+
+class TestDropOrderUnit:
+    """_compute_drop_order 纯函数按 FK 安全顺序返回表名"""
+
+    # 必须与 bridge_core_reports 中 _DROP_ORDER 保持同步
+    _DROP_ORDER = (
+        "compliance_reports",
+        "document_sections",
+        "uploaded_files",
+    )
+
+    def _compute_drop_order(self, owned: set[str]) -> list[str]:
+        """提取的纯排序逻辑：只返回 _DROP_ORDER 中的 owned 表，按 _DROP_ORDER 顺序"""
+        ordered = [t for t in self._DROP_ORDER if t in owned]
+        unknown = owned - set(self._DROP_ORDER)
+        if unknown:
+            import warnings
+            warnings.warn(
+                f"unknown owned objects not in drop order, skipping: {sorted(unknown)}"
+            )
+        return ordered
+
+    def test_drop_order_fk_safe(self):
+        """owned 含三个核心表 → 返回 child-first 顺序"""
+        result = self._compute_drop_order(
+            {"compliance_reports", "document_sections", "uploaded_files"}
+        )
+        assert result == [
+            "compliance_reports",
+            "document_sections",
+            "uploaded_files",
+        ], f"unexpected order: {result}"
+
+    def test_unknown_objects_not_silently_dropped(self):
+        """_DROP_ORDER 中不存在的 owned 对象不会被列入返回列表"""
+        result = self._compute_drop_order(
+            {"some_unknown_table", "compliance_reports"}
+        )
+        assert result == ["compliance_reports"]
+        assert "some_unknown_table" not in result
+
+
+# ═══════════════════════════════════════════════════════════════
+# 15. SQLite 外键开启回滚
+# ═══════════════════════════════════════════════════════════════
+
+class TestSqliteFKRollback:
+    """SQLite PRAGMA foreign_keys=ON 下 upgrade → downgrade 成功"""
+
+    def test_fresh_upgrade_downgrade_with_fk_on(self):
+        """空库 upgrade head → downgrade d4e5f6a7b8c9 在 FK ON 下成功"""
+        db_path = "/private/tmp/bhg_r5_fk_rollback.db"
+        try:
+            os.remove(db_path)
+        except FileNotFoundError:
+            pass
+
+        db_url = f"sqlite:///{db_path}"
+        env = {**os.environ, "DATABASE_URL": db_url, "BHG_DATABASE_URL": db_url}
+
+        # upgrade head
+        r = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True, text=True, env=env, cwd=BACKEND_DIR,
+        )
+        assert r.returncode == 0, f"upgrade failed: {r.stderr}"
+
+        # Verify FK ON before downgrade
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            fk_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            assert fk_on == 1, "foreign_keys not ON"
+        finally:
+            conn.close()
+
+        # downgrade
+        r = subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "d4e5f6a7b8c9"],
+            capture_output=True, text=True, env=env, cwd=BACKEND_DIR,
+        )
+        assert r.returncode == 0, f"downgrade failed: {r.stderr}"
+
+        os.remove(db_path)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 16. 预先存在的 ownership table
+# ═══════════════════════════════════════════════════════════════
+
+class TestPreExistingOwnershipTable:
+    """升级前已有空 _bhg_migration_objects → upgrade/downgrade 后仍存在"""
+
+    def test_preexisting_empty_ownership_table_survives(self):
+        """预先存在的空 ownership table 不因 downgrade 被删除"""
+        db_path = "/private/tmp/bhg_r5_preexist_owner.db"
+        try:
+            os.remove(db_path)
+        except FileNotFoundError:
+            pass
+
+        # 创建旧库 + 空的 ownership table
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE uploaded_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL, filename TEXT NOT NULL,
+                    file_size INTEGER NOT NULL, file_hash TEXT NOT NULL,
+                    page_count INTEGER, storage_path TEXT NOT NULL,
+                    status TEXT DEFAULT 'uploaded', error_message TEXT,
+                    failed_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE document_sections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES uploaded_files(id),
+                    section_type TEXT NOT NULL, section_number TEXT,
+                    title TEXT NOT NULL, content TEXT NOT NULL,
+                    page_start INTEGER, page_end INTEGER,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE compliance_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES uploaded_files(id),
+                    total_score REAL NOT NULL DEFAULT 0,
+                    section_score REAL, keyword_score REAL,
+                    forbidden_score REAL, semantic_score REAL,
+                    violation_count INTEGER DEFAULT 0,
+                    report_data TEXT, report_pdf_path TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    checked_by INTEGER
+                )
+            """)
+            # 预先存在的空 ownership table
+            conn.execute("""
+                CREATE TABLE _bhg_migration_objects (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    revision VARCHAR(64) NOT NULL,
+                    object_type VARCHAR(32) NOT NULL,
+                    object_name VARCHAR(256) NOT NULL,
+                    created_by_migration BOOLEAN NOT NULL DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("CREATE TABLE alembic_version (version_num VARCHAR(32))")
+            conn.execute("INSERT INTO alembic_version VALUES ('d4e5f6a7b8c9')")
+            conn.execute("INSERT INTO uploaded_files (id, user_id, filename, file_size, file_hash, storage_path) VALUES (1, 1, 'test.pdf', 1024, 'abc', '/tmp/test.pdf')")
+            conn.commit()
+        finally:
+            conn.close()
+
+        db_url = f"sqlite:///{db_path}"
+        env = {**os.environ, "DATABASE_URL": db_url, "BHG_DATABASE_URL": db_url}
+
+        # upgrade head
+        r = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True, text=True, env=env, cwd=BACKEND_DIR,
+        )
+        assert r.returncode == 0, f"upgrade failed: {r.stderr}"
+
+        # downgrade
+        r = subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "d4e5f6a7b8c9"],
+            capture_output=True, text=True, env=env, cwd=BACKEND_DIR,
+        )
+        assert r.returncode == 0, f"downgrade failed: {r.stderr}"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+
+            # 原表仍存在
+            assert "uploaded_files" in tables, "uploaded_files missing after downgrade"
+            assert "document_sections" in tables, "document_sections missing after downgrade"
+            assert "compliance_reports" in tables, "compliance_reports missing after downgrade"
+
+            # 预先存在的 ownership table 必须仍存在（不能被删除）
+            assert "_bhg_migration_objects" in tables, (
+                "pre-existing _bhg_migration_objects was deleted!"
+            )
+        finally:
+            conn.close()
+            os.remove(db_path)

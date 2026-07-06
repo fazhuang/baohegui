@@ -27,6 +27,14 @@ _INTEGRITY_FAILED_409 = HTTPException(
             "message": "决策完整性校验失败，本报告结论可能已被篡改。请重新执行合规审查。"},
 )
 
+_LEGACY_UNVERIFIABLE_409 = HTTPException(
+    status_code=status.HTTP_409_CONFLICT,
+    detail={
+        "integrity_status": "legacy_unverifiable",
+        "message": "历史报告缺少可验证决策链，请重新执行审查后导出",
+    },
+)
+
 
 def _load_report_violation_rows(db: Session, report_id: int, report_data: dict) -> list[dict]:
     """优先读取独立违规表，缺失时回退到 report_data 内的明细。"""
@@ -62,8 +70,10 @@ def _load_report_violation_rows(db: Session, report_id: int, report_data: dict) 
 def _try_verify_report(db_report) -> dict | None:
     """尝试对 schema v2+ 报告执行完整性校验。
 
-    返回 None 表示校验通过；
-    返回 dict 表示 _integrity 信息（status=integrity_failed 时调用方应拒绝返回结论）。
+    返回 None 表示校验通过（verified）；
+    返回 dict 表示 non-verified 状态：
+      - status = "legacy_unverifiable" → 历史报告，无法校验
+      - status = "integrity_failed" → v2 报告但校验失败
     """
     integrity_status = db_report.decision_integrity_status or "legacy_unverifiable"
     result = {
@@ -130,14 +140,53 @@ def _try_verify_report(db_report) -> dict | None:
     return None  # 校验通过
 
 
-def _build_legacy_report_dict(db_report, report_dict: dict, integrity: dict) -> dict:
-    """legacy_unverifiable 报告：返回元数据但不返回合规结论。"""
-    report_dict["_integrity"] = integrity
-    report_dict["_integrity"]["final_action"] = "unknown"
-    report_dict["_integrity"]["final_risk_level"] = "unknown"
-    report_dict["final_action"] = "unknown"
-    report_dict["final_risk_level"] = "unknown"
-    return report_dict
+def require_exportable_verified_report(db_report) -> None:
+    """统一门禁：PDF/Excel 共用。
+
+    - legacy_unverifiable → 409，禁止导出
+    - integrity_failed → 409，禁止导出
+    - verified → 通过（不抛异常）
+    """
+    integrity = _try_verify_report(db_report)
+    if integrity is None:
+        return  # verified
+    if integrity["status"] == "integrity_failed":
+        raise _INTEGRITY_FAILED_409
+    if integrity["status"] == "legacy_unverifiable":
+        raise _LEGACY_UNVERIFIABLE_409
+    # defensive: any other non-verified status
+    raise _INTEGRITY_FAILED_409
+
+
+# ── 白名单：legacy_unverifiable report detail 可返回的字段 ──
+_LEGACY_WHITELIST_KEYS = frozenset({
+    "report_id", "file_id", "file_name",
+    "check_time", "created_at",
+    "integrity_status", "final_action", "final_risk_level",
+})
+
+
+def _build_legacy_detail(db_report) -> dict:
+    """为 legacy_unverifiable 报告构造白名单-only 响应。"""
+    integrity_info = {
+        "status": "legacy_unverifiable",
+        "final_action": "unknown",
+        "final_risk_level": "unknown",
+        "warning": (
+            "本报告为历史版本，缺少可验证决策链。请重新执行审查以获取正式合规结论。"
+        ),
+    }
+    return {
+        "report_id": db_report.id,
+        "file_id": db_report.file_id,
+        "file_name": db_report.report_data and json.loads(db_report.report_data).get("file_name", ""),
+        "check_time": None,
+        "created_at": db_report.created_at.isoformat() if db_report.created_at else None,
+        "_integrity": integrity_info,
+        "integrity_status": "legacy_unverifiable",
+        "final_action": "unknown",
+        "final_risk_level": "unknown",
+    }
 
 
 @router.get("/{report_id}")
@@ -151,25 +200,23 @@ async def get_report(
     if not db_report:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="报告不存在")
     assert_resource_access(db, db_report, user, owner_attr="checked_by")
-    report_dict = json.loads(db_report.report_data)
 
     integrity = _try_verify_report(db_report)
     if integrity is not None:
-        # integrity_failed or legacy_unverifiable
-        report_dict["_integrity"] = integrity
         if integrity["status"] == "integrity_failed":
             raise _INTEGRITY_FAILED_409
-        # legacy_unverifiable
-        report_dict["final_action"] = "unknown"
-        report_dict["final_risk_level"] = "unknown"
-    else:
-        report_dict["_integrity"] = {
-            "status": "verified",
-            "decision_action": db_report.decision_action,
-            "decision_risk_level": db_report.decision_risk_level,
-            "decision_hash": db_report.decision_hash,
-            "policy_schema_version": db_report.policy_schema_version,
-        }
+        # legacy_unverifiable: return whitelist-only metadata, not full report
+        return _build_legacy_detail(db_report)
+
+    # verified: full report
+    report_dict = json.loads(db_report.report_data)
+    report_dict["_integrity"] = {
+        "status": "verified",
+        "decision_action": db_report.decision_action,
+        "decision_risk_level": db_report.decision_risk_level,
+        "decision_hash": db_report.decision_hash,
+        "policy_schema_version": db_report.policy_schema_version,
+    }
 
     # v3: 注入规则溯源元数据
     from app.engine.rule_engine import rule_engine
@@ -199,9 +246,7 @@ async def download_report_pdf(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="报告不存在")
     assert_resource_access(db, db_report, user, owner_attr="checked_by")
 
-    integrity = _try_verify_report(db_report)
-    if integrity is not None and integrity["status"] == "integrity_failed":
-        raise _INTEGRITY_FAILED_409
+    require_exportable_verified_report(db_report)
 
     report_data = json.loads(db_report.report_data)
     from app.engine.fusion import ComplianceReport
@@ -230,9 +275,7 @@ async def export_report_excel(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="报告不存在")
     assert_resource_access(db, db_report, user, owner_attr="checked_by")
 
-    integrity = _try_verify_report(db_report)
-    if integrity is not None and integrity["status"] == "integrity_failed":
-        raise _INTEGRITY_FAILED_409
+    require_exportable_verified_report(db_report)
 
     report_data = json.loads(db_report.report_data) if db_report.report_data else {}
     violations = _load_report_violation_rows(db, report_id, report_data)
