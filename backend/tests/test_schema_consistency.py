@@ -224,6 +224,10 @@ class TestAlembicSchemaVsOrm:
             # bridge migration (Policy chain)
             "uploaded_files", "document_sections", "compliance_reports",
             "_bhg_migration_objects",
+            # feedback isolation
+            "feedback_events",
+            # dynamic policies
+            "dynamic_policies",
         }
         extra = tables - core
         unexpected = extra - {"audit_logs", "sqlite_sequence"}

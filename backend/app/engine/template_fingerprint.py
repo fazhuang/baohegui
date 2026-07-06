@@ -624,11 +624,13 @@ _fingerprint_db: Optional[TemplateFingerprintDB] = None
 
 def get_fingerprint_db(stdt_dir: str | Path | None = None,
                        force_rebuild: bool = False) -> TemplateFingerprintDB:
-    """获取指纹库单例（懒加载 + 缓存）
+    """获取指纹库单例（仅加载已存在的资产，不自动构建）
 
-    Args:
-        stdt_dir: STDT 模板目录路径（默认自动检测）
-        force_rebuild: 是否强制重新构建
+    关键约束：
+    - 缓存缺失时不自动构建、不写文件
+    - 仅加载已存在、已验证的指纹资产
+    - 资产缺失时返回未加载状态的 db（调用方降级到启发式标记）
+    - 自动构建仅通过显式离线命令或管理员操作（build_fingerprint_db）
     """
     global _fingerprint_db
     if _fingerprint_db is not None and not force_rebuild:
@@ -637,8 +639,30 @@ def get_fingerprint_db(stdt_dir: str | Path | None = None,
     if _fingerprint_cache_path.exists() and not force_rebuild:
         _fingerprint_db = TemplateFingerprintDB.load(_fingerprint_cache_path, stdt_dir)
     else:
+        # 缓存缺失：创建空 db，不自动构建、不写文件
+        logger.warning(
+            "指纹库缓存缺失: %s，降级到启发式标记。"
+            "使用 build_fingerprint_db() 显式构建。",
+            _fingerprint_cache_path,
+        )
         _fingerprint_db = TemplateFingerprintDB(stdt_dir)
-        _fingerprint_db.build()
-        _fingerprint_db.save(_fingerprint_cache_path)
+        # db._loaded 保持 False → caller 调用 heuristic marker
 
     return _fingerprint_db
+
+
+def build_fingerprint_db(stdt_dir: str | Path | None = None,
+                          output_path: str | Path | None = None) -> TemplateFingerprintDB:
+    """显式构建指纹库（离线命令/管理员操作）。
+
+    扫描 STDT 目录，构建指纹，写入 JSON 资产。
+    不在合规检查请求路径上调用。
+    """
+    global _fingerprint_db
+    db = TemplateFingerprintDB(stdt_dir)
+    count = db.build(force=True)
+    save_path = Path(output_path) if output_path else _fingerprint_cache_path
+    db.save(save_path)
+    _fingerprint_db = db
+    logger.info("指纹库显式构建完成: %d 条指纹 → %s", count, save_path)
+    return db

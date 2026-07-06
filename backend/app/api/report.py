@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.permissions import Permission, PermissionService
-from app.core.security import get_current_user, get_current_user_id, assert_resource_access
+from app.core.security import get_current_user, get_current_user_id, assert_resource_access, require_admin
 from app.db.database import get_db
 from app.models.document import ComplianceReport as ReportModel, UploadedFile
 from app.services.excel_exporter import build_violation_rows, export_report_to_excel
@@ -422,25 +422,130 @@ async def submit_feedback(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """提交审查反馈"""
+    """提交审查反馈 — 不可变事件日志
+
+    验证：
+    - 报告存在且用户有访问权限
+    - rule_id 确实存在于该报告的权威 report_data 中
+    - 禁止针对伪造 rule_id 提交反馈
+    - 同一 user+report+rule 幂等返回 409
+    """
+    import json as _json
+
+    user_id = int(user["sub"])
+    is_admin = user.get("role") == "admin"
+
     # 检查报告是否存在
     db_report = db.query(ReportModel).filter(ReportModel.id == req.report_id).first()
     if not db_report:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="报告不存在")
-    assert_resource_access(db, db_report, user, owner_attr="checked_by")
+
+    # 报告所有者或管理员可提交
+    if db_report.checked_by != user_id and not is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权为此报告提交反馈")
+
+    # 验证 rule_id 存在于报告的权威 report_data 中（fail-closed）
+    report_data = {}
+    is_valid_json = True
+    if db_report.report_data:
+        try:
+            report_data = _json.loads(db_report.report_data)
+        except (_json.JSONDecodeError, TypeError):
+            is_valid_json = False
+
+    if not is_valid_json:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="报告数据格式异常，无法验证反馈",
+        )
+
+    valid_rule_ids = _extract_rule_ids_from_report(report_data)
+    if not valid_rule_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="此报告不包含可反馈的审查发现",
+        )
+    if req.rule_id not in valid_rule_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"rule_id '{req.rule_id}' 不存在于此报告的审查结果中",
+        )
 
     try:
         result = feedback_service.submit_feedback(
             db=db,
             report_id=req.report_id,
             rule_id=req.rule_id,
-            user_id=int(user["sub"]),
+            user_id=user_id,
             feedback_type=req.feedback_type,
             comment=req.comment,
         )
+        if result.get("status") == "duplicate":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result["message"])
         return result
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+def _extract_rule_ids_from_report(report_data: dict) -> set[str]:
+    """从 report_data 中提取所有合法的 rule_id — fail-closed: 无数据返回空集合。
+
+    支持的权威格式：
+    - _decision_input.rule_violations[].rule_id
+    - _decision_input.bias_findings[].pattern_id → BIAS-{pattern_id}
+    - violations[].rule_id (兼容旧格式)
+    """
+    ids: set[str] = set()
+    di = report_data.get("_decision_input", {}) if isinstance(report_data, dict) else {}
+
+    # 新格式: decision_input
+    for rv in di.get("rule_violations", []):
+        if isinstance(rv, dict):
+            rid = rv.get("rule_id")
+            if rid:
+                ids.add(rid)
+    for bf in di.get("bias_findings", []):
+        if isinstance(bf, dict):
+            pid = bf.get("pattern_id")
+            if pid:
+                ids.add(f"BIAS-{pid}")
+
+    # 旧格式: 顶层 violations
+    violations = report_data.get("violations", [])
+    if isinstance(violations, list):
+        for v in violations:
+            if isinstance(v, dict):
+                rid = v.get("rule_id")
+                if rid:
+                    ids.add(rid)
+
+    return ids
+
+
+@router.post("/feedback/{feedback_id}/transition")
+async def transition_feedback_state(
+    feedback_id: int,
+    to_status: str = Query(..., description="目标状态: acknowledged/resolved/closed"),
+    note: str = Query(default="", description="管理备注"),
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_admin),
+):
+    """管理员转换反馈状态 — 状态变化不触发任何执行链写入"""
+    from app.services.feedback_service import FeedbackEvent
+    from app.engine.feedback_state_machine import feedback_state_machine
+
+    event = db.query(FeedbackEvent).filter(FeedbackEvent.id == feedback_id).first()
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="反馈事件不存在")
+
+    ok, msg = feedback_state_machine.transition(
+        event, to_status, admin_id=int(user["sub"]), note=note
+    )
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=msg)
+
+    db.commit()
+    return {"feedback_id": feedback_id, "status": event.status, "message": msg}
 
 
 @router.get("/feedback/rules-needing-review")

@@ -110,6 +110,7 @@ _TABLES_TO_CLEAN = [
     "uploaded_files",
     "user_quotas",
     "audit_logs",
+    "feedback_events",
     "feedback_records",
     "rule_confidences",
     "rule_mappings",
@@ -120,6 +121,8 @@ _TABLES_TO_CLEAN = [
     "complaint_cases",
     "kg_edges",
     "kg_nodes",
+    "candidate_rules",
+    "dynamic_policies",
     "crawl_jobs",
     "crawl_job_items",
     "crawl_source_health",
@@ -135,11 +138,13 @@ def _ensure_tables(engine):
     from app.models.knowledge_graph import KGNode, KGEdge  # noqa: F401
     from app.models.rule import Base as RuleBase
     from app.models.subscription import Base as SubscriptionBase
+    from app.models.candidate_rule import Base as CandidateRuleBase
     from app.models.crawl_job import Base as CrawlJobBase
     from app.models.crawl_source_health import Base as CrawlSourceHealthBase
-    from app.services.feedback_service import FeedbackRecord, RuleConfidence  # noqa: F401
+    from app.services.feedback_service import FeedbackEvent, FeedbackRecord, RuleConfidence  # noqa: F401
+    from app.services.policy_repository import DynamicPolicy  # noqa: F401
 
-    for base in [DocumentBase, RuleBase, AuditBase, AnnouncementBase, SubscriptionBase, CrawlJobBase, CrawlSourceHealthBase]:
+    for base in [DocumentBase, RuleBase, AuditBase, AnnouncementBase, SubscriptionBase, CandidateRuleBase, CrawlJobBase, CrawlSourceHealthBase]:
         base.metadata.create_all(bind=engine, checkfirst=True)
 
     # 应用增量迁移（索引、约束等 — 幂等，使用 IF NOT EXISTS）
@@ -154,7 +159,10 @@ def _clean_all_tables(engine):
     with engine.begin() as conn:
         conn.execute(text("PRAGMA foreign_keys=OFF"))
         for table in _TABLES_TO_CLEAN:
-            conn.execute(text(f"DELETE FROM {table}"))
+            try:
+                conn.execute(text(f"DELETE FROM {table}"))
+            except Exception:
+                pass  # 表不存在则跳过
         conn.execute(text("PRAGMA foreign_keys=ON"))
 
 
@@ -170,6 +178,8 @@ def _apply_migration_upgrades(engine):
         "app.db.migrations.versions.20260619_1000_complaint_cases_indexes",
         "app.db.migrations.versions.20260621_1000_crawl_source_health",
         "app.db.migrations.versions.20260621_1100_daily_health_snapshot",
+        "app.db.migrations.versions.20260706_1000_feedback_isolation",
+        "app.db.migrations.versions.20260707_1000_dynamic_policies",
     ]
 
     for mod_name in _MIGRATION_MODULES:

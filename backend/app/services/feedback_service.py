@@ -1,4 +1,12 @@
-"""审查反馈服务 — 用户误报标记、规则置信度调整、管理员告警"""
+"""审查反馈服务 — 不可变事件日志
+
+架构约束：
+- FeedbackEvent 是只写不可变事件日志
+- RuleConfidence 保留为只读聚合表（仅供管理面板展示）
+- submit_feedback() 绝不修改规则权重、置信度、启用状态、LLM prompt、排序、candidate 或 policy
+- 反馈聚合统计仅在管理查询中从 FeedbackEvent 计算
+- 带验证的 submit 入口必须接收 validated_rule_ids 或验证后的上下文
+"""
 
 from __future__ import annotations
 
@@ -6,26 +14,31 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.document import Base
 
 logger = logging.getLogger(__name__)
 
-# ── 扩展表注册到 DocumentBase，便于 init_db() 统一创建 ──
-# 在 database.py 的 init_db() 中也会注册此 Base
 
+class FeedbackEvent(Base):
+    """反馈事件表 — 不可变事件日志
 
-class FeedbackRecord(Base):
-    """反馈记录表 — 状态由 FeedbackStateMachine 管理"""
+    幂等约束：同一 (user_id, report_id, rule_id) 只能有一条记录。
+    状态由 FeedbackStateMachine 管理，管理员执行转换。
+    """
 
-    __tablename__ = "feedback_records"
+    __tablename__ = "feedback_events"
+    __table_args__ = (
+        UniqueConstraint("user_id", "report_id", "rule_id", name="uq_feedback_user_report_rule"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    report_id = Column(Integer, nullable=False)
-    rule_id = Column(String(64), nullable=False)
-    user_id = Column(Integer, nullable=False)
+    report_id = Column(Integer, nullable=False, index=True)
+    rule_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
     feedback_type = Column(String(16), nullable=False)  # confirm / false_positive / missed
     comment = Column(Text, nullable=True)
     # 状态机字段
@@ -39,32 +52,65 @@ class FeedbackRecord(Base):
 
 
 class RuleConfidence(Base):
-    """规则置信度表"""
+    """规则置信度表 — 只读聚合视图
+
+    WARNING: 此表仅供管理面板展示，绝不接入执行链。
+    置信度数据来自 FeedbackEvent 的离线聚合，不由 submit_feedback 实时更新。
+    """
 
     __tablename__ = "rule_confidences"
 
     rule_id = Column(String(64), primary_key=True)
-    base_confidence = Column(Float, default=1.0)  # 基准置信度
-    current_confidence = Column(Float, default=1.0)  # 当前置信度
+    base_confidence = Column(Float, default=1.0)
+    current_confidence = Column(Float, default=1.0)
     total_feedbacks = Column(Integer, default=0)
     false_positive_count = Column(Integer, default=0)
     confirm_count = Column(Integer, default=0)
-    needs_review = Column(Integer, default=0)  # 0=正常, 1=待审核
+    needs_review = Column(Integer, default=0)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+def _extract_rule_ids_from_report(report_data: dict) -> set[str]:
+    """从 report_data 中提取所有合法的 rule_id — fail-closed: 无数据返回空集合。
+
+    共享函数：API 层和 FeedbackService 都使用此函数进行验证。
+    """
+    ids: set[str] = set()
+    di = report_data.get("_decision_input", {}) if isinstance(report_data, dict) else {}
+
+    for rv in di.get("rule_violations", []):
+        if isinstance(rv, dict):
+            rid = rv.get("rule_id")
+            if rid:
+                ids.add(rid)
+    for bf in di.get("bias_findings", []):
+        if isinstance(bf, dict):
+            pid = bf.get("pattern_id")
+            if pid:
+                ids.add(f"BIAS-{pid}")
+
+    violations = report_data.get("violations", [])
+    if isinstance(violations, list):
+        for v in violations:
+            if isinstance(v, dict):
+                rid = v.get("rule_id")
+                if rid:
+                    ids.add(rid)
+
+    return ids
+
+
 class FeedbackService:
-    """反馈处理服务"""
+    """反馈事件服务 — 只写不可变事件
 
-    # 置信度调整参数
-    CONFIRM_BOOST = 0.02  # 每次确认 +2%
-    FALSE_POSITIVE_PENALTY = 0.05  # 每次误报 -5%
-    FP_REVIEW_THRESHOLD = 3  # 累积3次误报 → 待审核
-    MIN_CONFIDENCE = 0.5  # 最低置信度
-    MAX_CONFIDENCE = 1.0
-
-    # 误报率告警阈值（超过此比例触发管理员告警）
-    FP_RATE_ALERT_THRESHOLD = 0.3
+    职责边界：
+    ✅ 写入 FeedbackEvent（幂等，数据库级唯一约束）
+    ✅ 查询 FeedbackEvent（管理面板用途）
+    ✅ submit_feedback_with_validation 提供带绑定的安全入口
+    ❌ 修改 RuleConfidence
+    ❌ 修改规则权重、启用状态
+    ❌ 影响 LLM prompt、排序、candidate、policy
+    """
 
     @staticmethod
     def submit_feedback(
@@ -72,113 +118,144 @@ class FeedbackService:
         report_id: int,
         rule_id: str,
         user_id: int,
-        feedback_type: str,  # "confirm" / "false_positive" / "missed"
+        feedback_type: str,
         comment: Optional[str] = None,
     ) -> dict:
-        """提交反馈并更新规则置信度"""
+        """提交反馈事件 — 只写不可变记录
+
+        幂等：同一 (user_id, report_id, rule_id) 已存在时返回 duplicate。
+        不修改 RuleConfidence。
+
+        警告：此低层入口不验证 report/rule 绑定。
+        生产代码应使用 submit_feedback_with_validation。
+        """
         if feedback_type not in ("confirm", "false_positive", "missed"):
             raise ValueError(f"无效的反馈类型: {feedback_type}")
 
-        # 保存反馈记录
-        record = FeedbackRecord(
+        event = FeedbackEvent(
+            report_id=report_id,
+            rule_id=rule_id,
+            user_id=user_id,
+            feedback_type=feedback_type,
+            comment=comment,
+            status="submitted",
+        )
+        db.add(event)
+
+        try:
+            db.commit()
+            db.refresh(event)
+        except IntegrityError:
+            db.rollback()
+            existing = (
+                db.query(FeedbackEvent)
+                .filter(
+                    FeedbackEvent.user_id == user_id,
+                    FeedbackEvent.report_id == report_id,
+                    FeedbackEvent.rule_id == rule_id,
+                )
+                .first()
+            )
+            return {
+                "rule_id": rule_id,
+                "status": "duplicate",
+                "message": "对此报告的此规则已提交过反馈，不可重复提交",
+                "existing_id": existing.id if existing else None,
+            }
+
+        logger.info(
+            "反馈事件已记录: id=%d report_id=%d rule_id=%s type=%s user=%d",
+            event.id, report_id, rule_id, feedback_type, user_id,
+        )
+
+        return {
+            "rule_id": rule_id,
+            "event_id": event.id,
+            "status": "submitted",
+            "message": "反馈已记录",
+        }
+
+    @staticmethod
+    def submit_feedback_with_validation(
+        db: Session,
+        report_id: int,
+        rule_id: str,
+        user_id: int,
+        feedback_type: str,
+        report_data: dict,
+        comment: Optional[str] = None,
+    ) -> dict:
+        """安全反馈入口 — 验证 rule_id 属于报告后再写入
+
+        验证规则（fail-closed）：
+        - report_data 必须可解析
+        - 必须能从中提取 valid_rule_ids
+        - rule_id 必须在 valid_rule_ids 中
+        - 不满足任一条件 → ValueError
+        """
+        # 验证 rule_id 有效性
+        valid_rule_ids = _extract_rule_ids_from_report(report_data)
+        if not valid_rule_ids:
+            raise ValueError("此报告不包含可反馈的审查发现")
+        if rule_id not in valid_rule_ids:
+            raise ValueError(f"rule_id '{rule_id}' 不存在于此报告的审查结果中")
+
+        return FeedbackService.submit_feedback(
+            db=db,
             report_id=report_id,
             rule_id=rule_id,
             user_id=user_id,
             feedback_type=feedback_type,
             comment=comment,
         )
-        db.add(record)
-
-        # 更新规则置信度
-        confidence = (
-            db.query(RuleConfidence).filter(RuleConfidence.rule_id == rule_id).first()
-        )
-
-        if not confidence:
-            confidence = RuleConfidence(rule_id=rule_id)
-            db.add(confidence)
-            db.flush()  # 确保 default 列值生效
-
-        confidence.total_feedbacks = (confidence.total_feedbacks or 0) + 1
-
-        if feedback_type == "confirm":
-            confidence.confirm_count = (confidence.confirm_count or 0) + 1
-            confidence.current_confidence = min(
-                FeedbackService.MAX_CONFIDENCE,
-                (confidence.current_confidence or 1.0) + FeedbackService.CONFIRM_BOOST,
-            )
-        elif feedback_type == "false_positive":
-            confidence.false_positive_count = (confidence.false_positive_count or 0) + 1
-            confidence.current_confidence = max(
-                FeedbackService.MIN_CONFIDENCE,
-                (confidence.current_confidence or 1.0) - FeedbackService.FALSE_POSITIVE_PENALTY,
-            )
-
-        # 检查是否需要标记为待审核
-        if (confidence.false_positive_count or 0) >= FeedbackService.FP_REVIEW_THRESHOLD:
-            if confidence.needs_review == 0:
-                confidence.needs_review = 1
-                logger.warning(
-                    "规则 %s 累积 %d 次误报，已标记为待审核",
-                    rule_id,
-                    confidence.false_positive_count,
-                )
-
-        # 检查误报率是否超过阈值
-        total = confidence.total_feedbacks or 0
-        fp_count = confidence.false_positive_count or 0
-        if total > 0:
-            fp_rate = fp_count / total
-            if fp_rate >= FeedbackService.FP_RATE_ALERT_THRESHOLD:
-                logger.warning(
-                    "规则 %s 误报率 %.0f%% 超过告警阈值，建议管理员审查",
-                    rule_id,
-                    fp_rate * 100,
-                )
-
-        confidence.updated_at = datetime.now(timezone.utc)
-        db.commit()
-
-        return {
-            "rule_id": rule_id,
-            "current_confidence": confidence.current_confidence,
-            "total_feedbacks": confidence.total_feedbacks,
-            "needs_review": confidence.needs_review == 1,
-            "message": "反馈已记录，置信度已更新",
-        }
 
     @staticmethod
     def get_rule_confidence(db: Session, rule_id: str) -> Optional[dict]:
-        """获取规则当前的置信度信息"""
-        conf = (
-            db.query(RuleConfidence).filter(RuleConfidence.rule_id == rule_id).first()
+        """获取规则置信度 — 管理面板专用，绝不接入执行链"""
+        events = (
+            db.query(FeedbackEvent)
+            .filter(FeedbackEvent.rule_id == rule_id)
+            .all()
         )
-        if not conf:
+        if not events:
             return None
+
+        total = len(events)
+        fp_count = sum(1 for e in events if e.feedback_type == "false_positive")
+        confirm_count = sum(1 for e in events if e.feedback_type == "confirm")
+
         return {
-            "rule_id": conf.rule_id,
-            "current_confidence": conf.current_confidence,
-            "base_confidence": conf.base_confidence,
-            "total_feedbacks": conf.total_feedbacks,
-            "false_positive_count": conf.false_positive_count,
-            "confirm_count": conf.confirm_count,
-            "needs_review": conf.needs_review == 1,
+            "rule_id": rule_id,
+            "total_feedbacks": total,
+            "false_positive_count": fp_count,
+            "confirm_count": confirm_count,
+            "source": "aggregated_from_feedback_events",
         }
 
     @staticmethod
     def get_rules_needing_review(db: Session) -> list[dict]:
-        """获取所有需要管理员审核的规则"""
-        confs = (
-            db.query(RuleConfidence).filter(RuleConfidence.needs_review == 1).all()
-        )
-        return [
-            {
-                "rule_id": c.rule_id,
-                "false_positive_count": c.false_positive_count,
-                "current_confidence": c.current_confidence,
-            }
-            for c in confs
-        ]
+        """获取误报率高的规则 — 管理面板专用"""
+        from collections import Counter
+        fp_by_rule: Counter = Counter()
+        total_by_rule: Counter = Counter()
+        for event in db.query(FeedbackEvent).all():
+            total_by_rule[event.rule_id] += 1
+            if event.feedback_type == "false_positive":
+                fp_by_rule[event.rule_id] += 1
 
+        result = []
+        for rule_id, total in total_by_rule.items():
+            fp = fp_by_rule.get(rule_id, 0)
+            if fp >= 3:
+                result.append({
+                    "rule_id": rule_id,
+                    "false_positive_count": fp,
+                    "total_feedbacks": total,
+                })
+        return result
+
+
+# 保留旧名称兼容（内部引用）
+FeedbackRecord = FeedbackEvent
 
 feedback_service = FeedbackService()

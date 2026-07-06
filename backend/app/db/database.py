@@ -31,8 +31,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db():
     """初始化所有表"""
     # 延迟导入以确保表类注册到对应 Base.metadata
-    from app.services.feedback_service import FeedbackRecord, RuleConfidence  # noqa: F401
+    from app.services.feedback_service import FeedbackEvent, RuleConfidence  # noqa: F401
     from app.models.knowledge_graph import KGNode, KGEdge  # noqa: F401
+    from app.services.policy_repository import DynamicPolicy  # noqa: F401
 
     # v2: KGNode/KGEdge 属于 DocumentBase (导入自 models/document.py)
     DocumentBase.metadata.create_all(bind=engine)

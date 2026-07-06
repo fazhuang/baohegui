@@ -46,10 +46,12 @@ def db_session() -> Session:
     # 创建所有表
     from app.models.document import Base as DocumentBase
     from app.models.candidate_rule import Base as CandidateRuleBase
+    from app.models.rule import Base as RuleBase
 
     # complaint_case 用 DocumentBase
     DocumentBase.metadata.create_all(bind=engine)
     CandidateRuleBase.metadata.create_all(bind=engine)
+    RuleBase.metadata.create_all(bind=engine)
 
     # knowledge_graph 表也创建
     from app.models.knowledge_graph import Base as KGraphBase
@@ -616,8 +618,21 @@ class TestCandidateRulesNotAutoPublished:
         db_session.add(cand)
         db_session.commit()
 
-        # 人工审核通过
-        cand.approve(reviewer_id=1, note="审核通过，升级为正式规则", promoted_to="R999")
+        # 人工审核通过（两阶段：先审核，再升级）
+        cand.approve(reviewer_id=1, note="审核通过，升级为正式规则")
+        db_session.commit()
+
+        # 第二阶段：升级为正式规则
+        from app.services.rule_miner import promote_candidate_to_rule
+        result = promote_candidate_to_rule(
+            db_session, cand.id, reviewer_id=1, promoted_rule_id="R999"
+        )
+        assert result["success"]
+        db_session.commit()
+
+        assert cand.review_status == "approved"
+        assert cand.reviewed_by == 1
+        assert cand.promoted_to == "R999"
         db_session.commit()
 
         assert cand.review_status == "approved"
