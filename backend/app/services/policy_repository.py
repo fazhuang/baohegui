@@ -16,7 +16,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
 from sqlalchemy.orm import Session
 
 from app.models.document import Base
@@ -65,6 +65,12 @@ class DynamicPolicy(Base):
     rolled_back_by = Column(Integer, nullable=True)
     rolled_back_at = Column(DateTime, nullable=True)
     rollback_reason = Column(Text, nullable=True)
+
+    # ── Quarantine: permanent isolation for unverifiable provenance ──
+    is_quarantined = Column(Boolean, nullable=False, default=False,
+                           comment="隔离标记：true=永久禁止状态转换和进入执行链")
+    quarantined_at = Column(DateTime, nullable=True, comment="隔离时间")
+    quarantine_reason = Column(Text, nullable=True, comment="隔离原因")
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
@@ -115,6 +121,7 @@ def load_applied_policy_context(
         db.query(DynamicPolicy)
         .filter(
             DynamicPolicy.status == "applied",
+            DynamicPolicy.is_quarantined.is_(False),
             DynamicPolicy.policy_type == policy_type,
             DynamicPolicy.scope_type == scope_type,
             DynamicPolicy.scope_id == scope_id,
@@ -125,9 +132,17 @@ def load_applied_policy_context(
     # Enforce: applied policy must pass schema validation at load time.
     # Historical illegal applied policies are logged and excluded from execution.
     # Also enforce scope/policy_type pairing at load time — defense in depth.
+    # Also check is_quarantined as defense-in-depth (already filtered in query).
     valid_policies = []
     for dp in policies:
         try:
+            if getattr(dp, "is_quarantined", False):
+                logger.error(
+                    "隔离策略被拒绝进入执行链: id=%d key=%s reason=%s. "
+                    "隔离策略已在数据库层被永久阻止。",
+                    dp.id, dp.policy_key, getattr(dp, "quarantine_reason", "unknown"),
+                )
+                continue
             _validate_policy_data_strict(dp.policy_type, dp.policy_data)
             ok, err = _validate_scope(dp.policy_type, dp.scope_type, dp.scope_id)
             if not ok:
@@ -358,6 +373,13 @@ def _do_state_change(
 
     try:
         from_status = policy.status
+
+        # ── Quarantine check: quarantined policies are permanently blocked ──
+        if getattr(policy, "is_quarantined", False):
+            raise ValueError(
+                f"隔离策略禁止状态转换 (id={policy.id}, reason={getattr(policy, 'quarantine_reason', 'unknown')})。"
+                f"隔离策略已永久禁止 revise/submit/approve/apply 操作。"
+            )
 
         # ── Precondition checks (before any mutation) ──
         if to_status == "applied":

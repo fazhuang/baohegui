@@ -181,6 +181,16 @@ class PolicyApprovalWorkflow:
         """
         from_status = getattr(record, "status", PolicyApprovalStatus.DRAFT.value)
 
+        # ── Quarantine check: refuse ALL transitions for quarantined records ──
+        if getattr(record, "is_quarantined", False):
+            msg = (
+                f"隔离策略禁止状态转换: policy_id={getattr(record, 'id', '?')} "
+                f"当前状态={from_status} target={to_status}. "
+                f"隔离原因: {getattr(record, 'quarantine_reason', 'unknown')}"
+            )
+            logger.warning(msg)
+            return False, msg
+
         if not PolicyApprovalWorkflow.can_transition(from_status, to_status):
             msg = (
                 f"非法策略审批状态转换: {from_status} → {to_status}。"

@@ -347,7 +347,7 @@ class TestFreshMigration:
             # verify current revision is the latest migration head
             rev_row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
             assert rev_row is not None, "no alembic_version row"
-            assert rev_row[0] == "20260707_1300_policy_scope_fix", f"expected head, got {rev_row[0]}"
+            assert rev_row[0] == "20260707_1400_policy_quarantine", f"expected head, got {rev_row[0]}"
         finally:
             conn.close()
             os.remove(db_path)
