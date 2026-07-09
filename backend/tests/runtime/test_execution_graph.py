@@ -2,6 +2,7 @@
 import pytest
 from app.runtime.node_types import NodeType
 from app.runtime.execution_node import ExecutionNode, RetryPolicy
+from app.runtime.execution_graph import ExecutionGraph
 
 
 class TestNodeType:
@@ -97,3 +98,129 @@ class TestExecutionNode:
             execute=dummy_execute,
         )
         assert node.deterministic is False
+
+
+class TestExecutionGraph:
+    def test_graph_holds_nodes_in_order(self):
+        def noop(inputs):
+            return {}
+
+        nodes = [
+            ExecutionNode(
+                node_id="a", node_type=NodeType.FILE_PARSE,
+                input_schema={}, output_schema={}, dependencies=[],
+                timeout=10.0, retry_policy=RetryPolicy(), deterministic=True,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+            ExecutionNode(
+                node_id="b", node_type=NodeType.OCR,
+                input_schema={}, output_schema={}, dependencies=["a"],
+                timeout=20.0, retry_policy=RetryPolicy(), deterministic=True,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+        ]
+        graph = ExecutionGraph(job_id="test-1", nodes=nodes)
+        assert len(graph.nodes) == 2
+        assert graph.nodes[0].node_id == "a"
+        assert graph.nodes[1].node_id == "b"
+
+    def test_graph_rejects_duplicate_node_ids(self):
+        def noop(inputs):
+            return {}
+
+        nodes = [
+            ExecutionNode(
+                node_id="dup", node_type=NodeType.FILE_PARSE,
+                input_schema={}, output_schema={}, dependencies=[],
+                timeout=10.0, retry_policy=RetryPolicy(), deterministic=True,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+            ExecutionNode(
+                node_id="dup", node_type=NodeType.OCR,
+                input_schema={}, output_schema={}, dependencies=[],
+                timeout=10.0, retry_policy=RetryPolicy(), deterministic=True,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+        ]
+        with pytest.raises(ValueError, match="Duplicate node_id"):
+            ExecutionGraph(job_id="test", nodes=nodes)
+
+    def test_graph_rejects_missing_dependency(self):
+        def noop(inputs):
+            return {}
+
+        nodes = [
+            ExecutionNode(
+                node_id="b", node_type=NodeType.FUSION,
+                input_schema={}, output_schema={}, dependencies=["nonexistent"],
+                timeout=10.0, retry_policy=RetryPolicy(), deterministic=True,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+        ]
+        with pytest.raises(ValueError, match="Dependency .* not found"):
+            ExecutionGraph(job_id="test", nodes=nodes)
+
+    def test_graph_accepts_valid_dag(self):
+        def noop(inputs):
+            return {}
+
+        nodes = [
+            ExecutionNode(
+                node_id="parse", node_type=NodeType.FILE_PARSE,
+                input_schema={}, output_schema={}, dependencies=[],
+                timeout=10.0, retry_policy=RetryPolicy(), deterministic=True,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+            ExecutionNode(
+                node_id="ocr", node_type=NodeType.OCR,
+                input_schema={}, output_schema={}, dependencies=["parse"],
+                timeout=10.0, retry_policy=RetryPolicy(), deterministic=True,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+            ExecutionNode(
+                node_id="rule", node_type=NodeType.RULE_CHECK,
+                input_schema={}, output_schema={}, dependencies=["parse"],
+                timeout=10.0, retry_policy=RetryPolicy(), deterministic=True,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+        ]
+        graph = ExecutionGraph(job_id="test", nodes=nodes)
+        graph.validate()  # should not raise
+
+    def test_topological_order(self):
+        def noop(inputs):
+            return {}
+
+        nodes = [
+            ExecutionNode(
+                node_id="fusion", node_type=NodeType.FUSION,
+                input_schema={}, output_schema={}, dependencies=["rule", "llm"],
+                timeout=10.0, retry_policy=RetryPolicy(), deterministic=True,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+            ExecutionNode(
+                node_id="llm", node_type=NodeType.LLM_CHECK,
+                input_schema={}, output_schema={}, dependencies=["parse"],
+                timeout=10.0, retry_policy=RetryPolicy(), deterministic=False,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+            ExecutionNode(
+                node_id="rule", node_type=NodeType.RULE_CHECK,
+                input_schema={}, output_schema={}, dependencies=["parse"],
+                timeout=10.0, retry_policy=RetryPolicy(), deterministic=True,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+            ExecutionNode(
+                node_id="parse", node_type=NodeType.FILE_PARSE,
+                input_schema={}, output_schema={}, dependencies=[],
+                timeout=10.0, retry_policy=RetryPolicy(), deterministic=True,
+                audit_required=True, replay_required=True, execute=noop,
+            ),
+        ]
+        graph = ExecutionGraph(job_id="test", nodes=nodes)
+        order = graph.topological_order()
+        # parse must come before llm and rule; rule and llm before fusion
+        assert order.index("parse") < order.index("llm")
+        assert order.index("parse") < order.index("rule")
+        assert order.index("rule") < order.index("fusion")
+        assert order.index("llm") < order.index("fusion")
