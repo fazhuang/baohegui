@@ -1,6 +1,6 @@
 """Replay Engine — deterministic end-to-end audit trail for the compliance pipeline.
 
-Pipeline: input → routing → rule_engine → parameter_bias → llm_boundary → decision_input → policy_decision
+Pipeline: input → parser_boundary → routing → rule_engine → parameter_bias → llm_boundary → decision_input → policy_decision
 
 Each step stores input_snapshot + output_snapshot + hash(prev_hash || canonical(output)).
 The LLM step is a snapshot boundary (non-deterministic); all other steps are deterministic.
@@ -13,9 +13,12 @@ Replay verifies:
   1. Hash chain integrity (every link recomputed)
   2. Fixed step sequence (name + count)
   3. Metadata consistency (file_hash, schema_version)
-  4. Semantic replay of DecisionInput → PolicyDecision via PolicyKernel
-  5. PolicyKernel's internal trace verification (verify_trace)
-  6. Stored policy_decision snapshot matches replayed decision
+  4. Upstream boundary validation (routing/rule/bias snapshot vs DecisionInput projection)
+  5. Parser boundary validation (input_file_hash, sections hash)
+  6. Deep LLM boundary comparison (all decision-relevant fields)
+  7. Semantic replay of DecisionInput → PolicyDecision via PolicyKernel
+  8. PolicyKernel's internal trace verification (verify_trace)
+  9. Stored policy_decision snapshot matches replayed decision
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ from app.core.policy_kernel import (
 # Fixed step sequence — order and names are invariant
 _PIPELINE_STEPS = (
     "input",
+    "parser_boundary",
     "routing",
     "rule_engine",
     "parameter_bias",
@@ -117,6 +121,7 @@ class AuditTrace:
         rule_result: Any | None = None,
         bias_result: Any | None = None,
         llm_boundary: LLMBoundary | None = None,
+        ocr_boundary: OCRBoundary | None = None,
         decision_input: DecisionInput | None = None,
         policy_decision: PolicyDecision | None = None,
     ) -> "AuditTrace":
@@ -158,51 +163,66 @@ class AuditTrace:
         prev_hash = step.output_hash
         trace.steps.append(step)
 
-        # ── Step 1: routing ──────────────────────────────────
-        rout = _canonical_for_step(routing_result.model_dump(mode="json")) if routing_result else {}
+        # ── Step 1: parser_boundary ──────────────────────────
+        pb_out = ocr_boundary.to_dict() if ocr_boundary else {}
+        step = _make_step("parser_boundary", prev_hash, _canonical_for_step(pb_out))
+        prev_hash = step.output_hash
+        trace.steps.append(step)
+
+        # ── Step 2: routing ── FULL snapshot ─────────────────
+        if routing_result:
+            rout = _canonical_for_step(routing_result.model_dump(mode="json"))
+        else:
+            rout = {}
         step = _make_step("routing", prev_hash, rout)
         prev_hash = step.output_hash
         trace.steps.append(step)
 
-        # ── Step 2: rule_engine ──────────────────────────────
-        rule_out = {
-            "violations_count": len(rule_result.violations) if rule_result else 0,
-            "total_score": getattr(rule_result, "total_score", None),
-            "violation_ids": sorted(
-                [v.rule_id for v in (rule_result.violations if rule_result else []) if v.rule_id]
-            ),
-        }
-        step = _make_step("rule_engine", prev_hash, rule_out)
+        # ── Step 3: rule_engine ── FULL snapshot ─────────────
+        rule_violations_raw = []
+        if rule_result:
+            for v in (rule_result.violations or []):
+                rule_violations_raw.append({
+                    "rule_id": v.rule_id or "",
+                    "rule_type": v.rule_type or "",
+                    "risk_level": v.risk_level or "",
+                    "description": v.description or "",
+                    "location": getattr(v, "location", None) or "",
+                })
+        rule_out = {"violations": rule_violations_raw}
+        step = _make_step("rule_engine", prev_hash, _canonical_for_step(rule_out))
         prev_hash = step.output_hash
         trace.steps.append(step)
 
-        # ── Step 3: parameter_bias ───────────────────────────
-        bias_out = {
-            "findings_count": len(bias_result.findings) if bias_result else 0,
-            "risk_score": getattr(bias_result, "risk_score", None),
-            "critical_count": getattr(bias_result, "critical_count", 0),
-            "high_count": getattr(bias_result, "high_count", 0),
-            "pattern_ids": sorted(
-                [f.pattern_id for f in (bias_result.findings if bias_result else []) if f.pattern_id]
-            ),
-        }
-        step = _make_step("parameter_bias", prev_hash, bias_out)
+        # ── Step 4: parameter_bias ── FULL snapshot ──────────
+        bias_findings_raw = []
+        if bias_result:
+            for f in (bias_result.findings or []):
+                bias_findings_raw.append({
+                    "pattern_id": f.pattern_id or "",
+                    "severity": f.severity or "",
+                    "description": f.description or f.pattern_name or "",
+                    "matched_text": f.matched_text or "",
+                    "matched_field": f.matched_field or "",
+                })
+        bias_out = {"findings": bias_findings_raw}
+        step = _make_step("parameter_bias", prev_hash, _canonical_for_step(bias_out))
         prev_hash = step.output_hash
         trace.steps.append(step)
 
-        # ── Step 4: llm_boundary — snapshot only ─────────────
+        # ── Step 5: llm_boundary ─────────────────────────────
         llm_out = llm_boundary.to_dict() if llm_boundary else {}
-        step = _make_step("llm_boundary", prev_hash, llm_out)
+        step = _make_step("llm_boundary", prev_hash, _canonical_for_step(llm_out))
         prev_hash = step.output_hash
         trace.steps.append(step)
 
-        # ── Step 5: decision_input ───────────────────────────
+        # ── Step 6: decision_input ───────────────────────────
         di = _canonical_for_step(decision_input.model_dump(mode="json"))
         step = _make_step("decision_input", prev_hash, di)
         prev_hash = step.output_hash
         trace.steps.append(step)
 
-        # ── Step 6: policy_decision ──────────────────────────
+        # ── Step 7: policy_decision ──────────────────────────
         pd = _canonical_for_step(policy_decision.model_dump(mode="json"))
         terminal = sha256_hex(prev_hash.encode() + _canonical_json(pd))
         step = StepSnapshot(
@@ -300,7 +320,6 @@ class AuditTrace:
             prefix = f"step[{i}]({step.step})"
 
             if i == 0:
-                # Step 0: input_hash = SHA256(canonical(input_snapshot))
                 if step.input_snapshot is not None:
                     expected_in = sha256_hex(_canonical_json(step.input_snapshot))
                     if step.input_hash != expected_in:
@@ -405,6 +424,9 @@ class LLMBoundary:
     # Asset version fingerprints
     rule_asset_hash: str = ""      # SHA-256 of loaded rules content
     prompt_asset_hash: str = ""    # SHA-256 of prompt template content
+    # Call lifecycle
+    call_status: str = ""          # "skipped" | "succeeded" | "failed"
+    skip_reason: str = ""          # e.g. "routing_skip_llm" when routing.skip_llm=True
 
     def __post_init__(self):
         if self.normalized_violations is None:
@@ -431,6 +453,8 @@ class LLMBoundary:
             "error": self.error,
             "rule_asset_hash": self.rule_asset_hash,
             "prompt_asset_hash": self.prompt_asset_hash,
+            "call_status": self.call_status,
+            "skip_reason": self.skip_reason,
         }
 
     @classmethod
@@ -440,7 +464,9 @@ class LLMBoundary:
                         prompt_asset_hash: str = "",
                         provider: str = "", model: str = "",
                         temperature: float = 0.0, seed: int | None = None,
-                        max_tokens: int = 0) -> "LLMBoundary":
+                        max_tokens: int = 0,
+                        call_status: str = "",
+                        skip_reason: str = "") -> "LLMBoundary":
         """Capture LLM result into a boundary snapshot."""
         import hashlib
         return cls(
@@ -466,6 +492,8 @@ class LLMBoundary:
             error=getattr(llm_result, "error", None),
             rule_asset_hash=rule_asset_hash,
             prompt_asset_hash=prompt_asset_hash,
+            call_status=call_status,
+            skip_reason=skip_reason,
         )
 
 
@@ -553,15 +581,169 @@ def replay_decision(trace: AuditTrace) -> PolicyDecision:
     raise ValueError("No decision_input step found in trace")
 
 
+# ═══════════════════════════════════════════════════════════════
+# Upstream boundary normalization helpers
+# ═══════════════════════════════════════════════════════════════
+
+def _check_upstream_routing(di_routing: dict, snap: dict) -> tuple[bool, str]:
+    """Validate routing snapshot projection against DecisionInput.routing."""
+    if not snap:
+        return False, "routing snapshot is empty"
+    snap_tl = snap.get("traffic_light", "")
+    di_tl = di_routing.get("traffic_light", "")
+    snap_skip = snap.get("skip_llm", None)
+    di_skip = di_routing.get("skip_llm", None)
+    if snap_tl != di_tl:
+        return False, f"traffic_light: snap={snap_tl!r}, di={di_tl!r}"
+    if snap_skip != di_skip:
+        return False, f"skip_llm: snap={snap_skip!r}, di={di_skip!r}"
+    return True, ""
+
+
+def _check_upstream_rules(di_violations: list[dict], snap: dict) -> tuple[bool, str]:
+    """Validate rule violation snapshot projection against DecisionInput.rule_violations."""
+    snap_violations = snap.get("violations", [])
+    if not isinstance(snap_violations, list):
+        return False, "rule snapshot violations is not a list"
+    if len(snap_violations) != len(di_violations):
+        return False, f"violation count: snap={len(snap_violations)}, di={len(di_violations)}"
+
+    # Compare sorted by stable key
+    def _rule_key(v):
+        return (v.get("rule_id", "") or "",
+                v.get("rule_type", "") or "",
+                v.get("description", "") or "")
+    snap_sorted = sorted(snap_violations, key=_rule_key)
+    di_sorted = sorted(di_violations, key=_rule_key)
+    for i, (sv, dv) in enumerate(zip(snap_sorted, di_sorted)):
+        for field in ("rule_id", "rule_type", "risk_level", "description"):
+            sv_val = (sv.get(field, "") or "")
+            dv_val = (dv.get(field, "") or "")
+            if sv_val != dv_val:
+                return False, f"violation[{i}].{field}: snap={sv_val!r}, di={dv_val!r}"
+    return True, ""
+
+
+def _check_upstream_bias(di_findings: list[dict], snap: dict) -> tuple[bool, str]:
+    """Validate bias findings snapshot projection against DecisionInput.bias_findings."""
+    snap_findings = snap.get("findings", [])
+    if not isinstance(snap_findings, list):
+        return False, "bias snapshot findings is not a list"
+    if len(snap_findings) != len(di_findings):
+        return False, f"finding count: snap={len(snap_findings)}, di={len(di_findings)}"
+
+    def _bias_key(f):
+        return (f.get("pattern_id", "") or "",
+                f.get("description", "") or "")
+    snap_sorted = sorted(snap_findings, key=_bias_key)
+    di_sorted = sorted(di_findings, key=_bias_key)
+    for i, (sf, df) in enumerate(zip(snap_sorted, di_sorted)):
+        for field in ("pattern_id", "severity", "description"):
+            sf_val = (sf.get(field, "") or "")
+            df_val = (df.get(field, "") or "")
+            if sf_val != df_val:
+                return False, f"finding[{i}].{field}: snap={sf_val!r}, di={df_val!r}"
+    return True, ""
+
+
+def _check_llm_boundary_deep(di_llm_violations: list[dict], llm_snap: dict) -> tuple[bool, str, dict]:
+    """Deep LLM boundary comparison — all decision-relevant fields.
+
+    Returns (ok, error_message, checks_dict).
+    """
+    checks: dict[str, bool] = {}
+
+    call_status = llm_snap.get("call_status", "")
+    di_count = len(di_llm_violations)
+
+    # If DecisionInput has LLM violations, boundary must exist and have normalized_violations
+    if di_count > 0:
+        if not llm_snap:
+            checks["llm_boundary_present"] = False
+            return False, "DecisionInput has llm_violations but llm_boundary is missing", checks
+        norm = llm_snap.get("normalized_violations", [])
+        if not isinstance(norm, list) or len(norm) == 0:
+            checks["llm_norm_empty"] = False
+            return False, "DecisionInput has llm_violations but llm_boundary.normalized_violations is empty", checks
+        if call_status not in ("succeeded", "skipped"):
+            checks["llm_call_status"] = False
+            return False, f"DecisionInput has llm_violations but llm_boundary.call_status is {call_status!r}", checks
+    else:
+        # No LLM violations — but boundary must still clearly state why
+        if not llm_snap:
+            checks["llm_boundary_present"] = False
+            return False, "DecisionInput has no llm_violations but llm_boundary is missing", checks
+        # Empty dict is not acceptable — must have call_status
+        if call_status == "":
+            checks["llm_call_status"] = False
+            return False, "llm_boundary has no call_status (must be skipped/succeeded/failed)", checks
+        checks["llm_boundary_present"] = True
+        return True, "", checks
+
+    norm = llm_snap.get("normalized_violations", [])
+    di_sorted = sorted(di_llm_violations, key=lambda v: (
+        v.get("type", ""),
+        v.get("risk_level", ""),
+        v.get("reason", ""),
+    ))
+    norm_sorted = sorted(norm, key=lambda v: (
+        v.get("type", ""),
+        v.get("risk_level", ""),
+        v.get("reason", ""),
+    ))
+
+    # Count match
+    checks["llm_violation_count"] = len(norm_sorted) == len(di_sorted)
+    if not checks["llm_violation_count"]:
+        return False, f"LLM violation count: norm={len(norm_sorted)}, di={len(di_sorted)}", checks
+
+    # Deep field comparison
+    for i, (nv, dv) in enumerate(zip(norm_sorted, di_sorted)):
+        for field in ("type", "risk_level", "reason", "validation_error", "requires_human_review"):
+            nv_val = nv.get(field, None) if field in ("validation_error", "requires_human_review") else nv.get(field, "")
+            dv_val = dv.get(field, None) if field in ("validation_error", "requires_human_review") else dv.get(field, "")
+            # None and "" are equivalent for optional fields
+            if field in ("validation_error",):
+                nv_val = nv_val or None
+                dv_val = dv_val or None
+            key = f"llm_bound[{i}].{field}"
+            checks[key] = nv_val == dv_val
+            if not checks[key]:
+                return False, f"LLM norm[{i}].{field}: norm={nv_val!r}, di={dv_val!r}", checks
+
+    # Verify call_status for populated boundary with succeeded real calls
+    if call_status == "succeeded":
+        # For real providers (not mock/test), hashes must be non-empty
+        provider = llm_snap.get("provider", "")
+        model_str = llm_snap.get("model", "")
+        model_used = llm_snap.get("model_used", "")
+        error = llm_snap.get("error")
+        # Consider mock/test providers exempt from hash requirement
+        is_simulated = (
+            provider in ("", "mock", "fake", "test") or
+            model_str == "mock" or model_used == "mock" or
+            (model_used == "" and error is None and not llm_snap.get("tokens_used"))
+        )
+        if not is_simulated:
+            for hash_field in ("prompt_hash", "raw_response_hash"):
+                if not llm_snap.get(hash_field):
+                    checks[f"llm_{hash_field}"] = False
+                    return False, f"Real LLM call ({provider}) with empty {hash_field}", checks
+
+    return True, "", checks
+
+
 def verify_replay(trace: AuditTrace) -> dict:
     """Full replay verification.
 
     1. Hash chain integrity (verify_chain)
-    2. Semantic replay: DecisionInput → PolicyDecision via PolicyKernel
-    3. Compare replayed decision_hash with stored decision_hash
-    4. Verify replayed PolicyKernel internal trace (verify_trace)
-    5. Compare replayed policy_decision snapshot with stored snapshot
-    6. Verify LLM normalized output in DecisionInput matches stored LLM boundary
+    2. Upstream boundary validation (routing/rule/bias snapshot vs DecisionInput)
+    3. Parser boundary validation (input_file_hash, sections)
+    4. Deep LLM boundary comparison (all decision-relevant fields)
+    5. Semantic replay: DecisionInput → PolicyDecision via PolicyKernel
+    6. Compare replayed decision_hash with stored decision_hash
+    7. Verify replayed PolicyKernel internal trace (verify_trace)
+    8. Compare replayed policy_decision snapshot with stored snapshot
 
     Returns {"valid": bool, "errors": [...], "checks": {...}}.
     """
@@ -574,14 +756,106 @@ def verify_replay(trace: AuditTrace) -> dict:
     if not chain["valid"]:
         errors.extend(chain["errors"])
 
-    # ── 2. Replay ──
+    # ── Locate key steps ──
+    def _find_step(step_name: str) -> StepSnapshot | None:
+        for s in trace.steps:
+            if s.step == step_name and s.output_snapshot is not None:
+                return s
+        for s in trace.steps:
+            if s.step == step_name:
+                return s
+        return None
+
+    di_step = _find_step("decision_input")
+    routing_step = _find_step("routing")
+    rule_step = _find_step("rule_engine")
+    bias_step = _find_step("parameter_bias")
+    llm_step = _find_step("llm_boundary")
+    parser_step = _find_step("parser_boundary")
+    pd_step = _find_step("policy_decision")
+
+    if not di_step:
+        errors.append("missing decision_input step")
+        return {"valid": False, "errors": errors, "checks": checks}
+
+    di_snap = di_step.output_snapshot or {}
+    di_routing = di_snap.get("routing", {})
+    di_rules = di_snap.get("rule_violations", [])
+    di_bias = di_snap.get("bias_findings", [])
+    di_llm = di_snap.get("llm_violations", [])
+
+    # ── 2. Upstream boundary validation ──
+    # Routing
+    if routing_step and routing_step.output_snapshot is not None:
+        ok, msg = _check_upstream_routing(di_routing, routing_step.output_snapshot)
+        checks["upstream_routing"] = ok
+        if not ok:
+            errors.append(f"routing boundary: {msg}")
+    else:
+        checks["upstream_routing"] = False
+        errors.append("missing routing boundary snapshot")
+
+    # Rule engine
+    if rule_step and rule_step.output_snapshot is not None:
+        ok, msg = _check_upstream_rules(di_rules, rule_step.output_snapshot)
+        checks["upstream_rules"] = ok
+        if not ok:
+            errors.append(f"rule_engine boundary: {msg}")
+    else:
+        checks["upstream_rules"] = False
+        errors.append("missing rule_engine boundary snapshot")
+
+    # Parameter bias
+    if bias_step and bias_step.output_snapshot is not None:
+        ok, msg = _check_upstream_bias(di_bias, bias_step.output_snapshot)
+        checks["upstream_bias"] = ok
+        if not ok:
+            errors.append(f"parameter_bias boundary: {msg}")
+    else:
+        checks["upstream_bias"] = False
+        errors.append("missing parameter_bias boundary snapshot")
+
+    # ── 3. Parser boundary ──
+    if parser_step and parser_step.output_snapshot is not None:
+        pb_snap = parser_step.output_snapshot
+        checks["parser_file_hash"] = pb_snap.get("input_file_hash", "") == trace.file_hash
+        if not checks["parser_file_hash"]:
+            errors.append(
+                f"parser_boundary.input_file_hash ({pb_snap.get('input_file_hash', '')!r}) "
+                f"!= top-level file_hash ({trace.file_hash!r})"
+            )
+        # Scanned docs without OCR → fail closed
+        is_scanned = pb_snap.get("is_scanned", False)
+        ocr_available = pb_snap.get("ocr_available", False)
+        if is_scanned and not ocr_available:
+            checks["parser_ocr_available"] = False
+            errors.append("scanned document but OCR is not available — unreplayable")
+        else:
+            checks["parser_ocr_available"] = True
+    else:
+        checks["parser_file_hash"] = False
+        errors.append("missing parser_boundary step")
+
+    # ── 4. Deep LLM boundary ──
+    if llm_step and llm_step.output_snapshot is not None:
+        ok, msg, llm_checks = _check_llm_boundary_deep(di_llm, llm_step.output_snapshot)
+        checks.update({f"llm.{k}": v for k, v in llm_checks.items()})
+        if not ok:
+            errors.append(f"llm_boundary: {msg}")
+    else:
+        # If DecisionInput has LLM violations, missing boundary is a failure
+        if len(di_llm) > 0:
+            checks["llm_boundary_present"] = False
+            errors.append("DecisionInput has llm_violations but no llm_boundary step")
+
+    # ── 5. Replay ──
     try:
         replayed = replay_decision(trace)
     except Exception as e:
         errors.append(f"replay failed: {e}")
         return {"valid": False, "errors": errors, "checks": checks}
 
-    # ── 3. Decision hash match ──
+    # ── 6. Decision hash match ──
     checks["decision_hash_match"] = replayed.decision_hash == trace.decision_hash
     if not checks["decision_hash_match"]:
         errors.append(
@@ -589,12 +863,7 @@ def verify_replay(trace: AuditTrace) -> dict:
             f"stored={trace.decision_hash[:16]}..."
         )
 
-    # ── 4. PolicyKernel internal trace ──
-    di_step = None
-    for s in trace.steps:
-        if s.step == "decision_input" and s.output_snapshot:
-            di_step = s
-            break
+    # ── 7. PolicyKernel internal trace ──
     if di_step:
         try:
             di = DecisionInput.model_validate(di_step.output_snapshot)
@@ -606,42 +875,17 @@ def verify_replay(trace: AuditTrace) -> dict:
             errors.append(f"policy trace check: {e}")
             checks["policy_trace_valid"] = False
 
-    # ── 5. Stored snapshot vs replayed ──
-    pd_step = None
-    for s in trace.steps:
-        if s.step == "policy_decision" and s.output_snapshot:
-            pd_step = s
-            break
+    # ── 8. Stored snapshot vs replayed ──
     if pd_step:
         replayed_dict = _canonical_for_step(replayed.model_dump(mode="json"))
         stored_dict = _canonical_for_step(pd_step.output_snapshot)
         checks["snapshot_match"] = replayed_dict == stored_dict
         if not checks["snapshot_match"]:
-            # Detail which fields differ
             diffs = []
             for k in set(list(replayed_dict.keys()) + list(stored_dict.keys())):
                 if replayed_dict.get(k) != stored_dict.get(k):
                     diffs.append(k)
             errors.append(f"policy_decision snapshot differs in: {diffs}")
-
-    # ── 6. LLM boundary consistency ──
-    llm_step = None
-    for s in trace.steps:
-        if s.step == "llm_boundary" and s.output_snapshot:
-            llm_step = s
-            break
-    if di_step and llm_step:
-        stored_llm = llm_step.output_snapshot
-        di_llm_violations = di_step.output_snapshot.get("llm_violations", [])
-        stored_norm = stored_llm.get("normalized_violations", [])
-        # Compare type + risk_level counts (schema-preserving comparison)
-        di_types = sorted((v.get("type", ""), v.get("risk_level", ""))
-                          for v in di_llm_violations)
-        stored_types = sorted((v.get("type", ""), v.get("risk_level", ""))
-                              for v in stored_norm)
-        checks["llm_boundary_consistent"] = di_types == stored_types
-        if not checks["llm_boundary_consistent"]:
-            errors.append("LLM normalized violations in DecisionInput differ from stored LLM boundary")
 
     valid = len(errors) == 0
     return {"valid": valid, "errors": errors, "checks": checks}

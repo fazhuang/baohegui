@@ -531,17 +531,64 @@ async def run_compliance_check(
             AuditTrace, LLMBoundary, OCRBoundary, verify_replay,
         )
 
+        # Parser boundary snapshot
+        ocr_boundary = OCRBoundary.from_parsed(parsed, file_hash=db_file.file_hash)
+
+        # Compute asset hashes for LLM boundary
+        import hashlib as _hl
+        _rule_asset_hash = ""
+        _prompt_asset_hash = ""
+        try:
+            from app.services.prompt_manager import PromptManager
+            pm = PromptManager()
+            tmpl = pm.get_prompt("compliance_check")
+            _prompt_asset_hash = _hl.sha256(tmpl.content.encode()).hexdigest()
+        except Exception:
+            pass
+        try:
+            _rules_content = json.dumps(
+                [r.model_dump(mode="json") if hasattr(r, "model_dump") else str(r)
+                 for r in rule_engine.rules],
+                sort_keys=True, ensure_ascii=False,
+            )
+            _rule_asset_hash = _hl.sha256(_rules_content.encode()).hexdigest()
+        except Exception:
+            pass
+
         # LLM boundary snapshot
         llm_boundary = None
         if llm_result:
+            _call_status = "failed" if llm_result.error else "succeeded"
+            if settings.llm_mock_mode:
+                _call_status = "succeeded"  # mock is still a valid simulation
+            # Get prompt text for hash
+            _prompt_text = ""
+            try:
+                _prompt_text = llm_engine.prompt_template
+            except Exception:
+                pass
             llm_boundary = LLMBoundary.from_llm_result(
                 llm_result,
+                prompt_text=_prompt_text,
+                provider=settings.llm_provider,
+                model=settings.llm_model,
+                temperature=getattr(llm_engine, "temperature", 0.0),
+                seed=getattr(settings, "llm_seed", None),
+                max_tokens=getattr(llm_engine, "max_tokens", 0),
+                prompt_asset_hash=_prompt_asset_hash,
+                rule_asset_hash=_rule_asset_hash,
+                call_status=_call_status,
+            )
+        elif routing_result is not None:
+            # LLM was skipped — record why
+            skip_reason = "routing_skip_llm" if routing_result.skip_llm else "no_sections"
+            llm_boundary = LLMBoundary(
                 provider=settings.llm_provider,
                 model=settings.llm_model,
                 temperature=getattr(llm_engine, "temperature", 0.0),
                 max_tokens=getattr(llm_engine, "max_tokens", 0),
-                prompt_asset_hash="",  # ponytail: compute from prompt_manager when needed
-                rule_asset_hash="",   # ponytail: compute from rule_engine rules when needed
+                call_status="skipped",
+                skip_reason=skip_reason,
             )
 
         audit_trace = AuditTrace.from_pipeline(
@@ -557,6 +604,7 @@ async def run_compliance_check(
             rule_result=rule_result,
             bias_result=parameter_bias_result,
             llm_boundary=llm_boundary,
+            ocr_boundary=ocr_boundary,
             decision_input=decision_input,
             policy_decision=policy_decision,
         )
