@@ -1,5 +1,5 @@
 """ExecutionNode — the atomic unit of work in a DAG-based compliance check."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any
 

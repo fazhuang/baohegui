@@ -25,6 +25,7 @@ class TestRetryPolicy:
         rp = RetryPolicy()
         assert rp.max_retries == 0
         assert rp.backoff_seconds == 0.0
+        assert rp.backoff_multiplier == 1.0
 
     def test_retry_policy_with_retries(self):
         rp = RetryPolicy(max_retries=3, backoff_seconds=1.0, backoff_multiplier=2.0)
