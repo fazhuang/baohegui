@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, Column, DateTime, Enum, Float, ForeignKey, Integer, String, Text, Boolean
+from sqlalchemy import CheckConstraint, Column, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text, Boolean
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -80,3 +80,7 @@ class ComplianceReport(Base):
     report_pdf_path = Column(String(512), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     checked_by = Column(Integer, nullable=True)
+
+    # ── Deterministic replay trace ─────────────────────────
+    audit_trace = Column(JSON, nullable=True)           # AuditTrace.to_dict()
+    audit_trace_valid = Column(Boolean, nullable=True)  # True if verify_replay passed at write time

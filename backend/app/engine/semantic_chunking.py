@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from app.core.deterministic_hash import stable_hash_int
+
 logger = logging.getLogger(__name__)
 
 
@@ -321,7 +323,7 @@ class SemanticChunkingEngine:
             if name in violated:
                 seeds.append((0, 0, name))  # 最高优先级
             else:
-                seed = hash(name) & 0x7FFFFFFF
+                seed = stable_hash_int(name)
                 if (seed % 1000) / 1000.0 > sampling_rate:
                     logger.debug("抽样跳过章节 [%s]", name)
                     continue
@@ -487,7 +489,7 @@ class SemanticChunkingEngine:
         for name in sec_names:
             is_violated = name in violated
             if not is_violated:
-                seed = hash(name) & 0x7FFFFFFF
+                seed = stable_hash_int(name)
                 if (seed % 1000) / 1000.0 > sampling_rate:
                     continue
 

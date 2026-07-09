@@ -27,6 +27,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
+from app.core.deterministic_hash import stable_hash_int
 from app.engine.semantic_chunking import SemanticChunkingEngine
 from app.engine.shared_types import Violation  # 从共享模块导入，避免循环依赖
 from app.services.prompt_manager import PromptManager, PromptNotFoundError
@@ -494,7 +495,7 @@ def _build_section_prompt(
         is_violated = sec_name in violated_sections
         if not is_violated:
             # 基于章节名 hash 确定是否抽样——确定性的，保证可复现
-            seed = hash(sec_name) & 0x7FFFFFFF
+            seed = stable_hash_int(sec_name)
             if (seed % 1000) / 1000.0 > sampling_rate:
                 sections_skipped += 1
                 logger.debug(

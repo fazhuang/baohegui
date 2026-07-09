@@ -525,7 +525,44 @@ async def run_compliance_check(
             },
         )
 
+        # ── 构建确定性重放审计轨道 ──────────────────────────────
+        _t0_trace = time.monotonic()
+        from app.core.replay_engine import (
+            AuditTrace, LLMBoundary, OCRBoundary, verify_replay,
+        )
+
+        # LLM boundary snapshot
+        llm_boundary = None
+        if llm_result:
+            llm_boundary = LLMBoundary.from_llm_result(
+                llm_result,
+                provider=settings.llm_provider,
+                model=settings.llm_model,
+                temperature=getattr(llm_engine, "temperature", 0.0),
+                max_tokens=getattr(llm_engine, "max_tokens", 0),
+                prompt_asset_hash="",  # ponytail: compute from prompt_manager when needed
+                rule_asset_hash="",   # ponytail: compute from rule_engine rules when needed
+            )
+
+        audit_trace = AuditTrace.from_pipeline(
+            file_hash=db_file.file_hash,
+            file_name=db_file.filename,
+            parsed_sections=parsed.sections,
+            budget=budget,
+            procurement_method=procurement_method or "",
+            project_type=project_type or "",
+            industries=industry_list or None,
+            platform=platform,
+            routing_result=routing_result,
+            rule_result=rule_result,
+            bias_result=parameter_bias_result,
+            llm_boundary=llm_boundary,
+            decision_input=decision_input,
+            policy_decision=policy_decision,
+        )
+
         # ── 写入前验证 ──
+        # 1. PolicyKernel 内部 trace 验证
         verification = _verify_trace(decision_input, policy_decision)
         if not verification["valid"]:
             logger.error(
@@ -539,6 +576,22 @@ async def run_compliance_check(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="内部决策一致性错误，请稍后重试",
+            )
+
+        # 2. 完整确定性重放验证
+        replay_verification = verify_replay(audit_trace)
+        if not replay_verification["valid"]:
+            logger.error(
+                "AuditTrace 重放验证失败，拒绝写入 verified 状态 file_id=%d: %s",
+                file_id, replay_verification["errors"],
+            )
+            db_file.status = "failed"
+            db_file.error_message = "重放一致性错误，请稍后重试"
+            db_file.failed_at = datetime.now(timezone.utc)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="内部重放一致性错误，请稍后重试",
             )
 
         db_report = ComplianceReport(
@@ -559,6 +612,10 @@ async def run_compliance_check(
         db_report.decision_hash = policy_decision.decision_hash
         db_report.policy_schema_version = policy_decision.schema_version
         db_report.decision_integrity_status = "verified"
+
+        # ── 写入确定性重放审计轨道 ──────────────────────────────
+        db_report.audit_trace = audit_trace.to_dict()
+        db_report.audit_trace_valid = True
 
         db.add(db_report)
         db_file.status = "completed"
