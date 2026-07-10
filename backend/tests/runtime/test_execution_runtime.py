@@ -238,3 +238,28 @@ class TestExecutionRuntime:
 
         assert isinstance(results["slow"], NodeFailure)
         assert "timeout" in results["slow"].error.lower() or "cancel" in results["slow"].error.lower()
+
+    @pytest.mark.asyncio
+    async def test_audit_trace_hash_chain(self):
+        """Verify AuditTrace hash chain integrity."""
+        async def parse(inputs):
+            return {"sections": {}}
+
+        async def rule(inputs):
+            return {"violations": []}
+
+        nodes = [
+            self._make_node("parse", NodeType.FILE_PARSE, execute_fn=parse),
+            self._make_node("rule", NodeType.RULE_CHECK, dependencies=["parse"], execute_fn=rule),
+        ]
+        graph = ExecutionGraph(job_id="j11", nodes=nodes)
+        runtime = ExecutionRuntime()
+        await runtime.execute(graph)
+
+        trace = runtime.trace
+        assert trace is not None
+        assert len(trace.steps) == 2
+        # Verify hash chain: each step's previous_hash == prior step's output_hash
+        assert trace.steps[0].previous_hash == trace.root_hash
+        assert trace.steps[1].previous_hash == trace.steps[0].output_hash
+        assert trace.leaf_hash == trace.steps[-1].output_hash

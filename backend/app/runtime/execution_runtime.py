@@ -108,14 +108,11 @@ class ExecutionRuntime:
         results: dict[str, Any] = {}
         self._trace = AuditTrace(root_hash=_stable_hash({"job_id": graph.job_id}))
 
-        # Build adjacency for determining when a node is ready
+        # Build remaining deps tracking for ready-set management
         remaining_deps: dict[str, set[str]] = {}
-        dependents: dict[str, list[str]] = {nid: [] for nid in order}
         for nid in order:
             node = graph.get_node(nid)
             remaining_deps[nid] = set(node.dependencies)
-            for dep in node.dependencies:
-                dependents.setdefault(dep, []).append(nid)
 
         ready: set[str] = {nid for nid in order if not remaining_deps[nid]}
         completed: set[str] = set()
@@ -135,6 +132,15 @@ class ExecutionRuntime:
                         node_type=node.node_type,
                         error=f"Upstream dependency '{dep}' failed: {dep_result.error}",
                         traceback="",
+                    )
+                    self._trace.append_step(
+                        node_id=nid,
+                        node_type=node.node_type,
+                        input_hash=_stable_hash({}),
+                        output_hash=_stable_hash({"skipped": True, "reason": dep_result.error}),
+                        deterministic=node.deterministic,
+                        duration_ms=0,
+                        error=f"Upstream dependency '{dep}' failed",
                     )
                     if on_step:
                         await on_step(nid, "skipped")
@@ -195,7 +201,7 @@ class ExecutionRuntime:
                     error=str(last_error),
                 )
                 if fail_fast_on_high_risk and node.node_type in _CRITICAL_NODE_TYPES:
-                    raise last_error
+                    raise ValueError(str(last_error)) from last_error
             else:
                 output_hash = _stable_hash(output)
                 results[nid] = output
